@@ -1,0 +1,5 @@
+[game] spawned player
+[main] spawn rejected: Empty_Label
+[game] even frame 2
+[game] rendered 2 entities at frame 3
+3 ticks, screen: [start] <player>

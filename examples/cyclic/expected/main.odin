@@ -1,0 +1,11 @@
+package main; import __vidar "vidar_runtime"
+
+import "core:fmt"
+import game "game_ui"
+
+main :: proc() {
+	w := game.game__make_world()
+	__err1 := game.game__spawn(&w, "player"); if __vidar.failed(__err1) { __vidar.unexpected(__err1) }
+	__err2 := game.game__spawn(&w, ""); if __vidar.failed(__err2) { err := __err2; fmt.println("[main] spawn rejected:", err) }
+	fmt.println(game.game__run(&w, 3))
+}

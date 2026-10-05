@@ -1,0 +1,51 @@
+package main
+
+import "core:fmt"
+
+Vec3 :: struct { x, y, z: f32 }
+
+// one statement per field, built from a format string assembled at compile time
+field_count :: comptime proc(T: Type) -> int { return len(type_fields(T)) }
+
+describe :: comptime proc(T: Type) -> string {
+	out := type_name(T) + "("
+	for f, i in type_fields(T) {
+		if i > 0 do out += ", "
+		out += f
+	}
+	return out + ")"
+}
+
+// generate a zero-checking proc for any numeric type
+nonzero :: comptime proc(T: Type, name: Ident) -> Stmt {
+	return quote { $name :: proc(v: $T) -> bool { return v != 0 } }
+}
+
+// strings and comparisons at compile time
+grade :: comptime proc(score: int) -> string {
+	if score >= 90 do return "A"
+	if score >= 80 do return "B"
+	return "C"
+}
+
+repeat :: comptime proc(s: string, n: int) -> string {
+	out := ""
+	for _ in 0..<n do out += s
+	return out
+}
+
+// a macro that calls another macro in its expansion
+banner :: comptime proc(title: string) -> Expr(string) {
+	line := repeat("=", len(title))
+	return quote(fmt.tprintf("%s\n%s\n%s", $line, $title, $line))
+}
+
+nonzero!(f32, nonzero_f32)
+nonzero!(int, nonzero_int)
+
+main :: proc() {
+	fmt.println(describe!(Vec3), field_count!(Vec3))
+	fmt.println(nonzero_f32(0), nonzero_int(3))
+	fmt.println(grade!(95), grade!(85), grade!(10))
+	fmt.println(banner!("vidar"))
+}

@@ -1,0 +1,6 @@
+// error: 'x' is a local of the enclosing procedure and is not captured
+package main
+main :: proc() {
+	x := 1
+	f := proc[]() -> int { return x }
+}

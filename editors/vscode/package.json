@@ -1,0 +1,87 @@
+{
+  "name": "vidar",
+  "displayName": "Vidar",
+  "description": "Odin with closures, interfaces, cyclic imports and typed macros: syntax highlighting and language server client",
+  "version": "0.1.0",
+  "publisher": "vidar",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "vidar",
+        "aliases": [
+          "Vidar",
+          "vidar"
+        ],
+        "extensions": [
+          ".vidar"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "vidar",
+        "scopeName": "source.vidar",
+        "path": "./syntaxes/vidar.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "vidar.showGeneratedOdin",
+        "title": "Vidar: Show Generated Odin"
+      },
+      {
+        "command": "vidar.restartServer",
+        "title": "Vidar: Restart Language Server"
+      }
+    ],
+    "configuration": {
+      "title": "Vidar",
+      "properties": {
+        "vidar.server.path": {
+          "type": "string",
+          "default": "vidar-lsp",
+          "description": "Language server to run: an executable name or path, or the path to dist/lsp/server.js. Leave unset to use the server bundled in the extension, falling back to vidar-lsp on PATH."
+        },
+        "vidar.odinCheckOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run `odin check` on the generated code when saving, and show Odin's errors on the .vidar lines."
+        },
+        "vidar.odinPath": {
+          "type": "string",
+          "default": "odin",
+          "description": "Odin compiler used for checks on save."
+        },
+        "vidar.ols": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask ols (the Odin language server) about plain Odin code: hover, go to definition, completion and signature help for core library procs, types and fields."
+        },
+        "vidar.olsPath": {
+          "type": "string",
+          "default": "ols",
+          "description": "ols executable used when `vidar.ols` is on."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.9.2"
+  },
+  "scripts": {
+    "package": "node package-vsix.js"
+  }
+}

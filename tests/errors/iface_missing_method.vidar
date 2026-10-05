@@ -1,0 +1,9 @@
+// error: impl of 'Shape' for 'Sq' is missing: name
+package main
+Shape :: interface { area, name }
+area :: proc(s: Shape) -> f64 ---
+name :: proc(s: Shape) -> string ---
+Sq :: struct { s: f64 }
+sq_area :: proc(q: ^Sq) -> f64 { return q.s * q.s }
+impl Shape for Sq { area = sq_area }
+main :: proc() {}

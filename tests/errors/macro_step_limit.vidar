@@ -1,0 +1,4 @@
+// error: exceeded the step limit
+package main
+spin :: comptime proc() -> int { i := 0; for { i += 1 }; return i }
+main :: proc() { _ = spin!() }

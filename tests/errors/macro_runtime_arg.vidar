@@ -1,0 +1,4 @@
+// error: must be a compile-time constant
+package main
+twice :: comptime proc(n: int) -> int { return n * 2 }
+main :: proc() { n := 3; _ = twice!(n) }

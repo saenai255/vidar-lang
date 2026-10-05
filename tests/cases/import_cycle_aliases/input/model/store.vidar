@@ -1,0 +1,18 @@
+package model
+
+import "core:fmt"
+import "core:strings"
+
+// private to package model, used from its other file
+@(private) notify :: proc(s: ^Store) {
+	for o in s.observers do append(&s.log, changed(o, s.value))
+}
+
+set :: proc(s: ^Store, v: int) {
+	s.value = v
+	notify(s)
+}
+
+summary :: proc(s: ^Store) -> string {
+	return fmt.tprintf("value=%d log=[%s]", s.value, strings.join(s.log[:], "; "))
+}

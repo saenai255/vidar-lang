@@ -1,0 +1,6 @@
+// error: the type of field 'p' cannot be inferred from 'nil'
+package main
+main :: proc() {
+	a := { p = nil }
+	_ = a
+}

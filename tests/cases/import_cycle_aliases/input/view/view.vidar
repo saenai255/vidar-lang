@@ -1,0 +1,12 @@
+package view
+
+import "core:fmt"
+import m "../model"
+
+Label :: struct { name: string }
+
+label_changed :: proc(l: ^Label, value: int) -> string { return fmt.tprintf("%s saw %d", l.name, value) }
+
+impl m.Observer for Label { changed = label_changed }
+
+label :: proc(name: string) -> m.Observer { return new_clone(Label{name}) }

@@ -1,0 +1,9 @@
+// error: 'perimeter' is not a method of interface 'Shape'
+package main
+Shape :: interface { area }
+area :: proc(s: Shape) -> f64 ---
+Sq :: struct { s: f64 }
+sq_area :: proc(q: ^Sq) -> f64 { return q.s * q.s }
+sq_perimeter :: proc(q: ^Sq) -> f64 { return 4 * q.s }
+impl Shape for Sq { area = sq_area, perimeter = sq_perimeter }
+main :: proc() {}

@@ -1,0 +1,10 @@
+package c
+
+import "core:fmt"
+import "../a"
+
+helper :: proc() -> string { return "c.helper" }
+
+describe :: proc() -> string {
+	return fmt.tprintf("c (depth from a: %d, %s)", a.depth(), a.helper())
+}

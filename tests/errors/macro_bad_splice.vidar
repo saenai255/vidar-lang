@@ -1,0 +1,4 @@
+// error: expected an identifier or '(' after '$'
+package main
+bad :: comptime proc() -> Expr { return quote($ + 1) }
+main :: proc() { _ = bad!() }

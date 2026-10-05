@@ -1,0 +1,4 @@
+// error: '[4]int' is not a struct type
+package main
+f :: comptime proc(T: Type) -> int { return len(type_fields(T)) }
+main :: proc() { _ = f!([4]int) }

@@ -1,0 +1,8 @@
+// error: 'sq_scale' must take ^Sq plus 1 parameter(s) to implement 'scale'
+package main
+Shape :: interface { scale }
+scale :: proc(s: Shape, k: f64) ---
+Sq :: struct { s: f64 }
+sq_scale :: proc(q: ^Sq) { q.s *= 2 }
+impl Shape for Sq { scale = sq_scale }
+main :: proc() {}

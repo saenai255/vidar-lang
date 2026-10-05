@@ -1,0 +1,6 @@
+value: 2
+pointer: 3 field: 1 index: 1 deref: 3
+interface: 5 5
+destroying stack of 1
+destroying stack of 1
+destroying stack of 5

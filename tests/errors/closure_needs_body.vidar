@@ -1,0 +1,6 @@
+// error: closure literal needs a body
+package main
+main :: proc() {
+	x := 1
+	f := proc[x]()
+}

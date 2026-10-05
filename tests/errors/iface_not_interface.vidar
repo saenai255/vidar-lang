@@ -1,0 +1,5 @@
+// error: 'Sq' is not an interface
+package main
+Sq :: struct { s: f64 }
+impl Sq for Sq {}
+main :: proc() {}

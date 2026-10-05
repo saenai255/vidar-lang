@@ -1,0 +1,4 @@
+// error: macro 'twice' expects 1 argument(s) but got 2
+package main
+twice :: comptime proc(x: Expr) -> Expr { return quote($x * 2) }
+main :: proc() { _ = twice!(1, 2) }

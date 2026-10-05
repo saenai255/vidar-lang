@@ -1,0 +1,4 @@
+7 true
+0 false
+700 true
+sum: 10

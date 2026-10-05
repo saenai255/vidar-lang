@@ -1,0 +1,86 @@
+package main
+
+import "core:fmt"
+
+// Closure types look like proc types, but values carry captured state.
+Counter :: struct {
+	inc: closure() -> int,
+	get: closure() -> int,
+}
+
+make_counter :: proc(start: int) -> Counter {
+	count := start
+	// [&count] captures by reference: both closures share one heap-boxed `count`.
+	return Counter{
+		inc = proc[&count]() -> int { count += 1; return count },
+		get = proc[&count]() -> int { return count },
+	}
+}
+
+make_adder :: proc(n: int) -> closure(int) -> int {
+	return proc[n](x: int) -> int { return x + n }
+}
+
+compose :: proc(f, g: closure(int) -> int) -> closure(int) -> int {
+	return proc[f, g](x: int) -> int { return g(f(x)) }
+}
+
+apply :: proc(f: closure(int) -> int, xs: []int) -> [dynamic]int {
+	out: [dynamic]int
+	for x in xs do append(&out, f(x))
+	return out
+}
+
+Op :: closure(a, b: int) -> (int, bool)
+
+main :: proc() {
+	// [x] captures by value: later changes to `step` are not seen.
+	step := 5
+	add_step := proc[step](x: int) -> int { return x + step }
+	step = 100
+	fmt.println("by value:", add_step(1))
+
+	// [&x] captures by reference: the closure sees and changes the variable.
+	hits := 0
+	hit := proc[&hits]() { hits += 1 }
+	hit(); hit(); hit()
+	fmt.println("by reference:", hits)
+
+	// Closures can outlive the frame that created them.
+	c := make_counter(10)
+	c.inc()
+	c.inc()
+	fmt.println("counter:", c.get())
+
+	// proc[] has no captures, but is still a closure value.
+	double := proc[](x: int) -> int { return x * 2 }
+	fmt.println("compose:", compose(double, add_step)(3))
+	fmt.println("curried:", make_adder(40)(2))
+	fmt.println("apply:", apply(double, {1, 2, 3})[:])
+
+	// Each loop iteration captures its own copy of `i`.
+	adders: [dynamic]closure(int) -> int
+	for i in 0..<3 do append(&adders, proc[i](x: int) -> int { return x + i * 10 })
+	for f in adders do fmt.print(f(1), "")
+	fmt.println()
+
+	// A closure type alias with multiple results.
+	safe_div: Op = proc[](a, b: int) -> (int, bool) {
+		if b == 0 do return 0, false
+		return a / b, true
+	}
+	q, ok := safe_div(7, 2)
+	_, ok2 := safe_div(1, 0)
+	fmt.println("safe_div:", q, ok, ok2)
+
+	// Nested closures: the inner one re-captures what the outer captured.
+	total := 0
+	outer := proc[&total](n: int) {
+		bump := proc[&total, n]() { total += n }
+		bump()
+		bump()
+	}
+	outer(3)
+	outer(4)
+	fmt.println("nested:", total)
+}

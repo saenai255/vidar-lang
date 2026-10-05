@@ -1,0 +1,17 @@
+config 0:
+    port 8080 workers 4 names ["api", "web"]
+config 1:
+    errdefer: freeing 1 names
+    rejected: Out_Of_Range
+config 2:
+    errdefer: freeing 1 names
+    rejected: Bad_Number
+config 3:
+    errdefer: freeing 0 names
+    rejected: Unknown_Key
+config 4:
+    errdefer: freeing 0 names
+    rejected: Missing_Equals
+bare call failed: Out_Of_Range
+bare call failed, error ignored
+answer: 42

@@ -1,0 +1,12 @@
+package main
+
+import "core:fmt"
+import "left"
+import "right"
+
+// main -> left -> base and main -> right -> base: base is loaded and emitted once
+main :: proc() {
+	l := left.make()
+	r := right.make()
+	fmt.println(l(1), r(1), left.name(), right.name())
+}

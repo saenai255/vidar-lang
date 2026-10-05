@@ -1,0 +1,6 @@
+1024
+Color.r: 255
+Color.g: 128
+Color.b: 0
+10
+2.5

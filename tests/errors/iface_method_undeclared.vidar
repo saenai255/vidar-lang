@@ -1,0 +1,4 @@
+// error: interface method 'area' is not declared in package 'main'
+package main
+Shape :: interface { area }
+main :: proc() {}

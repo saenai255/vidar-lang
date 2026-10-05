@@ -1,0 +1,7 @@
+package left
+
+import "../base"
+
+make :: proc() -> base.Op { return base.adder(10) }
+
+name :: proc() -> string { return "left/" + base.NAME }

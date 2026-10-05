@@ -1,0 +1,4 @@
+// error: interface 'Shape' has no methods
+package main
+Shape :: interface {}
+main :: proc() {}

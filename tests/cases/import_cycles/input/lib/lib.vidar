@@ -1,0 +1,8 @@
+package lib
+
+import "core:fmt"
+import app ".."
+
+banner :: proc() -> string { return fmt.tprintf("app v%s (%s)", app.VERSION, helper()) }
+
+helper :: proc() -> string { return "lib.helper" }

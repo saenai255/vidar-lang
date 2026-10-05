@@ -1,0 +1,6 @@
+// error: named arguments are not supported when calling closures
+package main
+main :: proc() {
+	f := proc[](a: int) {}
+	f(a = 1)
+}

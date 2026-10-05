@@ -1,0 +1,6 @@
+Vec3(x, y, z) 3
+false true
+A B C
+=====
+vidar
+=====

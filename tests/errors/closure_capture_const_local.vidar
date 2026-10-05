@@ -1,0 +1,6 @@
+// error: is not a local variable; closures can use globals and constants without capturing them
+package main
+main :: proc() {
+	K :: 3
+	f := proc[K]() {}
+}

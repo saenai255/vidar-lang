@@ -1,0 +1,79 @@
+package main; import __vidar "vidar_runtime"
+
+import "core:fmt"
+import "core:strconv"
+import "core:strings"
+
+// A small config parser showing the error-handling helpers:
+//   or_return <value>   propagate a failure as your own error
+//   catch err { ... }   handle a failure inline
+//   catch unreachable   "can't fail": panics with the error if it does
+//   errdefer            cleanup that only runs when returning a failure
+
+Error :: enum { None, Missing_Equals, Bad_Number, Out_Of_Range, Unknown_Key }
+
+Config :: struct {
+	port:    int,
+	workers: int,
+	names:   [dynamic]string,
+}
+
+parse_line :: proc(line: string) -> (key, value: string, err: Error) {
+	eq := strings.index_byte(line, '=')
+	if eq < 0 do return "", "", .Missing_Equals
+	return strings.trim_space(line[:eq]), strings.trim_space(line[eq + 1:]), .None
+}
+
+parse_int :: proc(text: string, max: int) -> (int, Error) {
+	// strconv reports failure with an ok-bool; or_return <value> turns it into our error
+	n, __err1 := strconv.parse_int(text); if __vidar.failed(__err1) do return {}, .Bad_Number
+	if n < 0 || n > max do return 0, .Out_Of_Range
+	return n, .None
+}
+
+parse_config :: proc(text: string) -> (cfg: Config, err: Error) {
+	// the names belong to the caller on success, but must not leak on failure
+	defer if __vidar.failed(err) { {
+		fmt.println("    errdefer: freeing", len(cfg.names), "names")
+		delete(cfg.names)
+	} }
+	for line in strings.split_lines(text, context.temp_allocator) {
+		if line == "" do continue
+		key, value := parse_line(line) or_return // plain Odin or_return: the errors already match
+		switch key {
+		case "port":    cfg.port = parse_int(value, 65535) or_return
+		case "workers": cfg.workers = parse_int(value, 64) or_return
+		case "name":    append(&cfg.names, value)
+		case:           return {}, .Unknown_Key
+		}
+	}
+	return cfg, .None
+}
+
+main :: proc() {
+	inputs := []string{
+		"port = 8080\nworkers = 4\nname = api\nname = web",
+		"name = early\nport = 99999",
+		"name = a\nworkers = many",
+		"name = a\ncolour = blue",
+		"port 8080",
+	}
+	for input, i in inputs {
+		fmt.printf("config %d:\n", i)
+		cfg, __err2 := parse_config(input); if __vidar.failed(__err2) { err := __err2;
+			fmt.println("    rejected:", err)
+			continue // a catch after a declaration must leave the scope
+		}
+		fmt.println("    port", cfg.port, "workers", cfg.workers, "names", cfg.names[:])
+	}
+
+	// after a bare call the block may fall through
+	_, __err3 := parse_int("-1", 10); if __vidar.failed(__err3) { err := __err3; fmt.println("bare call failed:", err) }
+
+	// the error name is optional
+	_, __err4 := parse_int("x", 10); if __vidar.failed(__err4) { fmt.println("bare call failed, error ignored") }
+
+	// for values you know are valid: no plumbing, but a loud panic if you're wrong
+	answer, __err5 := parse_int("42", 100); if __vidar.failed(__err5) { __vidar.unexpected(__err5) }
+	fmt.println("answer:", answer)
+}

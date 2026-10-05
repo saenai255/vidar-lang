@@ -1,0 +1,9 @@
+by value: 6
+by reference: 3
+counter: 12
+compose: 11
+curried: 42
+apply: [2, 4, 6]
+1 11 21 
+safe_div: 3 true false
+nested: 14

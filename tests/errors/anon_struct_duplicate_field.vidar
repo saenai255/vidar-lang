@@ -1,0 +1,6 @@
+// error: field 'x' is given twice
+package main
+main :: proc() {
+	a := { x = 1, x = 2 }
+	_ = a
+}

@@ -1,0 +1,4 @@
+// error: argument 'x' has type untyped string but the macro expects i32
+package main
+square :: comptime proc(x: Expr(i32)) -> Expr(i32) { return quote($x * $x) }
+main :: proc() { _ = square!("hi") }

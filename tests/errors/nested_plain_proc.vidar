@@ -1,0 +1,6 @@
+// error: nested procs cannot see it. Use a closure
+package main
+main :: proc() {
+	x := 1
+	f := proc() -> int { return x }
+}

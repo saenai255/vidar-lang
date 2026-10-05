@@ -1,0 +1,5 @@
+// error: attributes must precede a declaration
+package main
+main :: proc() {
+	@(private) x = 1
+}

@@ -1,0 +1,11 @@
+// error: 'q' is a value; 'Shape' needs a pointer: &q, or new_clone(q)
+package main
+Shape :: interface { area }
+area :: proc(s: Shape) -> f64 ---
+Sq :: struct { s: f64 }
+sq_area :: proc(q: ^Sq) -> f64 { return 1 }
+impl Shape for Sq { area = sq_area }
+main :: proc() {
+	q := Sq{}
+	s: Shape = q
+}

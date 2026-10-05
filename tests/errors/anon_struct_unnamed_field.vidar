@@ -1,0 +1,6 @@
+// error: every element of an anonymous struct literal needs a field name
+package main
+main :: proc() {
+	a := { x = 1, 2 }
+	_ = a
+}

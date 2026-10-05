@@ -1,0 +1,16 @@
+package main
+
+import "core:fmt"
+import "core:strings"
+
+// vidar can't infer the type of a call into another package, so it emits a
+// dead-code assignment that makes Odin check the Expr(string) constraint.
+shout :: comptime proc(s: Expr(string)) -> Expr(string) {
+	return quote(strings.to_upper($s))
+}
+
+main :: proc() {
+	name := "odin"
+	fmt.println(shout!(name))
+	fmt.println(shout!(strings.concatenate({"plus", "plus"})))
+}

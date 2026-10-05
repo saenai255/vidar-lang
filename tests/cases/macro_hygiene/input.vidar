@@ -1,0 +1,35 @@
+package main
+
+import "core:fmt"
+
+swap :: comptime proc(a, b: Expr) -> Stmt {
+	return quote {
+		tmp := $a
+		$a = $b
+		$b = tmp
+	}
+}
+
+times :: comptime proc(n: int, body: Stmt) -> Stmt {
+	return quote {
+		for i in 0..<$n { $body }
+	}
+}
+
+declare :: comptime proc(name: Ident, value: Expr) -> Stmt {
+	return quote { $name := $value }
+}
+
+main :: proc() {
+	// user variables named like the macro's internals are untouched
+	tmp, i := 5, 2
+	swap!(tmp, i)
+	fmt.println(tmp, i)
+
+	count := 0
+	times!(3, { count += i })
+	fmt.println("count:", count)
+
+	declare!(greeting, "hi")
+	fmt.println(greeting)
+}

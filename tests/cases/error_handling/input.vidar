@@ -1,0 +1,91 @@
+package main
+
+import "core:fmt"
+import "core:strconv"
+
+Error :: enum { None, Not_Found, Bad_Number, Too_Big }
+
+Parse_Error :: union { string }
+
+lookup :: proc(key: string) -> (string, Error) {
+	switch key {
+	case "port": return "8080", .None
+	case "big":  return "99999", .None
+	case "junk": return "x1", .None
+	}
+	return "", .Not_Found
+}
+
+check :: proc(n: int) -> Parse_Error {
+	if n > 65535 do return fmt.tprintf("%d is out of range", n)
+	return nil
+}
+
+// or_return <value>: propagate with a different error
+// (strconv.parse_int reports failure with an ok-bool; Error is ours)
+port :: proc(key: string) -> (int, Error) {
+	text := lookup(key) or_return .Not_Found
+	n := strconv.parse_int(text) or_return .Bad_Number
+	check(n) or_return .Too_Big
+	return n, .None
+}
+
+Buffer :: struct { data: [dynamic]int }
+
+// errdefer: cleanup that only runs when the procedure fails
+fill :: proc(key: string) -> (Buffer, Error) {
+	b := Buffer{}
+	append(&b.data, 1, 2, 3)
+	errdefer {
+		fmt.println("  errdefer: freeing buffer for", key)
+		delete(b.data)
+	}
+	p := port(key) or_return .Not_Found
+	append(&b.data, p)
+	return b, .None
+}
+
+// errdefer with named results
+fill_named :: proc(key: string) -> (b: Buffer, err: Error) {
+	errdefer fmt.println("  errdefer (named):", err)
+	_ = port(key) or_return .Bad_Number
+	return
+}
+
+main :: proc() {
+	for key in ([]string{"port", "missing", "junk", "big"}) {
+		n, err := port(key)
+		fmt.println(key, "->", n, err)
+	}
+
+	fmt.println("fill:")
+	ok_buf, e1 := fill("port")
+	fmt.println("  ok:", ok_buf.data[:], e1)
+	_, e2 := fill("junk")
+	fmt.println("  failed:", e2)
+	_, _ = fill_named("big")
+
+	// catch: handle inline, with the error bound
+	fmt.println("catch:")
+	for key in ([]string{"port", "junk"}) {
+		n := port(key) catch err {
+			fmt.println("  could not read", key, "because", err)
+			continue
+		}
+		fmt.println("  read", key, "=", n)
+	}
+
+	// catch without binding the error, on an assignment, and on a bare call
+	total := 0
+	total = port("port") catch {
+		total = -1
+		return
+	}
+	check(70000) catch e { fmt.println("  check failed:", e) }
+	port("junk") catch e { fmt.println("  bare call with a value and an error:", e) }
+	fmt.println("  total:", total)
+
+	// catch unreachable: the error "can't happen"; if it does, panic with it
+	sure := port("port") catch unreachable
+	fmt.println("unreachable not hit:", sure)
+}

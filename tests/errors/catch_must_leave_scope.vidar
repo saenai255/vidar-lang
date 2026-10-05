@@ -1,0 +1,9 @@
+// error: a 'catch' block after a declaration or assignment must leave the scope
+package main
+Error :: enum { None, Bad }
+f :: proc() -> (int, Error) { return 1, .None }
+main :: proc() {
+	x := f() catch err {
+		_ = err
+	}
+}

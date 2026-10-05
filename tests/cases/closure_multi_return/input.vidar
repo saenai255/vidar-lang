@@ -1,0 +1,41 @@
+package main
+
+import "core:fmt"
+import "core:strconv"
+
+Parser :: closure(s: string) -> (value: int, ok: bool)
+
+parsers: map[string]Parser
+
+make_checked :: proc(limit: int) -> Parser {
+	return proc[limit](s: string) -> (value: int, ok: bool) {
+		v, parsed := strconv.parse_int(s)
+		if !parsed || v > limit do return 0, false
+		return v, true
+	}
+}
+
+pick :: proc(name: string) -> Parser { return parsers[name] }
+
+main :: proc() {
+	parsers["small"] = make_checked(10)
+	parsers["big"] = make_checked(1000)
+
+	// closure stored in a map, called through an index expression
+	v, ok := parsers["small"]("7")
+	fmt.println(v, ok)
+	v, ok = parsers["small"]("70")
+	fmt.println(v, ok)
+
+	// the callee is a call result, so a generated call helper evaluates it once
+	w, ok2 := pick("big")("700")
+	fmt.println(w, ok2)
+
+	// variadic closure parameters pass through
+	sum := proc[](xs: ..int) -> int {
+		t := 0
+		for x in xs do t += x
+		return t
+	}
+	fmt.println("sum:", sum(1, 2, 3, 4))
+}

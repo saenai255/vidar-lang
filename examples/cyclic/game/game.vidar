@@ -1,0 +1,57 @@
+package game
+
+import "core:fmt"
+import "../ui"
+import "../util"
+
+// game imports ui, and ui imports game: a cycle plain Odin rejects.
+// vidar merges the two into one Odin package and keeps their names apart.
+
+Entity :: interface { name, draw }
+
+name :: proc(e: Entity) -> string ---
+draw :: proc(e: Entity) -> string ---
+
+Error :: enum { None, Empty_Label, Too_Many }
+
+World :: struct {
+	entities: [dynamic]Entity,
+	frame:    int,
+	on_frame: [dynamic]closure(frame: int),
+}
+
+Sprite :: struct { label: string }
+
+sprite_name :: proc(s: ^Sprite) -> string { return s.label }
+sprite_draw :: proc(s: ^Sprite) -> string { return fmt.tprintf("<%s>", s.label) }
+
+impl Entity for Sprite { name = sprite_name, draw = sprite_draw }
+
+log :: comptime proc(msg: Expr(string)) -> Stmt {
+	return quote { fmt.println("[game]", $msg) }
+}
+
+make_world :: proc() -> World {
+	w: World
+	append(&w.entities, ui.make_button("start"))
+	return w
+}
+
+spawn :: proc(w: ^World, label: string) -> Error {
+	if label == "" do return .Empty_Label
+	if len(w.entities) >= 3 do return .Too_Many
+	append(&w.entities, new_clone(Sprite{label}))
+	log!(fmt.tprintf("spawned %s", label))
+	return .None
+}
+
+run :: proc(w: ^World, frames: int) -> string {
+	ticks := 0
+	append(&w.on_frame, proc[&ticks](frame: int) { ticks += 1 })
+	append(&w.on_frame, util.every(2, proc[](frame: int) { fmt.println("[game] even frame", frame) }))
+	for _ in 0..<frames {
+		w.frame += 1
+		for cb in w.on_frame do cb(w.frame)
+	}
+	return fmt.tprintf("%d ticks, screen: %s", ticks, ui.render(w))
+}

@@ -1,0 +1,5 @@
+// error: 'area' is listed twice in interface 'Shape'
+package main
+Shape :: interface { area, area }
+area :: proc(s: Shape) -> f64 ---
+main :: proc() {}

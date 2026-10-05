@@ -1,0 +1,6 @@
+// error: 'n' is captured twice
+package main
+main :: proc() {
+	n := 1
+	f := proc[n, &n]() {}
+}

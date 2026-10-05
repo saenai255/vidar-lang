@@ -1,0 +1,4 @@
+// error: 'foo' has no body; only interface methods are declared with '---'
+package main
+foo :: proc(x: int) ---
+main :: proc() {}

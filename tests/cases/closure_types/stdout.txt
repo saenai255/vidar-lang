@@ -1,0 +1,4 @@
+ok clicks: 2
+0 true
+1 false
+true

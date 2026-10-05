@@ -1,0 +1,7 @@
+package b
+
+import "../a"
+
+g :: proc() -> int { return 41 }
+
+@(private) h :: proc() -> int { return a.f() }

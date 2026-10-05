@@ -1,0 +1,17 @@
+package main
+
+import "core:fmt"
+import "a"
+import "lib"
+
+// lib imports this package back, so main itself is part of a cycle.
+VERSION :: "1.2"
+
+helper :: proc() -> string { return "main.helper" }
+
+main :: proc() {
+	fmt.println(a.describe())
+	fmt.println(lib.banner())
+	// every package in the cycles declares `helper`; prefixes keep them apart
+	fmt.println(helper(), a.helper())
+}

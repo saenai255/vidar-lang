@@ -1,0 +1,59 @@
+package main
+
+import "core:fmt"
+
+Animal :: interface { speak, rename, legs }
+
+speak  :: proc(a: Animal) -> string ---
+rename :: proc(a: Animal, name: string) ---
+legs   :: proc(a: Animal) -> int ---
+
+Dog :: struct { name: string }
+Bird :: struct { name: string, can_fly: bool }
+
+dog_speak :: proc(d: ^Dog) -> string { return fmt.tprintf("%s: woof", d.name) }
+dog_rename :: proc(d: ^Dog, name: string) { d.name = name }
+dog_legs :: proc(d: ^Dog) -> int { return 4 }
+
+bird_speak :: proc(b: ^Bird) -> string { return fmt.tprintf("%s: tweet", b.name) }
+bird_rename :: proc(b: ^Bird, name: string) { b.name = name }
+bird_legs :: proc(b: ^Bird) -> int { return 2 }
+
+impl Animal for Dog { speak = dog_speak, rename = dog_rename, legs = dog_legs }
+
+impl Animal for Bird {
+	speak = bird_speak,
+	rename = bird_rename,
+	legs = bird_legs,
+}
+
+// interfaces in struct fields, parameters and return values
+Zoo :: struct { star: Animal, all: [dynamic]Animal }
+
+pick :: proc(z: ^Zoo, i: int) -> Animal { return z.all[i] }
+
+count_legs :: proc(animals: ..Animal) -> (n: int) {
+	for a in animals do n += legs(a)
+	return
+}
+
+main :: proc() {
+	rex := Dog{"rex"}
+	tweety := Bird{"tweety", true}
+	z := Zoo{star = &rex}
+	append(&z.all, &rex, &tweety)
+
+	rename(z.star, "max")
+	fmt.println(rex.name, "/", speak(z.all[0]))
+
+	for a in z.all do fmt.println(speak(a))
+	fmt.println("legs:", count_legs(..z.all[:]))
+	fmt.println("picked:", speak(pick(&z, 1)))
+
+	// the same function value works for any Animal
+	shout := proc[](a: Animal) -> string { return speak(a) }
+	fmt.println(shout(z.star), shout(Animal(&rex)))
+
+	// static calls on concrete values
+	fmt.println("static:", speak(&tweety), legs(&rex))
+}

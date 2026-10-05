@@ -1,0 +1,3 @@
+// error: package 'other' does not match package 'main'
+package main
+main :: proc() {}

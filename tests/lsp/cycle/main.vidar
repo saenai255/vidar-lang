@@ -1,0 +1,8 @@
+package main
+
+import "a"
+
+main :: proc() {
+	_ = a.f()
+	_ = a.f()
+}

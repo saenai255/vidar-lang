@@ -1,0 +1,30 @@
+{
+  "name": "vidar",
+  "version": "0.1.0",
+  "main": "dist/cli.js",
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "npm run build && node --test tests/unit/ && node scripts/test.js && node scripts/test-lsp.js",
+    "vidar": "node dist/cli.js",
+    "test:update": "npm run build && node scripts/test.js --update",
+    "test:unit": "npm run build && node --test tests/unit/",
+    "build:binaries": "npm run build && node scripts/build-binaries.js"
+  },
+  "license": "ISC",
+  "description": "Vidar: Odin with closures, interfaces, cyclic imports and typed compile-time macros, transpiled to plain Odin",
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "esbuild": "^0.25.12",
+    "postject": "^1.0.0-alpha.6",
+    "typescript": "^5.9.3"
+  },
+  "bin": {
+    "vidar": "dist/cli.js",
+    "vidar-lsp": "dist/lsp/server.js"
+  },
+  "private": true,
+  "dependencies": {
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.15"
+  }
+}

@@ -1,0 +1,5 @@
+// error: cannot capture unknown name 'zz'
+package main
+main :: proc() {
+	f := proc[zz]() {}
+}

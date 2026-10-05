@@ -1,0 +1,14 @@
+package b
+
+import "core:fmt"
+import "../c"
+
+// a different `Node` than a.Node
+Node :: struct { id: int }
+
+helper :: proc() -> string { return "b.helper" }
+
+describe :: proc(id: int) -> string {
+	n := Node{id}
+	return fmt.tprintf("b(%d) -> %s", n.id, c.describe())
+}

@@ -1,0 +1,20 @@
+package model
+
+import vw "../view"
+
+// observers are implemented in view, which imports model back
+Observer :: interface { changed }
+
+changed :: proc(o: Observer, value: int) -> string ---
+
+Store :: struct {
+	value:     int,
+	observers: [dynamic]Observer,
+	log:       [dynamic]string,
+}
+
+new_store :: proc() -> Store {
+	s: Store
+	append(&s.observers, vw.label("first"), vw.label("second"))
+	return s
+}

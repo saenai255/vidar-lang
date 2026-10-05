@@ -1,0 +1,8 @@
+// error: 'catch' goes after a call
+package main
+Error :: enum { None, Bad }
+f :: proc() -> (int, Error) { return 1, .None }
+main :: proc() {
+	x := 0
+	x += f() catch unreachable
+}

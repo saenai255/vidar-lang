@@ -1,0 +1,7 @@
+// error: bind 'area' to a proc declared with a body
+package main
+Shape :: interface { area }
+area :: proc(s: Shape) -> f64 ---
+Sq :: struct { s: f64 }
+impl Shape for Sq { area = area }
+main :: proc() {}

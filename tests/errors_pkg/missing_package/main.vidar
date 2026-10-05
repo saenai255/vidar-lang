@@ -1,0 +1,4 @@
+// error: cannot find a package at 'nowhere'
+package main
+import "nowhere"
+main :: proc() {}

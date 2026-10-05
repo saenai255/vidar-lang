@@ -1,0 +1,7 @@
+package geo
+
+Vec2 :: struct { x, y: f64 }
+
+@(private) helper :: proc() -> int { return 1 }
+
+add :: proc(a, b: Vec2) -> Vec2 { return {a.x + b.x, a.y + b.y} }

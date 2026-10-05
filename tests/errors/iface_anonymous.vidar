@@ -1,0 +1,5 @@
+// error: interfaces must be declared as named constants
+package main
+main :: proc() {
+	x: interface { area }
+}

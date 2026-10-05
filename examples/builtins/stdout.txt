@@ -1,0 +1,7 @@
+hello vidar, p = Point{x = 1.5, y = -2}, x = 1.50, sum = -0.5
+{literal braces} and 100%
+total: 13
+with_allocator: allocations tracked: 1
+with_allocator: all freed: true
+locked: counter = 4000
+mode: 2

@@ -1,0 +1,16 @@
+port -> 8080 None
+missing -> 0 Not_Found
+junk -> 0 Bad_Number
+big -> 0 Too_Big
+fill:
+  ok: [1, 2, 3, 8080] None
+  errdefer: freeing buffer for junk
+  failed: Not_Found
+  errdefer (named): Bad_Number
+catch:
+  read port = 8080
+  could not read junk because Bad_Number
+  check failed: 70000 is out of range
+  bare call with a value and an error: Bad_Number
+  total: 8080
+unreachable not hit: 8080

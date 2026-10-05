@@ -1,0 +1,4 @@
+// error: package 'lib' has no member 'nope'
+package main
+import "lib"
+main :: proc() { _ = lib.nope }

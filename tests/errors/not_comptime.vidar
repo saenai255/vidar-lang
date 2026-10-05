@@ -1,0 +1,4 @@
+// error: 'helper' is not a comptime proc
+package main
+helper :: proc(x: int) -> int { return x }
+main :: proc() { _ = helper!(1) }

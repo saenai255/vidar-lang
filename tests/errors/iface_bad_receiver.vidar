@@ -1,0 +1,8 @@
+// error: the first parameter of 'sq_area' must have type ^Sq to implement 'area'
+package main
+Shape :: interface { area }
+area :: proc(s: Shape) -> f64 ---
+Sq :: struct { s: f64 }
+sq_area :: proc(q: Sq) -> f64 { return q.s * q.s }
+impl Shape for Sq { area = sq_area }
+main :: proc() {}

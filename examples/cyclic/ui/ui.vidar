@@ -1,0 +1,24 @@
+package ui
+
+import "core:fmt"
+import "core:strings"
+import "../game"
+
+Button :: struct { text: string }
+
+// Implementing game's interface from ui works because both are in the same cycle.
+button_name :: proc(b: ^Button) -> string { return b.text }
+button_draw :: proc(b: ^Button) -> string { return fmt.tprintf("[%s]", b.text) }
+
+impl game.Entity for Button { name = button_name, draw = button_draw }
+
+make_button :: proc(text: string) -> game.Entity {
+	return new_clone(Button{text = text})
+}
+
+render :: proc(w: ^game.World) -> string {
+	parts: [dynamic]string
+	for e in w.entities do append(&parts, game.draw(e))
+	game.log!(fmt.tprintf("rendered %d entities at frame %d", len(w.entities), w.frame))
+	return strings.join(parts[:], " ")
+}

@@ -1,0 +1,7 @@
+1 true
+missing: true
+["put a", "put b", "get zzz"]
+2 log:x/y/z
+static: 2 true p/q
+via closure: 2
+empty is nil: true

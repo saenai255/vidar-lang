@@ -1,0 +1,16 @@
+package a
+
+import "core:fmt"
+import "../b"
+
+// a -> b -> c -> a: a three-package cycle
+Node :: struct { name: string }
+
+helper :: proc() -> string { return "a.helper" }
+
+depth :: proc() -> int { return 1 }
+
+describe :: proc() -> string {
+	n := Node{"a"}
+	return fmt.tprintf("%s -> %s", n.name, b.describe(3))
+}

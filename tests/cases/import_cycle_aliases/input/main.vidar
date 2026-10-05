@@ -1,0 +1,11 @@
+package main
+
+import "core:fmt"
+import mdl "model"
+
+main :: proc() {
+	s := mdl.new_store()
+	mdl.set(&s, 3)
+	mdl.set(&s, 4)
+	fmt.println(mdl.summary(&s))
+}

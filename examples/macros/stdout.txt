@@ -1,0 +1,9 @@
+square: 64
+fib(20): 6765
+swapped: 2 1
+repeated: 42
+expectation failed: total < 0
+Point{x = 3, y = -4}
+zero_like: Point{x = 0, y = 0}
+answer: 42
+scaled: 4.5

@@ -1,0 +1,23 @@
+package main
+
+import "core:fmt"
+
+main :: proc() {
+	total := 0
+	outer := proc[&total](n: int) {
+		// re-capture: by-ref of a by-ref capture, by-value of a param
+		inner := proc[&total, n]() { total += n }
+		inner()
+		inner()
+	}
+	outer(1)
+	outer(2)
+	fmt.println("total:", total)
+
+	base := 100
+	make := proc[base](k: int) -> closure(int) -> int {
+		return proc[base, k](x: int) -> int { return base + k * x }
+	}
+	f := make(3)
+	fmt.println("f(2):", f(2))
+}

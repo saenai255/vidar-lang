@@ -1,0 +1,7 @@
+// error: impl of 'shapes.Shape' must be in package 'shapes' (or a package in an import cycle with it)
+package main
+import "shapes"
+Sq :: struct { s: f64 }
+sq_area :: proc(q: ^Sq) -> f64 { return q.s }
+impl shapes.Shape for Sq { area = sq_area }
+main :: proc() {}

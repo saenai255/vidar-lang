@@ -1,0 +1,6 @@
+// error: the type of field 'pos' cannot be inferred; write the literal's type
+package main
+main :: proc() {
+	a := { pos = { 1, 2 } }
+	_ = a
+}

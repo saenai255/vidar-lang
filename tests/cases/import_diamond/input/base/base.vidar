@@ -1,0 +1,9 @@
+package base
+
+Op :: closure(x: int) -> int
+
+adder :: proc(n: int) -> Op {
+	return proc[n](x: int) -> int { return x + n }
+}
+
+NAME :: "base"

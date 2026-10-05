@@ -1,0 +1,4 @@
+// error: interfaces list method names: Name :: interface { area, ... }
+package main
+Shape :: interface { area: proc(self) -> f64 }
+main :: proc() {}

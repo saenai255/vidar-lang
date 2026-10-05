@@ -1,0 +1,2 @@
+package lib
+@(private) secret :: proc() -> int { return 1 }

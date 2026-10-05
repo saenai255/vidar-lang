@@ -1,0 +1,44 @@
+package main
+
+import "core:fmt"
+import "geo"
+
+Foo :: struct { n: int }
+
+Counter :: interface { bump, get }
+
+bump :: proc(c: Counter, by: int) -> int ---
+get  :: proc(c: Counter) -> int ---
+
+foo_bump :: proc(f: ^Foo, by: int) -> int { f.n += by; return f.n }
+foo_get  :: proc(f: ^Foo) -> int { return f.n }
+
+impl Counter for Foo { bump = foo_bump, get = foo_get }
+
+Holder :: struct { foo: Foo, all: [2]Foo }
+
+main :: proc() {
+	// a method called with a pointer to a concrete type: a static call, no vtable
+	foo := Foo{1}
+	fmt.println(bump(&foo, 2), get(&foo))
+
+	// through a pointer, a field, an index and a dereference
+	p := &foo
+	bump(p, 10)
+	h := Holder{foo = {100}, all = {{7}, {8}}}
+	bump(&h.foo, 1)
+	bump(&h.all[1], 1)
+	fmt.println(get(p), get(&h.foo), get(&h.all[1]), get(&p^))
+
+	// on an interface value, the same call dispatches through the vtable
+	c: Counter = &foo
+	fmt.println(bump(c, 1), foo.n)
+
+	// interfaces, methods and impls from another package
+	v := geo.Vec{3, 4}
+	fmt.println(geo.length(&v))
+	geo.scale(&v, 2)
+	fmt.println(v)
+	s: geo.Shape = &v
+	fmt.println(geo.length(s))
+}

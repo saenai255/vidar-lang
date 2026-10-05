@@ -1,0 +1,8 @@
+// error: 'x' belongs to an outer procedure; capture it there first
+package main
+main :: proc() {
+	x := 1
+	outer := proc[]() {
+		inner := proc[x]() {}
+	}
+}

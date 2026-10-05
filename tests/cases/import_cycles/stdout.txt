@@ -1,0 +1,3 @@
+a -> b(3) -> c (depth from a: 1, a.helper)
+app v1.2 (lib.helper)
+main.helper a.helper

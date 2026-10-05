@@ -1,0 +1,5 @@
+// error: unterminated block
+package main
+main :: proc() {
+	x := 1
+

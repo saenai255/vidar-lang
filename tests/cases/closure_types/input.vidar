@@ -1,0 +1,34 @@
+package main
+
+import "core:fmt"
+
+Handler :: closure(msg: string) -> bool
+
+Button :: struct {
+	label:    string,
+	on_click: Handler,
+}
+
+handlers: [dynamic]Handler
+
+register :: proc(h: Handler) { append(&handlers, h) }
+
+make_filter :: proc(prefix: string) -> Handler {
+	return proc[prefix](msg: string) -> bool { return len(msg) > 0 && msg[0] == prefix[0] }
+}
+
+main :: proc() {
+	clicks := 0
+	b := Button{label = "ok", on_click = proc[&clicks](msg: string) -> bool { clicks += 1; return true }}
+	b.on_click("a")
+	b.on_click("b")
+	fmt.println(b.label, "clicks:", clicks)
+
+	register(make_filter("x"))
+	register(make_filter("y"))
+	for h, i in handlers {
+		fmt.println(i, h("xylophone"))
+	}
+	// the callee is a call result: goes through a generated call helper
+	fmt.println(make_filter("z")("zebra"))
+}

@@ -1,0 +1,6 @@
+// error: 'errdefer' needs a procedure that returns an error (or a bool) as its last result
+package main
+import "core:fmt"
+main :: proc() {
+	errdefer fmt.println("x")
+}

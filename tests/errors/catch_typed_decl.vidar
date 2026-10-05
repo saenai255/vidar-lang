@@ -1,0 +1,7 @@
+// error: 'catch' needs a plain 'x := f()' declaration
+package main
+Error :: enum { None, Bad }
+f :: proc() -> (int, Error) { return 1, .None }
+main :: proc() {
+	x: int = f() catch unreachable
+}

@@ -1,0 +1,5 @@
+package-vsix.js
+*.vsix
+.gitignore
+node_modules/@vscode/**
+node_modules/.bin/**

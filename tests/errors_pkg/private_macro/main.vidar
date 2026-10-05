@@ -1,0 +1,4 @@
+// error: 'lib.twice' is private to package 'lib'
+package main
+import "lib"
+main :: proc() { _ = lib.twice!(2) }

@@ -1,0 +1,4 @@
+// error: division by zero at compile time
+package main
+d :: comptime proc(n: int) -> int { return 10 / n }
+main :: proc() { _ = d!(0) }

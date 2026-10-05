@@ -1,0 +1,5 @@
+package a
+
+import "../b"
+
+f :: proc() -> int { return b.g() + 1 }

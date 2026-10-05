@@ -1,0 +1,103 @@
+package main
+
+import "core:fmt"
+import "core:math"
+
+// An interface lists its methods. Each method is declared at the top level without a body,
+// taking the interface first; calling it on an interface value dispatches through the vtable.
+Shape :: interface { area, name, scale }
+
+area  :: proc(s: Shape) -> f64 ---
+name  :: proc(s: Shape) -> string ---
+scale :: proc(s: Shape, k: f64) ---
+
+Circle :: struct { r: f64 }
+Rect   :: struct { w, h: f64 }
+
+// Implementations are ordinary procs taking a pointer to the type first.
+circle_area  :: proc(c: ^Circle) -> f64    { return math.PI * c.r * c.r }
+circle_name  :: proc(c: ^Circle) -> string { return "circle" }
+circle_scale :: proc(c: ^Circle, k: f64)   { c.r *= k }
+
+rect_area  :: proc(r: ^Rect) -> f64    { return r.w * r.h }
+rect_name  :: proc(r: ^Rect) -> string { return "rect" }
+rect_scale :: proc(r: ^Rect, k: f64)   { r.w *= k; r.h *= k }
+
+// An impl binds each method to a proc.
+impl Shape for Circle { area = circle_area, name = circle_name, scale = circle_scale }
+
+impl Shape for Rect {
+	area  = rect_area,
+	name  = rect_name,
+	scale = rect_scale,
+}
+
+// One type can implement several interfaces; implementations may use closures.
+Writer :: interface { write }
+
+write :: proc(w: Writer, s: string) -> int ---
+
+Log :: struct { lines: [dynamic]string, bytes: int }
+
+log_write :: proc(l: ^Log, s: string) -> int {
+	count := proc[l](n: int) { l.bytes += n }
+	count(len(s))
+	append(&l.lines, s)
+	return len(s)
+}
+
+impl Writer for Log { write = log_write }
+
+total_area :: proc(shapes: []Shape) -> (sum: f64) {
+	for s in shapes do sum += area(s)
+	return
+}
+
+biggest :: proc(a, b: Shape) -> Shape {
+	return a if area(a) >= area(b) else b
+}
+
+describe :: proc(s: Shape) -> string {
+	return fmt.tprintf("%s(%.2f)", name(s), area(s))
+}
+
+unit_square :: proc() -> Shape {
+	return new_clone(Rect{1, 1})
+}
+
+Scene :: struct {
+	hero:  Shape,
+	label: string,
+}
+
+main :: proc() {
+	c := Circle{1}
+	r := Rect{2, 3}
+
+	// Called on the concrete type, a method is a plain static call (no vtable).
+	fmt.printf("circle area: %.2f\n", area(&c))
+
+	// A pointer converts implicitly: the interface refers to `c` itself.
+	s: Shape = &c
+	scale(s, 2)
+	fmt.println("c.r after scale through interface:", c.r)
+
+	// Interfaces always hold a pointer; new_clone makes an owned heap copy explicitly.
+	shapes: [dynamic]Shape
+	append(&shapes, &c, &r, new_clone(Rect{0.5, 4}))
+	for sh in shapes do fmt.println(describe(sh))
+	fmt.printf("total: %.2f\n", total_area(shapes[:]))
+
+	// Arguments convert implicitly; Shape(...) converts explicitly.
+	fmt.println("biggest:", name(biggest(&r, Shape(&c))))
+
+	// So do named struct-literal fields and `return` values.
+	scene := Scene{hero = &r, label = "intro"}
+	fmt.println("scene:", scene.label, describe(scene.hero), describe(unit_square()))
+
+	log: Log
+	w: Writer = &log
+	write(w, "hello ")
+	write(&log, "vidar")
+	fmt.println("log:", log.lines[:], log.bytes, "bytes")
+}

@@ -1,0 +1,8 @@
+{b = 5, s = "x", r = r, f = 1.5, ok = true}
+struct {b: int, s: string, r: rune, f: f64, ok: bool}
+11 {name = "slime", hp = 11}
+{x = 2.5, y = -2} Point{x = 1, y = 2} ["a"] 4 3 true
+{calls = 2, last = "y"}
+{v = 2}
+{first = 1, second = 2, inner = {third = 3}} 3
+Point{x = 3, y = 4} Point{x = 5, y = 0}

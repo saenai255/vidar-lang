@@ -1,0 +1,70 @@
+package main
+
+import "core:fmt"
+import "core:strings"
+
+Store :: interface { get, put, keys, tag }
+
+get  :: proc(s: Store, key: string) -> (string, bool) ---
+put  :: proc(s: Store, key, value: string) ---
+keys :: proc(s: Store) -> []string ---
+tag  :: proc(s: Store, parts: ..string) -> string ---
+
+Mem :: struct { data: map[string]string }
+Log :: struct { inner: Store, lines: [dynamic]string }
+
+mem_get :: proc(m: ^Mem, key: string) -> (string, bool) { v, ok := m.data[key]; return v, ok }
+mem_put :: proc(m: ^Mem, key, value: string) { m.data[key] = value }
+mem_keys :: proc(m: ^Mem) -> []string {
+	out: [dynamic]string
+	for k in m.data do append(&out, k)
+	return out[:]
+}
+mem_tag :: proc(m: ^Mem, parts: ..string) -> string { return strings.join(parts, "/") }
+
+impl Store for Mem { get = mem_get, put = mem_put, keys = mem_keys, tag = mem_tag }
+
+// a decorator: wraps any Store and records the calls
+log_get :: proc(l: ^Log, key: string) -> (string, bool) {
+	append(&l.lines, fmt.tprintf("get %s", key))
+	return get(l.inner, key)
+}
+log_put :: proc(l: ^Log, key, value: string) {
+	append(&l.lines, fmt.tprintf("put %s", key))
+	put(l.inner, key, value)
+}
+log_keys :: proc(l: ^Log) -> []string { return keys(l.inner) }
+log_tag :: proc(l: ^Log, parts: ..string) -> string { return fmt.tprintf("log:%s", tag(l.inner, ..parts)) }
+
+impl Store for Log { get = log_get, put = log_put, keys = log_keys, tag = log_tag }
+
+fill :: proc(s: Store) {
+	put(s, "a", "1")
+	put(s, "b", "2")
+}
+
+main :: proc() {
+	mem := Mem{}
+	log := Log{inner = &mem}
+	fill(&log)
+
+	v, ok := get(log.inner, "a")
+	fmt.println(v, ok)
+	_, missing := get(Store(&log), "zzz")
+	fmt.println("missing:", !missing)
+	fmt.println(log.lines[:])
+	fmt.println(len(keys(Store(&mem))), tag(Store(&log), "x", "y", "z"))
+
+	// static calls, including variadic and multiple results
+	w, found := get(&mem, "b")
+	fmt.println("static:", w, found, tag(&mem, "p", "q"))
+
+	// interfaces captured by closures
+	s: Store = &mem
+	reader := proc[s](key: string) -> string { val, _ := get(s, key); return val }
+	fmt.println("via closure:", reader("b"))
+
+	// zero value: no data, no vtable
+	empty: Store
+	fmt.println("empty is nil:", empty.data == nil && empty.__vtable == nil)
+}

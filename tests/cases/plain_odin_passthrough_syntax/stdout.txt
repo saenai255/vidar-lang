@@ -1,0 +1,11 @@
+true false 3
+south
+7
+Pair($T=int){a = 2, b = 1}
+[11, 2] e
+int 42 string "hi" pair 3,4
+3 None
+Bad
+7 West
+total: 16
+desktop

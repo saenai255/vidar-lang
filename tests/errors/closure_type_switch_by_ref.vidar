@@ -1,0 +1,9 @@
+// error: 'v' cannot be captured by reference
+package main
+main :: proc() {
+	u: union { int, string } = 1
+	switch v in u {
+	case int:
+		f := proc[&v]() {}
+	}
+}

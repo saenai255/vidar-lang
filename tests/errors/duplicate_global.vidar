@@ -1,0 +1,5 @@
+// error: 'x' is already declared in package 'main'
+package main
+x :: 1
+x :: 2
+main :: proc() {}

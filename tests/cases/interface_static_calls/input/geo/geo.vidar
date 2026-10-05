@@ -1,0 +1,15 @@
+package geo
+
+import "core:math"
+
+Vec :: struct { x, y: f64 }
+
+Shape :: interface { length, scale }
+
+length :: proc(s: Shape) -> f64 ---
+scale  :: proc(s: Shape, k: f64) ---
+
+vec_length :: proc(v: ^Vec) -> f64 { return math.sqrt(v.x * v.x + v.y * v.y) }
+vec_scale  :: proc(v: ^Vec, k: f64) { v.x *= k; v.y *= k }
+
+impl Shape for Vec { length = vec_length, scale = vec_scale }

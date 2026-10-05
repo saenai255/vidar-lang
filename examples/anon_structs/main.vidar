@@ -1,0 +1,49 @@
+package main
+
+import "core:fmt"
+import "core:strings"
+
+// `x := { name = value, ... }` declares a struct type on the spot. The field
+// types are inferred from the values; untyped constants take their default types.
+
+Word :: struct { text: string, count: int }
+
+// A written-out anonymous struct type is the same type as a matching literal.
+print_range :: proc(r: struct { lo: int, hi: int }) {
+	fmt.printf("range %d..%d\n", r.lo, r.hi)
+}
+
+main :: proc() {
+	text := "the slime and the wizard and the slime"
+
+	// group related locals without declaring a named type
+	stats := {
+		words   = 0,
+		longest = "",
+		first   = Word{},
+	}
+	for w in strings.fields(text, context.temp_allocator) {
+		stats.words += 1
+		if len(w) > len(stats.longest) do stats.longest = w
+		if stats.first.text == "" do stats.first = {w, 1}
+	}
+	fmt.println(stats)
+
+	// nesting, and fields of any type: here a closure that captures the record by reference
+	window := { size = { w = 800, h = 600 }, title = "vidar", resized = 0 }
+	resize := proc[&window](w, h: int) {
+		window.size = {w, h}
+		window.resized += 1
+	}
+	resize(1024, 768)
+	fmt.println(window.title, window.size.w, "x", window.size.h, "resized", window.resized, "time(s)")
+
+	// literals with the same field names and types have the same type
+	bounds := { lo = 0, hi = 10 }
+	clamped := { lo = 2, hi = 8 }
+	bounds = clamped
+	print_range(bounds)
+
+	// %T shows the generated type
+	fmt.printf("%T\n", window)
+}

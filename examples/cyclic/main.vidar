@@ -1,0 +1,11 @@
+package main
+
+import "core:fmt"
+import "game"
+
+main :: proc() {
+	w := game.make_world()
+	game.spawn(&w, "player") catch unreachable
+	game.spawn(&w, "") catch err { fmt.println("[main] spawn rejected:", err) }
+	fmt.println(game.run(&w, 3))
+}

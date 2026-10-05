@@ -1,0 +1,3 @@
+package shapes
+Shape :: interface { area }
+area :: proc(s: Shape) -> f64 ---

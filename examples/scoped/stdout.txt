@@ -1,0 +1,9 @@
+inside: own temp allocator: true
+inside: 1000 words, 8889 bytes joined
+inside: arena blocks on the heap: true
+nested: separate arena again: true
+after: arena freed: true
+after: temp allocator restored: true
+after: earlier temp data still valid: allocated before the block
+custom backing: arena allocated from it: true
+custom backing: returned to it: true

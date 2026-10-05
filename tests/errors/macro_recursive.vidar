@@ -1,0 +1,4 @@
+// error: macro expansion too deep
+package main
+loop :: comptime proc(x: Expr) -> Expr { return quote(loop!($x)) }
+main :: proc() { _ = loop!(1) }

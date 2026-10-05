@@ -1,0 +1,5 @@
+// error: the first parameter of 'area' must have type Shape
+package main
+Shape :: interface { area }
+area :: proc(x: int) -> f64 ---
+main :: proc() {}

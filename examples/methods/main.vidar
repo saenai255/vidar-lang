@@ -1,0 +1,62 @@
+package main
+
+import "core:fmt"
+
+// An interface method is a proc group: called with a pointer to a concrete type it is a
+// static call to that type's proc, called with an interface value it goes through the vtable.
+
+Container :: interface { push, size }
+
+push :: proc(c: Container, x: int) ---
+size :: proc(c: Container) -> int ---
+
+// A cleanup interface is declared like any other.
+Destroy :: interface { destroy }
+
+destroy :: proc(d: Destroy) ---
+
+Stack :: struct { items: [dynamic]int }
+
+stack_push :: proc(s: ^Stack, x: int) { append(&s.items, x) }
+stack_size :: proc(s: ^Stack) -> int  { return len(s.items) }
+
+stack_destroy :: proc(s: ^Stack) {
+	fmt.println("destroying stack of", len(s.items))
+	delete(s.items)
+}
+
+impl Container for Stack { push = stack_push, size = stack_size }
+impl Destroy for Stack { destroy = stack_destroy }
+
+Pair :: struct { left, right: Stack }
+
+main :: proc() {
+	a: Stack
+	defer destroy(&a)
+	push(&a, 1)
+	push(&a, 2)
+	fmt.println("value:", size(&a))
+
+	// through a pointer, a field, an index and a dereference
+	p := &a
+	push(p, 3)
+	pair: Pair
+	push(&pair.left, 10)
+	stacks: [2]Stack
+	push(&stacks[1], 20)
+	fmt.println("pointer:", size(p), "field:", size(&pair.left), "index:", size(&stacks[1]), "deref:", size(&p^))
+
+	// the implementation stays an ordinary proc
+	stack_push(&a, 5)
+
+	// on an interface value, the same call dispatches through the vtable
+	c: Container = &a
+	push(c, 4)
+	fmt.println("interface:", size(c), size(&a))
+
+	// interface values of different types can be cleaned up together
+	trash: [dynamic]Destroy
+	append(&trash, &pair.left, &stacks[1])
+	for d in trash do destroy(d)
+	delete(trash)
+}

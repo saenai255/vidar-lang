@@ -1,0 +1,4 @@
+// error: index 3 out of bounds (len 2)
+package main
+f :: comptime proc() -> int { xs := [dynamic]int{1, 2}; return xs[3] }
+main :: proc() { _ = f!() }

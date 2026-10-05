@@ -1,0 +1,53 @@
+package main
+
+import "core:fmt"
+
+Point :: struct { x, y: f32 }
+
+hp_of :: proc(v: struct { name: string, hp: int }) -> int { return v.hp }
+
+describe :: proc(v: $T) -> string { return fmt.tprintf("%v", v) }
+
+main :: proc() {
+	// untyped constants take their default types
+	a := { b = 5, s = "x", r = 'r', f = 1.5, ok = true }
+	fmt.println(a)
+	fmt.printf("%T\n", a)
+
+	// multi-line, and interchangeable with a written-out anonymous struct type
+	hero := {
+		name = "slime",
+		hp   = 10,
+	}
+	hero.hp += 1
+	fmt.println(hp_of(hero), describe(hero))
+
+	// nested literals, typed values, closures, pointers
+	k := 3
+	add := proc[k](x: int) -> int { return x + k }
+	cfg := { pos = { x = 1.5, y = -2 }, at = Point{1, 2}, tags = []string{"a"}, f = add, p = &k, big = k > 2 }
+	cfg.pos.x += 1
+	fmt.println(cfg.pos, cfg.at, cfg.tags, cfg.f(1), cfg.p^, cfg.big)
+
+	// captured by reference like any other local
+	stats := { calls = 0, last = "" }
+	record := proc[&stats](s: string) { stats.calls += 1; stats.last = s }
+	record("x")
+	record("y")
+	fmt.println(stats)
+
+	// same field names and types: same type
+	l, r := { v = 1 }, { v = 2 }
+	l = r
+	fmt.println(l)
+
+	// values are evaluated once, in order
+	n := 0
+	next := proc[&n]() -> int { n += 1; return n }
+	seq := { first = next(), second = next(), inner = { third = next() } }
+	fmt.println(seq, n)
+
+	// a typed context keeps Odin's own meaning
+	p: Point = { x = 3, y = 4 }
+	fmt.println(p, Point{ x = 5 })
+}

@@ -1,0 +1,43 @@
+package main
+
+import "core:fmt"
+
+Point :: struct { x, y: int }
+
+// every way a variable can be declared, captured by reference
+main :: proc() {
+	a := 1                       // short declaration
+	b: int = 2                   // typed with value
+	c: [dynamic]int              // typed without value
+	p := Point{1, 2}             // struct value
+	d, e := 4, 5                 // multi-declaration, only `e` captured
+
+	touch := proc[&a, &b, &c, &p, &e]() {
+		a *= 10
+		b *= 10
+		append(&c, 7)
+		p.x += 100
+		e += 1
+	}
+	touch()
+	touch()
+	fmt.println(a, b, c[:], p, d, e)
+
+	// a parameter captured by reference is copied into a box at proc entry
+	acc := proc(start: int) -> int {
+		add := proc[&start](k: int) { start += k }
+		add(5)
+		add(6)
+		return start
+	}
+	fmt.println("acc:", acc(100))
+
+	// the box is shared, so a closure returned out of a scope keeps the value alive
+	make := proc() -> closure() -> int {
+		total := 0
+		return proc[&total]() -> int { total += 1; return total }
+	}
+	counter := make()
+	counter()
+	fmt.println("counter:", counter())
+}

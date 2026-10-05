@@ -1,0 +1,7 @@
+// error: 'or_return' needs a procedure that returns an error (or a bool)
+package main
+Error :: enum { None, Bad }
+f :: proc() -> (int, Error) { return 1, .None }
+main :: proc() {
+	x := f() or_return .Bad
+}

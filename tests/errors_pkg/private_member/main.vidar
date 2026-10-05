@@ -1,0 +1,4 @@
+// error: 'lib.secret' is private to package 'lib'
+package main
+import "lib"
+main :: proc() { _ = lib.secret() }

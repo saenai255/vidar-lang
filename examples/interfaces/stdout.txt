@@ -1,0 +1,9 @@
+circle area: 3.14
+c.r after scale through interface: 2
+circle(12.57)
+rect(6.00)
+rect(2.00)
+total: 20.57
+biggest: circle
+scene: intro rect(6.00) rect(1.00)
+log: ["hello ", "vidar"] 11 bytes

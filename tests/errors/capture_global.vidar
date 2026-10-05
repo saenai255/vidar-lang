@@ -1,0 +1,4 @@
+// error: is not a local variable; closures can use globals and constants without capturing them
+package main
+G := 1
+main :: proc() { f := proc[G]() {} }

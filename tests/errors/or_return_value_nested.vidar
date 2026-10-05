@@ -1,0 +1,10 @@
+// error: 'or_return <value>' must be the whole right-hand side
+package main
+Error :: enum { None, Bad }
+f :: proc() -> (int, Error) { return 1, .None }
+g :: proc(x: int) -> int { return x }
+h :: proc() -> Error {
+	_ = g(f() or_return .Bad)
+	return .None
+}
+main :: proc() {}
