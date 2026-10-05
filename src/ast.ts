@@ -99,6 +99,11 @@ export type Stmt =
   | N<"Catch", { stmt: Stmt; errName: string | null; errTok: number; unreachable: boolean; body: Block | null }>
   /** `errdefer stmt`: a defer that only runs when the procedure returns a failure */
   | N<"ErrDefer", { stmt: Stmt }>
+  /** `go f(args)`: runs the call on a new goroutine */
+  | N<"Go", { call: Expr }>
+  /** `ch <- value` */
+  | N<"Send", { ch: Expr; value: Expr }>
+  | N<"Select", { cases: SelectCase[] }>
   | N<"RawStmt", {}>
   | N<"Empty", {}>;
 
@@ -108,7 +113,14 @@ export interface Case extends Base {
   body: Stmt[];
 }
 
-export type Node = Expr | Stmt | Case;
+/** One `select` arm; `comm` is null for the default `case:`, else a receive or a send. */
+export interface SelectCase extends Base {
+  k: "SelectCase";
+  comm: Stmt | null;
+  body: Stmt[];
+}
+
+export type Node = Expr | Stmt | Case | SelectCase;
 
 export interface File {
   path: string;

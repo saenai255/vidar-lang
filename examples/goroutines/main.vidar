@@ -1,0 +1,116 @@
+package main
+
+import "core:fmt"
+import "core:net"
+import "core:time"
+import "vidar:sched"
+
+Color :: enum { Red, Green, Blue }
+
+paint :: proc(id: int, scale: f64, c: Color, out: sched.Chan(string), wg: ^sched.Wait_Group) {
+	defer sched.done(wg)
+	sched.sleep(time.Duration(10 * (3 - id)) * time.Millisecond)
+	out <- fmt.aprintf("worker %d: %v x%.1f", id, c, scale)
+}
+
+producer :: proc(n: int, out: sched.Chan(int)) {
+	for i in 0..<n {
+		out <- i * i
+	}
+	sched.close(out)
+}
+
+echo_server :: proc(listener: net.TCP_Socket) {
+	for {
+		client, _, err := sched.accept(listener)
+		if err != nil do return
+		go proc[client]() {
+			buf: [256]byte
+			for {
+				n, rerr := sched.recv(client, buf[:])
+				if rerr != nil || n == 0 do break
+				sched.send(client, buf[:n])
+			}
+			sched.close(client)
+		}()
+	}
+}
+
+main :: proc() {
+	// workers finish in reverse order of their sleeps; untyped args take the parameter types
+	results := sched.make_chan(string, 3)
+	wg: sched.Wait_Group
+	for i in 0..<3 {
+		sched.add(&wg)
+		go paint(i, 2, .Blue, results, &wg)
+	}
+	sched.wait(&wg)
+	for _ in 0..<3 do fmt.println(<-results)
+
+	// range over a channel until it's closed
+	squares := sched.make_chan(int)
+	go producer(5, squares)
+	total := 0
+	for {
+		v, ok := <-squares
+		if !ok do break
+		total += v
+	}
+	fmt.println("sum of squares:", total)
+
+	// closures capture by value; each goroutine gets its own copy of i
+	done := sched.make_chan(int, 10)
+	for i in 0..<10 do go proc[i, done]() { done <- i }()
+	sum := 0
+	for _ in 0..<10 do sum += <-done
+	fmt.println("closure sum:", sum)
+
+	// select with a timeout
+	slow := sched.make_chan(string)
+	timeout := sched.make_chan(bool, 1)
+	go proc[slow]() { sched.sleep(50 * time.Millisecond); slow <- "too late" }()
+	go proc[timeout]() { sched.sleep(10 * time.Millisecond); timeout <- true }()
+	select {
+	case msg := <-slow:
+		fmt.println(msg)
+	case <-timeout:
+		fmt.println("timed out")
+	}
+
+	// non-blocking select
+	empty := sched.make_chan(int)
+	select {
+	case v := <-empty:
+		fmt.println("got", v)
+	case:
+		fmt.println("nothing ready")
+	}
+
+	// TCP echo over the event loop
+	listener, err := sched.listen_tcp({net.IP4_Loopback, 0})
+	if err != nil {
+		fmt.println("listen failed:", err)
+		return
+	}
+	endpoint, _ := net.bound_endpoint(listener)
+	go echo_server(listener)
+	replies := sched.make_chan(string)
+	for k in 0..<3 {
+		go proc[k, endpoint, replies]() {
+			conn, derr := sched.dial(endpoint)
+			if derr != nil {
+				replies <- fmt.aprint("dial failed:", derr)
+				return
+			}
+			msg := fmt.aprintf("ping %d", k)
+			sched.send(conn, transmute([]byte)msg)
+			buf: [64]byte
+			n, _ := sched.recv(conn, buf[:])
+			sched.close(conn)
+			replies <- string(buf[:n])
+		}()
+	}
+	got: [3]string
+	for &r in got do r = <-replies
+	fmt.println("echoed", len(got), "messages")
+}

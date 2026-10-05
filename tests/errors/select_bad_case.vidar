@@ -1,0 +1,9 @@
+// error: a select case must send (case ch <- v:) or receive
+package main
+import "vidar:sched"
+main :: proc() {
+	c := sched.make_chan(int)
+	select {
+	case len(c.raw.buf) > 0:
+	}
+}

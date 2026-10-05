@@ -12,6 +12,7 @@ Each example is its own directory, and the directory is the program. Run one wit
 | [macros/](macros) | `comptime proc` macros: `Expr(T)`, `Stmt`, `Type` and `Ident` parameters, `quote` and splicing, hygiene, trailing blocks, defaults, reflection, `compile_error` |
 | [builtins/](builtins) | the built-in macros `format!`, `dbg!`, `check!`, `with_allocator!`, `locked!`, `timed!`, `todo!`, `unimplemented!` |
 | [scoped/](scoped) | the built-in `scoped! { ... }` / `scoped!(allocator) { ... }`: a block with its own temp allocator, freed when the block ends |
+| [goroutines/](goroutines) | `go`, channels (`ch <- v`, `<-ch`, close), `select` with a timeout and a default, wait groups, and a TCP echo server over `core:nbio` |
 | [cyclic/](cyclic) | packages that import each other (`game` and `ui`) plus one outside the cycle (`util`), sharing an interface, closures, a macro and error handling |
 
 See [SYNTAX.md](../SYNTAX.md) for a reference of all the syntax these use.

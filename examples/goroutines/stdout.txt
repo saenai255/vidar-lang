@@ -1,0 +1,8 @@
+worker 2: Blue x2.0
+worker 1: Blue x2.0
+worker 0: Blue x2.0
+sum of squares: 30
+closure sum: 45
+timed out
+nothing ready
+echoed 3 messages

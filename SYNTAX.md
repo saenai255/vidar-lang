@@ -2,7 +2,7 @@
 
 Everything Vidar adds on top of Odin, in one place. Anything not listed here is plain Odin and passes through unchanged. The [README](README.md) explains how each feature lowers to Odin; [examples/](examples) has a runnable program per feature.
 
-All new keywords are contextual: `closure`, `comptime`, `quote`, `interface`, `impl`, `catch` and `errdefer` stay usable as ordinary identifiers.
+All new keywords are contextual: `closure`, `comptime`, `quote`, `interface`, `impl`, `catch`, `errdefer`, `go` and `select` stay usable as ordinary identifiers.
 
 ## Closures
 
@@ -226,6 +226,34 @@ Rules:
 - A `Stmt` macro can also be invoked at file scope, e.g. to generate declarations.
 
 Example: [examples/macros](examples/macros).
+
+## Goroutines and channels
+
+| Syntax | Meaning |
+|---|---|
+| `go f(args)` | run the call on a new goroutine; `f` and the arguments are evaluated first |
+| `go proc[x]() { ... }()` | run a closure on a new goroutine |
+| `ch <- v` | send (no space inside `<-`) |
+| `<-ch` / `v := <-ch` / `v, ok := <-ch` | receive; `ok` is false once `ch` is closed and drained |
+| `select { case v := <-a: ... case b <- x: ... case <-c: ... case: ... }` | run the first ready case, or wait; `case:` is the default (non-blocking) |
+| `import "vidar:sched"` | `Chan(T)`, `make_chan(T, cap)`, `close`, `chan_len`, `chan_cap`, `sleep`, `yield`, `Wait_Group` (`add`, `done`, `wait`), TCP: `listen_tcp`, `accept`, `dial`, `recv`, `send` |
+
+```odin
+results := sched.make_chan(string)
+go fetch(url, results)
+select {
+case r := <-results: fmt.println(r)
+case <-timeout:      fmt.println("timed out")
+}
+```
+
+Rules:
+- Goroutines are stackful coroutines on one thread. I/O through `sched` parks only the calling goroutine; plain blocking calls (`os.read`, `time.sleep`) block all of them.
+- `go` takes a call. Arguments get the callee's parameter types when its signature is known.
+- A select case sends or receives; anything else is an error.
+- If every goroutine is blocked and no I/O is pending, the program panics with a deadlock error.
+
+Example: [examples/goroutines](examples/goroutines).
 
 ## Built-in macros
 

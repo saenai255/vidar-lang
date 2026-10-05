@@ -8,6 +8,7 @@ import { resetGensym } from "./comptime";
 import type { File } from "./ast";
 import { PackageInfo, Scope, Unit } from "./scope";
 import { PRELUDE_PATH, PRELUDE_SOURCE } from "./prelude";
+import { SCHED_FILES } from "./sched";
 
 export interface Source {
   path: string;
@@ -214,6 +215,7 @@ export function emitProgram(p: Program): Output {
   const files = new Map<string, string>();
   const sourceOf = new Map<string, string>();
   let closures = false;
+  let sched = false;
   for (const unit of p.units) {
     const em = new Emitter(p.analyzer, unit);
     for (const pkg of unit.packages) {
@@ -224,8 +226,10 @@ export function emitProgram(p: Program): Output {
       }
     }
     closures ||= em.usesRuntime;
+    sched ||= em.usesSched;
   }
   if (closures) files.set(`${RUNTIME_DIR}/runtime.odin`, CLOSURE_RUNTIME);
+  if (sched) for (const [name, text] of SCHED_FILES) files.set(`${RUNTIME_DIR}/${name}`, text);
   return { files, sourceOf };
 }
 
