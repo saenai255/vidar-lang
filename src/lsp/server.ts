@@ -218,7 +218,7 @@ connection.onHover(async ({ textDocument, position }) => {
   const { state, path } = stateFor(textDocument.uri);
   if (!state.current || !state.index) return null;
   const h = F.hover(state.current, state.index, path, position);
-  if (h && !h.untyped) return { contents: { kind: "markdown", value: h.markdown }, range: h.range };
+  if (h && !h.weak) return { contents: { kind: "markdown", value: h.markdown }, range: h.range };
   const text = textOf(state, textDocument.uri, path);
   const fromOdin = text !== undefined ? await ols?.hover(dirname(path), path, text, position) : undefined;
   if (fromOdin) return fromOdin;

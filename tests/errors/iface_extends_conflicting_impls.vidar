@@ -1,0 +1,13 @@
+// error: 'T' implements 'A' twice, binding 'a' differently
+package main
+A :: interface { a }
+a :: proc(x: A) ---
+B :: interface { using A, b }
+b :: proc(x: B) ---
+T :: struct {}
+t_a :: proc(t: ^T) {}
+t_a2 :: proc(t: ^T) {}
+t_b :: proc(t: ^T) {}
+impl B for T { a = t_a, b = t_b }
+impl A for T { a = t_a2 }
+main :: proc() {}

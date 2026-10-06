@@ -68,7 +68,10 @@ main :: proc() {
 	// catch: handle inline, with the error bound
 	fmt.println("catch:")
 	for key in ([]string{"port", "junk"}) {
-		n, __err6 := port(key); if __vidar.failed(__err6) { err := __err6;
+		// n := port(key) catch err { ... } — input.vidar:71
+		n, __err6 := port(key)
+		if __vidar.failed(__err6) {
+			err := __err6
 			fmt.println("  could not read", key, "because", err)
 			continue
 		}
@@ -77,15 +80,27 @@ main :: proc() {
 
 	// catch without binding the error, on an assignment, and on a bare call
 	total := 0
-	__err7_v0, __err7 := port("port"); if __vidar.failed(__err7) {
-		total = -1
-		return
-	}; total = __err7_v0
-	__err8 := check(70000); if __vidar.failed(__err8) { e := __err8; fmt.println("  check failed:", e) }
-	_, __err9 := port("junk"); if __vidar.failed(__err9) { e := __err9; fmt.println("  bare call with a value and an error:", e) }
+	{ // total = port("port") catch { ... } — input.vidar:80
+		__err7_v0, __err7 := port("port")
+		if __vidar.failed(__err7) {
+			total = -1
+			return
+		}
+		total = __err7_v0
+	}
+	{ // check(70000) catch e { ... } — input.vidar:84
+		__err8 := check(70000)
+		if __vidar.failed(__err8) { e := __err8; fmt.println("  check failed:", e) }
+	}
+	{ // port("junk") catch e { ... } — input.vidar:85
+		_, __err9 := port("junk")
+		if __vidar.failed(__err9) { e := __err9; fmt.println("  bare call with a value and an error:", e) }
+	}
 	fmt.println("  total:", total)
 
 	// catch unreachable: the error "can't happen"; if it does, panic with it
-	sure, __err10 := port("port"); if __vidar.failed(__err10) { __vidar.unexpected(__err10) }
+	// sure := port("port") catch unreachable — input.vidar:89
+	sure, __err10 := port("port")
+	if __vidar.failed(__err10) do __vidar.unexpected(__err10)
 	fmt.println("unreachable not hit:", sure)
 }

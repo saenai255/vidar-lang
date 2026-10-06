@@ -1,0 +1,57 @@
+package main
+
+import "core:fmt"
+
+Named :: interface { name }
+name :: proc(n: Named) -> string ---
+
+Sized :: interface { size }
+size :: proc(s: Sized) -> int ---
+
+// Extends two interfaces and adds a method of its own.
+Item :: interface { using Named, using Sized, describe }
+describe :: proc(i: Item) -> string ---
+
+// Diamond: both bases extend Named.
+Labeled :: interface { using Named, label }
+label :: proc(l: Labeled) -> string ---
+
+Product :: interface { using Item, using Labeled }
+
+Box :: struct { w, h: int }
+
+box_name     :: proc(b: ^Box) -> string { return "box" }
+box_size     :: proc(b: ^Box) -> int    { return b.w * b.h }
+box_describe :: proc(b: ^Box) -> string { return fmt.tprintf("%dx%d", b.w, b.h) }
+box_label    :: proc(b: ^Box) -> string { return "BOX" }
+
+// Also implements Named, Sized, Item and Labeled.
+impl Product for Box { name = box_name, size = box_size, describe = box_describe, label = box_label }
+
+print_named :: proc(n: Named) { fmt.println("named:", name(n)) }
+
+total :: proc(items: []Sized) -> (sum: int) {
+	for s in items do sum += size(s)
+	return
+}
+
+main :: proc() {
+	b := Box{2, 3}
+	fmt.println("static:", name(&b), size(&b), describe(&b), label(&b))
+
+	p: Product = &b
+	fmt.println("dynamic:", name(p), size(p), describe(p), label(p))
+
+	i: Item = p
+	print_named(i)
+	print_named(p)
+	print_named(&b)
+	print_named(Named(p))
+
+	l := Labeled(&b)
+	fmt.println("labeled:", label(l), name(l))
+
+	sized: [dynamic]Sized
+	append(&sized, i, p, &b)
+	fmt.println("total:", total(sized[:]))
+}

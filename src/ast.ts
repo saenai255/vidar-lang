@@ -59,8 +59,8 @@ export type Expr =
   | N<"ClosureType", { sig: ProcSig }>
   | N<"StructType", { fields: Param[]; polyParams: Param[] | null; extra: Expr[] }>
   | N<"UnionType", { variants: Expr[]; polyParams: Param[] | null }>
-  | N<"InterfaceType", { methods: { name: string; tok: number }[] }>
-  | N<"EnumType", { base: Expr | null; members: { name: string; value: Expr | null }[] }>
+  | N<"InterfaceType", { methods: { name: string; tok: number }[]; parents: Expr[] }>
+  | N<"EnumType", { base: Expr | null; members: { name: string; tok: number; value: Expr | null }[] }>
   | N<"TypeExpr", { what: string; parts: (Expr | null)[] }>
   | N<"Poly", { name: string; spec: Expr | null }>
   | N<"Directive", { name: string; args: Expr[] | null; x: Expr | null }>

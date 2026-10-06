@@ -460,8 +460,17 @@ export class Parser {
     const start = this.i++;
     this.expectOp("{");
     const methods: { name: string; tok: number }[] = [];
+    const parents: Expr[] = [];
     this.skipSemis();
     while (!this.isOp("}")) {
+      if (this.isKw("using")) {
+        this.i++;
+        parents.push(this.parseType());
+        this.skipSemis();
+        if (!this.eatOp(",")) break;
+        this.skipSemis();
+        continue;
+      }
       const id = this.ident();
       if (this.isOp(":")) throw this.err(`interfaces list method names: Name :: interface { ${id.name}, ... }, with each method declared as ${id.name} :: proc(x: Name, ...) ---`);
       methods.push(id);
@@ -470,7 +479,7 @@ export class Parser {
       this.skipSemis();
     }
     this.expectOp("}");
-    return this.node("InterfaceType", start, { methods });
+    return this.node("InterfaceType", start, { methods, parents });
   }
 
   private parseIf(): Stmt {
@@ -974,12 +983,12 @@ export class Parser {
         this.i++;
         const base = this.isOp("{") ? null : this.parseType();
         this.expectOp("{");
-        const members: { name: string; value: Expr | null }[] = [];
+        const members: { name: string; tok: number; value: Expr | null }[] = [];
         this.skipSemis();
         while (!this.isOp("}")) {
-          const name = this.ident().name;
+          const { name, tok } = this.ident();
           const value = this.eatOp("=") ? this.withLit(true, () => this.parseExpr()) : null;
-          members.push({ name, value });
+          members.push({ name, tok, value });
           this.skipSemis();
           if (!this.eatOp(",")) break;
           this.skipSemis();

@@ -1,0 +1,9 @@
+package shapes
+
+Shape :: interface { area }
+area :: proc(s: Shape) -> f64 ---
+
+total :: proc(list: []Shape) -> (sum: f64) {
+	for s in list do sum += area(s)
+	return
+}

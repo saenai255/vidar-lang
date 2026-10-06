@@ -1,0 +1,7 @@
+// error: interface 'A' extends itself: A -> B -> A
+package main
+A :: interface { using B, a }
+a :: proc(x: A) ---
+B :: interface { using A, b }
+b :: proc(x: B) ---
+main :: proc() {}

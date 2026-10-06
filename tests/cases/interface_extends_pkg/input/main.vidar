@@ -1,0 +1,24 @@
+package main
+
+import "core:fmt"
+import "shapes"
+
+// Extends an interface from another package.
+Solid :: interface { using shapes.Shape, volume }
+volume :: proc(s: Solid) -> f64 ---
+
+Cube :: struct { side: f64 }
+
+cube_area   :: proc(c: ^Cube) -> f64 { return 6 * c.side * c.side }
+cube_volume :: proc(c: ^Cube) -> f64 { return c.side * c.side * c.side }
+
+impl Solid for Cube { area = cube_area, volume = cube_volume }
+
+main :: proc() {
+	c := Cube{2}
+	s: Solid = &c
+	fmt.println(shapes.area(s), volume(s))
+	list: [dynamic]shapes.Shape
+	append(&list, s)
+	fmt.println("total:", shapes.total(list[:]))
+}

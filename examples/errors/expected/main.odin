@@ -60,7 +60,10 @@ main :: proc() {
 	}
 	for input, i in inputs {
 		fmt.printf("config %d:\n", i)
-		cfg, __err2 := parse_config(input); if __vidar.failed(__err2) { err := __err2;
+		// cfg := parse_config(input) catch err { ... } — main.vidar:63
+		cfg, __err2 := parse_config(input)
+		if __vidar.failed(__err2) {
+			err := __err2
 			fmt.println("    rejected:", err)
 			continue // a catch after a declaration must leave the scope
 		}
@@ -68,12 +71,20 @@ main :: proc() {
 	}
 
 	// after a bare call the block may fall through
-	_, __err3 := parse_int("-1", 10); if __vidar.failed(__err3) { err := __err3; fmt.println("bare call failed:", err) }
+	{ // parse_int("-1", 10) catch err { ... } — main.vidar:71
+		_, __err3 := parse_int("-1", 10)
+		if __vidar.failed(__err3) { err := __err3; fmt.println("bare call failed:", err) }
+	}
 
 	// the error name is optional
-	_, __err4 := parse_int("x", 10); if __vidar.failed(__err4) { fmt.println("bare call failed, error ignored") }
+	{ // parse_int("x", 10) catch { ... } — main.vidar:74
+		_, __err4 := parse_int("x", 10)
+		if __vidar.failed(__err4) { fmt.println("bare call failed, error ignored") }
+	}
 
 	// for values you know are valid: no plumbing, but a loud panic if you're wrong
-	answer, __err5 := parse_int("42", 100); if __vidar.failed(__err5) { __vidar.unexpected(__err5) }
+	// answer := parse_int("42", 100) catch unreachable — main.vidar:77
+	answer, __err5 := parse_int("42", 100)
+	if __vidar.failed(__err5) do __vidar.unexpected(__err5)
 	fmt.println("answer:", answer)
 }

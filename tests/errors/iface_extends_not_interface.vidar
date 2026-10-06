@@ -1,0 +1,6 @@
+// error: 'Point' is not an interface
+package main
+Point :: struct { x: int }
+A :: interface { using Point, a }
+a :: proc(x: A) ---
+main :: proc() {}

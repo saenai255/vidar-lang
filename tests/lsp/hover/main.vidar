@@ -1,0 +1,64 @@
+package main
+
+import "core:fmt"
+import "core:strconv"
+
+Error :: enum { None, Bad_Number, Too_Big }
+
+Point :: struct { x, y: int }
+
+Shape :: union { Circle, Rect }
+Circle :: struct { r: f64 }
+Rect :: struct { w, h: f64 }
+
+Handler :: closure(msg: string) -> bool
+
+Box :: struct($T: typeid) { value: T }
+
+swap :: proc!(a, b: Expr) -> Stmt {
+	return quote {
+		tmp := $a
+		$a = $b
+		$b = tmp
+	}
+}
+
+parse :: proc(text: string) -> (int, Error) {
+	n, ok := strconv.parse_int(text)
+	if !ok do return 0, .Bad_Number
+	if n > 100 do return 0, .Too_Big
+	return n, .None
+}
+
+origin :: proc() -> Point {
+	return {x = 0, y = 0}
+}
+
+area :: proc(s: Shape) -> f64 {
+	switch v in s {
+	case Circle: return 3.14 * v.r * v.r
+	case Rect:   return v.w * v.h
+	}
+	return 0
+}
+
+@(private)
+helper :: proc(v: $T) -> int { return size_of(T) }
+
+main :: proc() {
+	p: Point = {x = 1, y = 2}
+	q := Point{x = 3, y = 4}
+	swap!(p, q)
+	parse("7") catch err { fmt.println("failed:", err) }
+	b := Box(int){value = 5}
+	nums: [dynamic]int
+	defer delete(nums)
+	append(&nums, len("abc"))
+	for n, i in nums {
+		if n > 0 && i >= 0 do continue
+	}
+	when ODIN_OS == .Darwin {
+		fmt.println(context.allocator, b.value, area(Circle{1}), helper(1), origin().x)
+	}
+	_ = true
+}

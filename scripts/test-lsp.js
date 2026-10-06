@@ -415,7 +415,7 @@ function change(text) {
   const renImport = await request("textDocument/rename", { textDocument: mDoc, position: mAt('import "core:fmt"', "fmt"), newName: "f" });
   const importEdits = renImport.result?.changes?.[mUri] ?? [];
   const importDecl = importEdits.find((e) => e.range.start.line === mAt('import "core:fmt"', "fmt").line);
-  check("renaming an import without an alias adds one", importDecl?.newText === "f " && importDecl.range.start.character === importDecl.range.end.character && importEdits.length === 3, JSON.stringify(importEdits));
+  check("renaming an import without an alias adds one", importDecl?.newText === "f " && importDecl.range.start.character === importDecl.range.end.character && importEdits.length === 4, JSON.stringify(importEdits));
   const renPrelude = await request("textDocument/rename", { textDocument: mDoc, position: mAt("check!(x > y)", "check", 1), newName: "verify" });
   check("renaming a built-in macro is refused", !!renPrelude.error && !renPrelude.result, JSON.stringify(renPrelude));
 
@@ -435,6 +435,86 @@ function change(text) {
   check("completion inside a comptime! block offers its locals", inDo.includes("total") && inDo.includes("LIMIT"), JSON.stringify(inDo.slice(0, 20)));
   const inComptime = await completeIn(mUri, mText, "name := type_name(T)", "\tna");
   check("completion inside a comptime proc offers its parameters and locals", inComptime.includes("name") && inComptime.includes("T"), JSON.stringify(inComptime.slice(0, 20)));
+
+  // ---- hover on every name and keyword ----
+  const hovDir = realpathSync(mkdtempSync(join(tmpdir(), "vidar-lsp-hover-")));
+  cpSync("tests/lsp/hover", hovDir, { recursive: true });
+  const hPath = join(hovDir, "main.vidar");
+  const hUri = pathToFileURL(hPath).toString();
+  const hText = readFileSync(hPath, "utf8");
+  const hLines = hText.split("\n");
+  const hAt = (lineHas, needle, offset = 0, nth = 0) => {
+    const line = hLines.findIndex((l) => l.includes(lineHas));
+    if (line < 0) throw new Error(`no line with ${lineHas}`);
+    let col = -1;
+    for (let i = 0; i <= nth; i++) col = hLines[line].indexOf(needle, col + 1);
+    if (col < 0) throw new Error(`no '${needle}' on line ${line + 1}`);
+    return { line, character: col + offset };
+  };
+  const hHover = async (pos) => (await request("textDocument/hover", { textDocument: { uri: hUri }, position: pos })).result?.contents?.value ?? "";
+  const hDef = async (pos) => (await request("textDocument/definition", { textDocument: { uri: hUri }, position: pos })).result;
+  const hDiag = nextDiagnostics((d) => d.uri === hUri);
+  notify("textDocument/didOpen", { textDocument: { uri: hUri, languageId: "vidar", version: 1, text: hText } });
+  const hd = await hDiag;
+  check("hover fixture has no errors", hd.diagnostics.length === 0, JSON.stringify(hd.diagnostics));
+
+  const expectHover = async (name, pos, ...needles) => {
+    const h = await hHover(pos);
+    check(name, needles.every((n) => h.includes(n)), h);
+  };
+  await expectHover("hover on the package clause", hAt("package main", "main"), "package main");
+  await expectHover("hover on a keyword", hAt("for n, i in nums", "for"), "keyword");
+  await expectHover("hover on a vidar keyword", hAt('parse("7") catch', "catch"), "keyword", "catch");
+  await expectHover("hover on `proc!` explains comptime procs", hAt("swap :: proc!", "proc"), "proc!");
+  await expectHover("hover on quote", hAt("return quote {", "quote"), "keyword", "$name");
+  await expectHover("hover on a builtin type", hAt("Point :: struct { x, y: int }", " int", 1), "builtin type");
+  await expectHover("hover on a builtin proc", hAt("append(&nums", "len"), "len :: proc");
+  await expectHover("hover on a macro parameter kind", hAt("swap :: proc!", "Expr"), "macro kind");
+  await expectHover("hover on a struct field declaration", hAt("Point :: struct", "y"), "y: int", "field of struct", "Point");
+  await expectHover("hover on an enum member declaration", hAt("Error :: enum", "Too_Big"), "Error.Too_Big = 2");
+  await expectHover("hover on an implicit enum selector", hAt("return 0, .Bad_Number", "Bad_Number"), "Error.Bad_Number = 1");
+  await expectHover("hover on a field name in a typed literal", hAt("q := Point{x = 3", "x"), "x: int", "Point");
+  await expectHover("hover on a field name in a literal typed by its declaration", hAt("p: Point = {x = 1", "y"), "y: int");
+  await expectHover("hover on a field name in a returned literal", hAt("return {x = 0", "y"), "y: int");
+  await expectHover("hover on a type switch variable inside a case", hAt("case Circle: return", "v"), "v: Circle");
+  await expectHover("hover on a field through a type switch variable", hAt("case Rect:", "h"), "h: f64", "Rect");
+  await expectHover("hover on a closure type's parameter name", hAt("Handler :: closure", "msg"), "msg: string", "closure type");
+  await expectHover("hover on a polymorphic parameter", hAt("helper :: proc", "T", 0, 0), "polymorphic");
+  await expectHover("hover on a struct's polymorphic parameter", hAt("Box :: struct", "T"), "polymorphic");
+  await expectHover("hover on a local declared in quoted code", hAt("$b = tmp", "tmp"), "renames it");
+  await expectHover("hover on an attribute", hAt("@(private)", "private"), "attribute");
+  await expectHover("hover on a context field", hAt("fmt.println(context", "allocator"), "allocator: runtime.Allocator");
+  await expectHover("hover on a builtin constant", hAt("when ODIN_OS", "ODIN_OS"), "ODIN_OS");
+  await expectHover("hover on the blank identifier", hAt("_ = true", "_"), "blank identifier");
+  await expectHover("hover on a field of a generic struct value", hAt("b.value", "value"), "value");
+  const catchErr = await hHover(hAt('parse("7") catch err', "err", 1, 1));
+  check("a catch after a bare call binds the error (the last result), not the first", catchErr.includes("err: Error") && catchErr.includes("catch"), catchErr);
+
+  const defMember = await hDef(hAt("return 0, .Bad_Number", "Bad_Number"));
+  check("definition of an implicit enum selector jumps to the member", defMember?.range.start.line === hAt("Error :: enum", "Bad_Number").line && defMember.range.start.character === hAt("Error :: enum", "Bad_Number").character, JSON.stringify(defMember));
+  const defLitField = await hDef(hAt("q := Point{x = 3", "y"));
+  check("definition of a field name in a literal jumps to the field", defLitField?.range.start.line === hAt("Point :: struct", "y").line, JSON.stringify(defLitField));
+  const defCase = await hDef(hAt("case Circle: return", "r"));
+  check("definition of a field through a type switch variable", defCase?.range.start.line === hAt("Circle :: struct", "r").line, JSON.stringify(defCase));
+
+  // every identifier and keyword in the fixtures shows something
+  const { lex } = require("../dist/lexer.js");
+  const noHover = async (u, text) => {
+    const missing = [];
+    for (const t of lex(text, "x")) {
+      if (t.kind !== "ident" && t.kind !== "kw") continue;
+      const pos = { line: t.pos.line - 1, character: t.pos.col - 1 };
+      const r = await request("textDocument/hover", { textDocument: { uri: u }, position: pos });
+      if (!r.result?.contents?.value) missing.push(`${t.text}@${t.pos.line}:${t.pos.col}`);
+    }
+    return missing;
+  };
+  const hMissing = await noHover(hUri, hText);
+  check("every name and keyword in the hover fixture has a hover", hMissing.length === 0, hMissing.join(" "));
+  notify("textDocument/didChange", { textDocument: { uri: mUri, version: ++version }, contentChanges: [{ text: mText }] });
+  await new Promise((r) => setTimeout(r, 300));
+  const mMissing = await noHover(mUri, mText);
+  check("every name and keyword in the macros fixture has a hover", mMissing.length === 0, mMissing.join(" "));
 
   writeFileSync(file, original);
   const restored = nextDiagnostics((d) => d.uri === uri && d.diagnostics.length === 0);

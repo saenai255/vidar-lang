@@ -1,0 +1,8 @@
+static: box 6 2x3 BOX
+dynamic: box 6 2x3 BOX
+named: box
+named: box
+named: box
+named: box
+labeled: BOX box
+total: 18

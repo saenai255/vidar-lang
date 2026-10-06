@@ -202,6 +202,8 @@ export class Emitter {
   /** the statement emitted as part of a statement list, where it may take several lines */
   private listed: Node | null = null;
   private indents = new Map<number, string>();
+  /** indentation added to source lines, inside a block vidar wrapped them in */
+  private deeper = "";
 
   constructor(private an: Analyzer, private unit: Unit) {}
 
@@ -238,7 +240,7 @@ export class Emitter {
     for (let i = from; i < to; ) {
       while (ki < kids.length && kids[ki].start < i) ki++;
       const tok = n.toks[i];
-      const pre = i === from ? "" : this.pretty ? squash(tok.pre) : tok.pre;
+      const pre = i === from ? "" : this.pretty ? squash(tok.pre) : this.ws(tok.pre);
       if (ki < kids.length && kids[ki].start === i) {
         const kid = kids[ki];
         const whole = BARE_PARENTS.has(n.k) && !(n.k === "Call" && n.fn === kid);
@@ -258,6 +260,10 @@ export class Emitter {
     return out;
   }
 
+  private ws(pre: string): string {
+    return this.deeper ? pre.replace(/\n(?!\n)/g, "\n" + this.deeper) : pre;
+  }
+
   private tok(t: Token): string {
     return this.an.tokText.get(t) ?? t.text;
   }
@@ -272,6 +278,8 @@ export class Emitter {
     const iface: GlobalSym | undefined = A(n)._wrapIface;
     let text = this.emitNode(n);
     if (iface) text = `${this.qualify(iface, fromName(iface))}(${text})`;
+    const up: { from: GlobalSym; to: GlobalSym } | undefined = A(n)._upcast;
+    if (up) text = `${this.qualify(up.from, upcastName(up.from, up.to), `convert '${up.from.name}' to '${up.to.name}'`)}(${text})`;
     const fix: { prefix: string; suffix: string } | undefined = A(n)._fix;
     return fix ? fix.prefix + text + fix.suffix : text;
   }
@@ -345,13 +353,14 @@ export class Emitter {
       }
       case "Call": {
         const conv: GlobalSym | undefined = A(n)._ifaceConv;
+        if (conv && n.args.length === 1 && A(n.args[0])._upcast) return this.emit(n.args[0]);
         if (conv) return `${this.qualify(conv, fromName(conv))}(${n.args.map((a) => this.emit(a)).join(", ")})`;
         return A(n)._closure ? this.closureCall(n) : this.generic(n);
       }
       case "InterfaceType":
         return this.interfaceType(n);
       case "ImplBlock":
-        if (A(n)._impl) this.implHelpers(A(n)._impl);
+        for (const info of (A(n)._impls as ImplInfo[] | undefined) ?? []) this.implHelpers(info);
         return this.generic(n, n.start, n.end, []);
       case "ClosureType":
         return this.closureType(n.sig);
@@ -418,9 +427,9 @@ export class Emitter {
 
   private indentOf(n: Node): string {
     const pre = n.toks[n.start].pre;
-    if (pre.includes("\n")) return pre.slice(pre.lastIndexOf("\n") + 1);
+    if (pre.includes("\n")) return pre.slice(pre.lastIndexOf("\n") + 1) + this.deeper;
     // a statement after others on its line: lines it adds go one level in
-    return (this.indents.get(n.toks[n.start].pos.line) ?? "") + "\t";
+    return (this.indents.get(n.toks[n.start].pos.line) ?? "") + this.deeper + "\t";
   }
 
   /**
@@ -515,7 +524,7 @@ export class Emitter {
     if (!lines?.length) return this.generic(b);
     this.prologue.delete(b);
     const next = b.toks[b.start + 1];
-    return this.tok(b.toks[b.start]) + " " + lines.join("; ") + ";" + (next.pre || " ") + this.generic(b, b.start + 1);
+    return this.tok(b.toks[b.start]) + " " + lines.join("; ") + ";" + (this.ws(next.pre) || " ") + this.generic(b, b.start + 1);
   }
 
   private symRef(sym: Sym): string {
@@ -529,12 +538,12 @@ export class Emitter {
 
   // ---- error handling ----
 
-  /** The left-hand names, the call, and assignments to run after the error check. */
+  /** The left-hand names and the call, and the assignment to run after the error check. */
   private failHead(s: Stmt, call: string, errVar: string): { head: string; tail: string } {
     if (s.k === "ValueDecl") return { head: `${[...s.names.map((n) => n.name), errVar].join(", ")} := ${call}`, tail: "" };
     if (s.k === "Assign") {
       const temps = s.lhs.map((_, i) => `${errVar}_v${i}`);
-      return { head: `${[...temps, errVar].join(", ")} := ${call}`, tail: `; ${s.lhs.map((l) => this.emit(l)).join(", ")} = ${temps.join(", ")}` };
+      return { head: `${[...temps, errVar].join(", ")} := ${call}`, tail: `${s.lhs.map((l) => this.emit(l)).join(", ")} = ${temps.join(", ")}` };
     }
     const discard: number = A(s)._discard ?? 0;
     return { head: `${[...Array(discard).fill("_"), errVar].join(", ")} := ${call}`, tail: "" };
@@ -546,24 +555,55 @@ export class Emitter {
     this.fileUsesRuntime = this.usesRuntime = true;
     const { head, tail } = this.failHead(s, this.emit(info.postfix.x), info.errVar);
     const values = [...Array(info.results - 1).fill("{}"), this.emit(info.postfix.value!)];
-    return `${head}; if ${RUNTIME_ALIAS}.failed(${info.errVar}) do return ${values.join(", ")}${tail}`;
+    return `${head}; if ${RUNTIME_ALIAS}.failed(${info.errVar}) do return ${values.join(", ")}${tail && `; ${tail}`}`;
   }
 
+  /**
+   * A declaration keeps its names in scope: `x, e := f()`, then the check on a line of its own.
+   * An assignment or a bare call goes in a block of its own, which keeps the temporaries out of scope.
+   */
   private catchStmt(s: Extract<Stmt, { k: "Catch" }>): string {
     this.fileUsesRuntime = this.usesRuntime = true;
     const errVar: string = A(s)._errVar;
     const { head, tail } = this.failHead(s.stmt, this.emit(A(s)._value), errVar);
-    let handler: string;
-    if (s.unreachable || !s.body) handler = `{ ${RUNTIME_ALIAS}.unexpected(${errVar}) }`;
-    else {
-      const bind = s.errName ? [`${s.errName} := ${errVar}`] : [];
-      if (s.body.toks[s.body.start].text === "do") handler = `{ ${[...bind, ...s.body.stmts.map((x) => this.emit(x))].join("; ")} }`;
-      else {
-        if (bind.length) this.prologue.set(s.body, bind);
-        handler = this.emit(s.body);
-      }
+    const check = `if ${RUNTIME_ALIAS}.failed(${errVar}) `;
+    if (this.listed !== s || this.pretty || this.compact) return `${head}; ${check}${this.catchHandler(s, errVar, false)}${tail && `; ${tail}`}`;
+    const gen = nl(-this.lineOf(s));
+    if (s.stmt.k === "ValueDecl") {
+      this.notes.push(this.catchNote(s));
+      return head + gen + this.indent + check + this.catchHandler(s, errVar, true);
     }
-    return `${head}; if ${RUNTIME_ALIAS}.failed(${errVar}) ${handler}${tail}`;
+    const outer = this.deeper;
+    const inner = this.indent + "\t";
+    this.deeper += "\t";
+    try {
+      const lines = [head, check + this.catchHandler(s, errVar, true), ...(tail ? [tail] : [])];
+      return `{ ${this.catchNote(s)}` + lines.map((l) => gen + inner + l).join("") + gen + this.indent + "}";
+    } finally {
+      this.deeper = outer;
+    }
+  }
+
+  private catchHandler(s: Extract<Stmt, { k: "Catch" }>, errVar: string, multiline: boolean): string {
+    if (s.unreachable || !s.body) return multiline ? `do ${RUNTIME_ALIAS}.unexpected(${errVar})` : `{ ${RUNTIME_ALIAS}.unexpected(${errVar}) }`;
+    const bind = s.errName ? [`${s.errName} := ${errVar}`] : [];
+    const b = s.body;
+    if (b.toks[b.start].text === "do") return `{ ${[...bind, ...b.stmts.map((x) => this.emit(x))].join("; ")} }`;
+    const first = b.toks[b.start + 1].pre;
+    if (multiline && bind.length && first.includes("\n")) {
+      const indent = first.slice(first.lastIndexOf("\n") + 1) + this.deeper;
+      return "{" + nl(-this.lineOf(s)) + indent + bind[0] + this.ws(first) + this.generic(b, b.start + 1);
+    }
+    if (bind.length) this.prologue.set(b, bind);
+    return this.emit(b);
+  }
+
+  /** `// x := f() catch err { ... } — file.vidar:12` */
+  private catchNote(s: Extract<Stmt, { k: "Catch" }>): string {
+    const pos = s.toks[s.start].pos;
+    const handler = !s.body ? " unreachable" : s.body.toks[s.body.start].text === "do" ? " do ..." : " { ... }";
+    const text = `${joinTokens(s.toks.slice(s.stmt.start, s.stmt.end))} catch${s.errName ? ` ${s.errName}` : ""}${handler}`;
+    return `// ${text} — ${posix.basename(pos.file)}:${pos.line}`;
   }
 
   /** `name` declared in `owner`'s package, as spelled from the file being emitted. */
@@ -641,9 +681,14 @@ export class Emitter {
     const sym: GlobalSym = A(t)._ifaceSym;
     const name = sym.odinName;
     const methods: IfaceMethod[] = A(t)._methods;
+    const bases = this.an.basesOf(sym).map((b) => `\t${baseField(sym, b)}: ${this.qualify(b, `__${b.odinName}_VTable`)},\n`);
     const vtable = methods.map((m) => {
       const { decl } = this.paramList(m.rest);
       return `\t${m.name}: proc(self: ${name}${decl ? ", " + decl : ""})${this.results(m.rest)},\n`;
+    });
+    const upcasts = this.an.ancestorsOf(sym).map((a) => {
+      const fields = [sym, ...this.an.basePath(sym, a)!].reduce<string[]>((acc, x, i, path) => (i ? [...acc, baseField(path[i - 1], x)] : acc), []);
+      return `${upcastName(sym, a)} :: #force_inline proc(v: ${name}) -> ${this.qualify(a, a.odinName)} { return {data = v.data, __vtable = &v.__vtable.${fields.join(".")}} }`;
     });
     const dispatchers = methods.map((m) => {
       const { decl, forward } = this.paramList(m.lit.sig);
@@ -653,8 +698,8 @@ export class Emitter {
     const impls = this.an.impls.filter((i) => i.iface === sym);
     const overloads = [...impls.map((i) => `__${name}_from_${i.key}`), `__${name}_identity`];
     this.helpers.push(
-      `__${name}_VTable :: struct {\n${vtable.join("")}}\n\n` +
-        dispatchers.join("\n\n") + "\n\n" +
+      `__${name}_VTable :: struct {\n${bases.join("")}${vtable.join("")}}\n\n` +
+        [...dispatchers, ...upcasts].map((x) => x + "\n\n").join("") +
         `__${name}_identity :: #force_inline proc(v: ${name}) -> ${name} { return v }\n\n` +
         `${fromName(sym)} :: proc{${overloads.join(", ")}}`,
     );
@@ -669,18 +714,21 @@ export class Emitter {
 
   private implHelpers(info: ImplInfo): void {
     const name = info.iface.odinName;
-    const node = info.iface.decl.values[info.iface.index] as InterfaceType;
-    const methods: IfaceMethod[] = A(node)._methods;
     const T = this.emit(info.node.target);
-    const thunks = methods.map((m) => {
-      const { decl, forward } = this.paramList(m.rest);
-      const res = this.results(m.rest);
-      const call = `${info.methods.get(m.name)!.odinName}((^${T})(self.data)${forward.map((f) => ", " + f).join("")})`;
-      return `\t${m.name} = proc(self: ${name}${decl ? ", " + decl : ""})${res} { ${res ? "return " : ""}${call} },\n`;
-    });
+    const vtable = (iface: GlobalSym, indent: string): string => {
+      const self = this.qualify(iface, iface.odinName);
+      const bases = this.an.basesOf(iface).map((b) => `${indent}\t${baseField(iface, b)} = {\n${vtable(b, indent + "\t")}${indent}\t},\n`);
+      const thunks = ((A(this.an.ifaceNode(iface))._methods as IfaceMethod[] | undefined) ?? []).map((m) => {
+        const { decl, forward } = this.paramList(m.rest);
+        const res = this.results(m.rest);
+        const call = `${info.methods.get(m.name)!.odinName}((^${T})(self.data)${forward.map((f) => ", " + f).join("")})`;
+        return `${indent}\t${m.name} = proc(self: ${self}${decl ? ", " + decl : ""})${res} { ${res ? "return " : ""}${call} },\n`;
+      });
+      return bases.join("") + thunks.join("");
+    };
     const vt = `__${name}_vtable_${info.key}`;
     this.helpers.push(
-      `@(rodata)\n${vt} := __${name}_VTable{\n${thunks.join("")}}\n\n` +
+      `@(rodata)\n${vt} := __${name}_VTable{\n${vtable(info.iface, "")}}\n\n` +
         `__${name}_from_${info.key} :: proc(p: ^${T}) -> ${name} { return {data = p, __vtable = &${vt}} }`,
     );
   }
@@ -793,6 +841,19 @@ export class Emitter {
 
 function fromName(iface: GlobalSym): string {
   return `__${iface.odinName}_from`;
+}
+
+/** `iface`'s name as seen from `from`'s package, for generated names */
+function baseKey(from: GlobalSym, iface: GlobalSym): string {
+  return iface.pkg.unit === from.pkg.unit ? iface.odinName : `${iface.pkg.name}_${iface.odinName}`;
+}
+
+function baseField(iface: GlobalSym, base: GlobalSym): string {
+  return `__${baseKey(iface, base)}`;
+}
+
+function upcastName(from: GlobalSym, to: GlobalSym): string {
+  return `__${from.odinName}_as_${baseKey(from, to)}`;
 }
 
 function dispatcherName(m: IfaceMethod): string {

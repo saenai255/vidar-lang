@@ -1,0 +1,9 @@
+// error: 'A' does not extend 'B'
+package main
+A :: interface { a }
+a :: proc(x: A) ---
+B :: interface { b }
+b :: proc(x: B) ---
+use_b :: proc(x: B) {}
+f :: proc(x: A) { use_b(x) }
+main :: proc() {}

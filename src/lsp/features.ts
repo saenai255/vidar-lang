@@ -2,6 +2,7 @@ import type { Token } from "../lexer";
 import { Block, Expr, Node, Param, Stmt, children } from "../ast";
 import { A, AnonFieldType, IfaceMethod, nodeText } from "../analyzer";
 import { Parser } from "../parser";
+import { ATTRIBUTE_DOCS, BUILTIN_PROC_DOCS, BUILTIN_TYPE_DOCS, COMPTIME_BUILTIN_DOCS, CONTEXT_FIELD_DOCS, KEYWORD_DOCS, MACRO_KIND_DOCS, ODIN_CONSTANT_DOCS } from "./docs";
 import { type Program as Analysis, schedSourcePath } from "../project";
 import { CaptureSym, GlobalSym, LocalSym, Scope, Sym, Ty } from "../scope";
 
@@ -85,6 +86,13 @@ function sliceText(toks: Token[], start: number, end: number): string {
 }
 
 // ---- the reference index ----
+
+/** Names declared inside quoted code: each expansion gets its own renamed copy. */
+const quoteLocals = new WeakSet<Sym>();
+/** `v` in `switch v in x`. */
+const switchVars = new WeakSet<Sym>();
+/** `err` in `stmt catch err { ... }`. */
+const catchErrs = new WeakSet<Sym>();
 
 /** Follows captures back to the variable they capture. */
 export function canonical(sym: Sym): Sym {
@@ -175,7 +183,23 @@ export class Index {
         for (const s of (a._syms as LocalSym[] | undefined) ?? []) if (s.declTok) this.add(s.declTok, s, true);
         break;
       case "Catch":
-        if (a._errSym) this.add(n.toks[n.errTok], a._errSym, true);
+        if (a._errSym) {
+          catchErrs.add(a._errSym);
+          this.add(n.toks[n.errTok], a._errSym, true);
+        }
+        break;
+      case "Switch":
+        if (a._switchSym) {
+          switchVars.add(a._switchSym);
+          this.add(n.toks[n.typeSwitchVar!.tok], a._switchSym, true);
+        }
+        break;
+      case "Poly":
+        if (a._polySym) this.add(n.toks[n.start + 1], a._polySym, true);
+        break;
+      case "StructType":
+      case "UnionType":
+        for (const s of (a._polyParams as LocalSym[] | undefined) ?? []) if (s.declTok) this.add(s.declTok, s, true);
         break;
       case "InterfaceType":
         for (const m of (a._methods as IfaceMethod[] | undefined) ?? []) {
@@ -186,9 +210,13 @@ export class Index {
       case "ImplBlock": {
         const iface = A(n.iface)._sym ?? A(n.iface)._pkgMember;
         if (iface?.kind !== "global") break;
+        let methods: IfaceMethod[] = [];
+        try {
+          methods = this.a.analyzer.allMethods(iface);
+        } catch {}
         for (const b of n.bindings) {
-          const m = iface.pkg.scope.syms.get(b.name);
-          if (m) this.add(n.toks[b.tok], m, false);
+          const m = methods.find((x) => x.name === b.name);
+          if (m) this.add(n.toks[b.tok], m.sym, false);
         }
         break;
       }
@@ -226,10 +254,11 @@ export class Index {
     if (sym && (!only || only(sym))) this.add(t, sym, false);
   }
 
-  private declare(t: Token, scope: Scope, init: Partial<LocalSym>): void {
+  private declare(t: Token, scope: Scope, init: Partial<LocalSym>): LocalSym {
     const sym: LocalSym = { kind: "local", name: t.text, ctx: scope.ctx ?? { closure: false }, isConst: false, scope, boxed: false, declKind: "decl", declTok: t, ...init };
     if (sym.name !== "_") scope.syms.set(sym.name, sym);
     this.add(t, sym, true);
+    return sym;
   }
 
   private typeOf(e: Expr, scope: Scope): Ty | undefined {
@@ -317,7 +346,7 @@ export class Index {
           this.lexical(n.body, inner);
         } else {
           if (n.tag) this.lexical(n.tag, inner);
-          if (n.typeSwitchVar) this.declare(n.toks[n.typeSwitchVar.tok], inner, { declKind: "other" });
+          if (n.typeSwitchVar) switchVars.add(this.declare(n.toks[n.typeSwitchVar.tok], inner, { declKind: "other" }));
           for (const c of n.cases) {
             c.exprs.forEach((e) => this.lexical(e, inner));
             const caseScope = new Scope(inner);
@@ -330,7 +359,7 @@ export class Index {
         this.lexical(n.stmt, scope);
         if (!n.body) return;
         const inner = new Scope(scope);
-        if (n.errName) this.declare(n.toks[n.errTok], inner, { declKind: "other" });
+        if (n.errName) catchErrs.add(this.declare(n.toks[n.errTok], inner, { declKind: "other" }));
         this.lexical(n.body, inner);
         return;
       }
@@ -359,7 +388,8 @@ export class Index {
         return this.lexical(node, scope);
       }
     }
-    const declared = new Set<string>();
+    const declared = new Map<string, LocalSym>();
+    const quoteScope = new Scope(scope);
     let splice = 0;
     for (let i = 0; i < toks.length; i++) {
       const t = toks[i];
@@ -371,9 +401,21 @@ export class Index {
         this.resolve(t, scope);
         continue;
       }
+      const local = declared.get(t.text);
+      if (local) {
+        this.add(t, local, false);
+        continue;
+      }
       const next = toks[i + 1]?.text;
-      if (next === ":=" || next === ":" || next === "::") declared.add(t.text);
-      if (!declared.has(t.text)) this.resolve(t, scope, (s) => s.kind === "global" || s.kind === "pkg");
+      const loopVar = (prev?.text === "for" || (prev?.text === "," && toks[i - 3]?.text === "for")) && (next === "in" || next === ",");
+      if (((next === ":=" || next === ":" || next === "::") && prev?.text !== "case") || loopVar) {
+        const sym: LocalSym = { kind: "local", name: t.text, ctx: { closure: false }, isConst: next === "::", scope: quoteScope, boxed: false, declKind: loopVar ? "range" : "decl", declTok: t };
+        declared.set(t.text, sym);
+        quoteLocals.add(sym);
+        this.add(t, sym, true);
+        continue;
+      }
+      this.resolve(t, scope, (s) => s.kind === "global" || s.kind === "pkg");
     }
   }
 
@@ -552,6 +594,23 @@ function qualified(sym: GlobalSym): string {
   return `${sym.pkg.name}.${sym.name}`;
 }
 
+function localKind(sym: LocalSym): string {
+  if (switchVars.has(sym)) return "type switch variable";
+  if (catchErrs.has(sym)) return "error caught by `catch` (the call's last result)";
+  if (sym.declKind === "param") return sym.isConst && !sym.ty ? "polymorphic parameter (set from the arguments at each use)" : "parameter";
+  if (sym.declKind === "range") return "loop variable";
+  return sym.isConst ? "constant" : "local variable";
+}
+
+function localDecl(a: Analysis, sym: LocalSym): string {
+  if (sym.ty) return `${sym.name}: ${typeName(a, sym.ty, true)}`;
+  if (sym.isConst && sym.value) {
+    const text = nodeText(sym.value);
+    if (text.length <= 80) return `${sym.name} :: ${text}`;
+  }
+  return sym.declKind === "param" && sym.isConst ? `$${sym.name}` : sym.name;
+}
+
 export function describe(a: Analysis, sym: Sym): string {
   const code = (s: string) => "```odin\n" + s + "\n```";
   switch (sym.kind) {
@@ -560,7 +619,15 @@ export function describe(a: Analysis, sym: Sym): string {
       if (sym.odinName !== sym.name) notes.push(`Odin name: \`${sym.odinName}\` (package \`${sym.pkg.name}\` is merged into \`${sym.pkg.unit.name}\` because of an import cycle)`);
       if (sym.isPrivate) notes.push(`private to package \`${sym.pkg.name}\``);
       const v = sym.decl.values[sym.index];
-      const impls = (iface: GlobalSym) => a.analyzer.impls.filter((i) => i.iface === iface);
+      const extendsOrIs = (x: GlobalSym, iface: GlobalSym) => {
+        try {
+          return x === iface || a.analyzer.ancestorsOf(x).includes(iface);
+        } catch {
+          return x === iface;
+        }
+      };
+      // implied impls repeat an impl of an extending interface
+      const impls = (iface: GlobalSym) => a.analyzer.impls.filter((i) => !i.implied && extendsOrIs(i.iface, iface));
       const target = (i: { node: { target: Expr } }) => `\`${sliceText(i.node.target.toks, i.node.target.start, i.node.target.end)}\``;
       if (v?.k === "InterfaceType") {
         const found = impls(sym).map(target);
@@ -574,14 +641,16 @@ export function describe(a: Analysis, sym: Sym): string {
       return code(declSnippet(sym)) + "\n\n" + notes.join(" · ");
     }
     case "local": {
-      const what = sym.declKind === "param" ? "parameter" : sym.declKind === "range" ? "loop variable" : sym.isConst ? "constant" : "local variable";
-      const notes = [`*${what}*`];
+      const notes = [`*${localKind(sym)}*`];
+      if (quoteLocals.has(sym)) notes.push("declared in quoted code: each expansion renames it, so it never clashes with the caller's names");
+      if (switchVars.has(sym)) notes.push("in each `case`, it has that case's type");
       if (sym.boxed) notes.push("captured by reference, so it lives on the heap");
-      return code(`${sym.name}: ${typeName(a, sym.ty, true)}`) + "\n\n" + notes.join(" · ");
+      if (!sym.ty && !switchVars.has(sym) && !sym.isConst) notes.push("type not known to vidar");
+      return code(localDecl(a, sym)) + "\n\n" + notes.join(" · ");
     }
     case "capture": {
       const root = canonical(sym) as LocalSym;
-      return code(`${sym.name}: ${typeName(a, root.ty, true)}`) + `\n\n*captured ${sym.byRef ? "by reference" : "by value (a copy made when the closure was created)"}*`;
+      return code(localDecl(a, { ...root, name: sym.name })) + `\n\n*captured ${sym.byRef ? "by reference" : "by value (a copy made when the closure was created)"}*`;
     }
     case "pkg": {
       const head = code(`import ${sym.stmt.alias ? sym.stmt.alias + " " : ""}"${sym.path}"`);
@@ -596,18 +665,34 @@ export function describe(a: Analysis, sym: Sym): string {
 export interface HoverResult {
   markdown: string;
   range: Range;
-  /** vidar could not infer the symbol's type */
-  untyped?: boolean;
+  /** a generic answer: ols (which sees the generated Odin) may know more, so ask it first */
+  weak?: boolean;
 }
 
 export function hover(a: Analysis, index: Index, file: string, p: Position): HoverResult | undefined {
   const ref = index.refAt(file, p);
   if (ref) {
+    const caseTy = switchVars.has(ref.sym) ? caseType(a, file, p) : undefined;
+    if (caseTy) return { markdown: "```odin\n" + `${ref.sym.name}: ${nodeText(caseTy)}` + "\n```\n\n*type switch variable* · has this type in this `case`", range: ref.range };
     const local = ref.sym.kind === "local" || ref.sym.kind === "capture";
-    return { markdown: describe(a, ref.sym), range: ref.range, untyped: local && !symType(a, canonical(ref.sym)) };
+    return { markdown: describe(a, ref.sym), range: ref.range, weak: local && !symType(a, canonical(ref.sym)) };
   }
   const member = memberAt(a, file, p);
   if (member) return { markdown: member.markdown, range: member.range };
+  const t = tokenHover(a, file, p);
+  return t && { markdown: t.markdown, range: t.range, weak: t.weak };
+}
+
+/** Inside `case T:` of a type switch: `T` (only when the case lists one type). */
+function caseType(a: Analysis, file: string, p: Position): Expr | undefined {
+  const at = fileOf(a, file)?.file.toks.find((t) => t.pos.file === file && contains(tokRange(t), p));
+  const f = fileOf(a, file)?.file;
+  if (!at || !f) return undefined;
+  const path = pathTo(f.stmts, at);
+  for (let i = path.length - 1; i > 0; i--) {
+    const c = path[i];
+    if (c.k === "Case" && path[i - 1].k === "Switch" && (path[i - 1] as Extract<Stmt, { k: "Switch" }>).typeSwitchVar) return c.exprs.length === 1 ? c.exprs[0] : undefined;
+  }
   return undefined;
 }
 
@@ -662,6 +747,256 @@ function memberAt(a: Analysis, file: string, p: Position): { markdown: string; r
   return undefined;
 }
 
+// ---- hover for names the reference index does not cover ----
+
+interface TokenHover {
+  markdown: string;
+  range: Range;
+  weak?: boolean;
+  target?: Location;
+}
+
+const md = (sig: string | undefined, text: string) => (sig ? "```odin\n" + sig + "\n```\n\n" : "") + text;
+
+/** The token at `p` in `file`, with its index in the file's tokens. */
+function tokenAt(a: Analysis, file: string, p: Position): { f: { toks: Token[]; stmts: Stmt[] }; i: number } | undefined {
+  const f = fileOf(a, file)?.file;
+  if (!f) return undefined;
+  const i = f.toks.findIndex((t) => t.pos.file === file && (t.kind === "ident" || t.kind === "kw") && contains(tokRange(t), p));
+  return i < 0 ? undefined : { f, i };
+}
+
+/** Nodes whose tokens include `tok`, outermost first; descends into parsed macro arguments too. */
+function pathTo(stmts: Node[], tok: Token): Node[] {
+  const path: Node[] = [];
+  const has = (n: Node) => {
+    const i = n.toks.indexOf(tok, n.start);
+    return i >= 0 && i < n.end;
+  };
+  let level: Node[] = stmts;
+  for (;;) {
+    const hit = level.find(has);
+    if (!hit) return path;
+    path.push(hit);
+    level = [...children(hit), ...((A(hit)._argNodes as Node[] | undefined) ?? [])];
+  }
+}
+
+function scopeOf(a: Analysis, path: Node[], file: string, p: Position): Scope {
+  for (let i = path.length - 1; i >= 0; i--) {
+    const s: Scope | undefined = A(path[i])._scope;
+    if (s) return s;
+  }
+  return scopeAt(a, file, p).scope;
+}
+
+/** The name a type is declared under: `Name :: struct { ... }`. */
+function declaredName(path: Node[], node: Node): string | undefined {
+  for (let i = path.length - 1; i >= 0; i--) {
+    const d = path[i];
+    if (d.k !== "ValueDecl") continue;
+    const at = d.values.indexOf(node as Expr);
+    return at >= 0 ? d.names[at]?.name : undefined;
+  }
+  return undefined;
+}
+
+function fieldDeclHover(def: Extract<Expr, { k: "StructType" }>, name: string, owner: string | undefined): Omit<TokenHover, "range"> | undefined {
+  for (const f of def.fields) {
+    const n = f.names.find((x) => x.name === name);
+    if (!n) continue;
+    const t = def.toks[n.tok];
+    const type = f.type ? nodeText(f.type) : f.value ? `type of ${nodeText(f.value)}` : "?";
+    return { markdown: md(`${name}: ${type}`, owner ? `*field of struct* \`${owner}\`` : "*field of an anonymous struct*"), target: { file: t.pos.file, range: tokRange(t) } };
+  }
+  return undefined;
+}
+
+function enumMemberHover(def: Extract<Expr, { k: "EnumType" }>, index: number, owner: string | undefined): Omit<TokenHover, "range"> {
+  const m = def.members[index];
+  const value = m.value ? nodeText(m.value) : def.members.slice(0, index + 1).every((x) => !x.value) ? String(index) : undefined;
+  const t = def.toks[m.tok];
+  const name = owner ? `${owner}.${m.name}` : `.${m.name}`;
+  return { markdown: md(value !== undefined ? `${name} = ${value}` : name, owner ? `*enum member of* \`${owner}\`` : "*enum member*"), target: { file: t.pos.file, range: tokRange(t) } };
+}
+
+/** Enum declarations in the program that have a member called `name`. */
+function enumsWith(a: Analysis, name: string): { sym: GlobalSym; def: Extract<Expr, { k: "EnumType" }>; index: number }[] {
+  const out: { sym: GlobalSym; def: Extract<Expr, { k: "EnumType" }>; index: number }[] = [];
+  for (const p of a.packages) {
+    for (const sym of p.scope.syms.values()) {
+      if (sym.kind !== "global") continue;
+      const v = sym.decl.values[sym.index];
+      const index = v?.k === "EnumType" ? v.members.findIndex((m) => m.name === name) : -1;
+      if (index >= 0) out.push({ sym, def: v as Extract<Expr, { k: "EnumType" }>, index });
+    }
+  }
+  return out;
+}
+
+/** The type a `{ ... }` literal without a type in front gets from where it is written. */
+function literalType(a: Analysis, path: Node[], lit: Expr, scope: Scope): Ty | undefined {
+  if (lit.k === "CompoundLit" && lit.type) return { t: "node", node: lit.type, scope };
+  const at = path.indexOf(lit);
+  const parent = path[at - 1];
+  if (!parent) return undefined;
+  if (parent.k === "ValueDecl" && parent.type) return { t: "node", node: parent.type, scope };
+  if (parent.k === "FieldValue") {
+    const outer = path[at - 2];
+    return outer && a.analyzer.fieldOf(literalType(a, path, outer as Expr, scope), parent.name);
+  }
+  if (parent.k === "CompoundLit") return a.analyzer.elemOf(literalType(a, path, parent, scope) ?? { t: "untyped", kind: "int" });
+  if (parent.k === "Return") {
+    const proc = [...path.slice(0, at)].reverse().find((n) => n.k === "ProcLit") as Extract<Expr, { k: "ProcLit" }> | undefined;
+    const i = parent.results.indexOf(lit);
+    return proc && i >= 0 ? a.analyzer.resultTy({ t: "sig", closure: false, sig: proc.sig, scope }, i) : undefined;
+  }
+  if (parent.k === "Assign") {
+    const i = parent.rhs.indexOf(lit);
+    return i >= 0 && parent.lhs[i] ? a.analyzer.typeOf(parent.lhs[i], scope) : undefined;
+  }
+  return undefined;
+}
+
+const own = <T>(table: Record<string, T>, key: string): T | undefined => (Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined);
+
+function builtinHover(name: string): Omit<TokenHover, "range"> | undefined {
+  const type = own(BUILTIN_TYPE_DOCS, name);
+  if (type) return { markdown: md(name, `*builtin type* · ${type}`) };
+  const proc = own(BUILTIN_PROC_DOCS, name);
+  if (proc) return { markdown: md(proc.sig, `*builtin proc* · ${proc.text}`), weak: true };
+  const comptime = own(COMPTIME_BUILTIN_DOCS, name);
+  if (comptime) return { markdown: md(comptime.sig, `*compile-time builtin* · ${comptime.text}`) };
+  const kind = own(MACRO_KIND_DOCS, name);
+  if (kind) return { markdown: md(name, `*macro kind* · ${kind}`) };
+  const constant = own(ODIN_CONSTANT_DOCS, name);
+  if (constant) return { markdown: md(constant.sig, `*builtin constant* · ${constant.text}`) };
+  if (name === "_") return { markdown: md("_", "*blank identifier* · discards the value assigned to it") };
+  return undefined;
+}
+
+/**
+ * Hover for any identifier or keyword the reference index has nothing for: keywords and builtins,
+ * declarations of fields and enum members, field names in literals, and members of Odin packages.
+ */
+function tokenHover(a: Analysis, file: string, p: Position): TokenHover | undefined {
+  const at = tokenAt(a, file, p);
+  if (!at) return undefined;
+  const { f, i } = at;
+  const tok = f.toks[i];
+  const range = tokRange(tok);
+  const prev = f.toks[i - 1];
+  const path = pathTo(f.stmts, tok);
+  const node = path[path.length - 1];
+  const done = (h: Omit<TokenHover, "range"> | undefined) => h && { ...h, range };
+
+  if (node?.k === "Package" && node.nameTok === i) {
+    const pkg = a.packages.find((x) => x.files.some((y) => y.toks === f.toks));
+    const files = pkg?.files.length ?? 1;
+    return done({ markdown: md(`package ${tok.text}`, `*package* · ${files} file${files === 1 ? "" : "s"}${pkg?.unit.merged ? ` · in an import cycle, merged into \`${pkg.unit.name}\`` : ""}`) });
+  }
+
+  // `@(name)` / `@(name = value)`
+  for (let j = i - 1; j >= 1 && f.toks[j].text !== ")"; j--) {
+    if (f.toks[j].text === "(" && f.toks[j - 1].text === "@") {
+      const doc = own(ATTRIBUTE_DOCS, tok.text);
+      return done({ markdown: md(`@(${tok.text})`, `*attribute*${doc ? ` · ${doc}` : ""}`) });
+    }
+  }
+
+  if (prev?.text !== ".") {
+    const doc = own(KEYWORD_DOCS, tok.text);
+    if (doc && (tok.kind === "kw" || !node || node.k !== "FieldValue" || node.toks[node.start] !== tok)) {
+      const sig = tok.text === "proc" && f.toks[i + 1]?.text === "!" ? "proc!" : doc.sig;
+      return done({ markdown: md(sig, `*keyword* · ${doc.text}`) });
+    }
+  }
+
+  for (let j = path.length - 1; j >= 0; j--) {
+    const n = path[j];
+    if (n.k === "StructType") {
+      const field = n.fields.find((x) => x.names.some((y) => y.tok === i && n.toks === f.toks));
+      if (field) return done(fieldDeclHover(n, tok.text, declaredName(path, n)));
+    }
+    if (n.k === "EnumType" && n.toks === f.toks) {
+      const index = n.members.findIndex((m) => m.tok === i);
+      if (index >= 0) return done(enumMemberHover(n, index, declaredName(path, n)));
+    }
+    if ((n.k === "ProcType" || n.k === "ClosureType" || n.k === "ProcLit") && n.toks === f.toks) {
+      for (const [list, what] of [[n.sig.params, "parameter"], [n.sig.results, "named result"]] as const) {
+        const param = list.find((x) => x.names.some((y) => y.tok === i));
+        if (!param) continue;
+        const kind = n.k === "ClosureType" ? "closure type" : n.k === "ProcType" ? "proc type" : "comptime proc";
+        return done({ markdown: md(`${tok.text}: ${param.type ? nodeText(param.type) : "?"}`, `*${what} of a ${kind}*`) });
+      }
+    }
+  }
+
+  const scope = scopeOf(a, path, file, p);
+
+  if (node?.k === "ImplicitSelector") {
+    const found = enumsWith(a, node.name);
+    if (found.length === 1) return done(enumMemberHover(found[0].def, found[0].index, found[0].sym.name));
+    if (found.length > 1) return done({ markdown: md(`.${node.name}`, `*enum member* of ${found.map((x) => `\`${x.sym.name}\``).join(", ")} (the type comes from where it is used)`) });
+    return done({ markdown: md(`.${node.name}`, "*enum member* · the enum type comes from where it is used"), weak: true });
+  }
+
+  if (node?.k === "FieldValue" && node.toks[node.start] === tok) {
+    const parent = path[path.length - 2];
+    if (parent?.k === "Call") return done({ markdown: md(`${node.name} = ${nodeText(node.value)}`, "*named argument*"), weak: true });
+    const ty = parent && literalType(a, path, parent as Expr, scope);
+    const def = shape(a, ty);
+    if (def?.k === "StructType") {
+      const h = fieldDeclHover(def, node.name, ty?.t === "node" ? nodeText(ty.node) : undefined);
+      if (h) return done(h);
+    }
+    return done({ markdown: md(node.name, "*field name*"), weak: true });
+  }
+
+  if ((node?.k === "Selector" && node.toks[node.end - 1] === tok) || (node?.k === "ArrowCall" && prev?.text === "->")) {
+    const x = node.x;
+    if (x.k === "Ident" && x.name === "context" && !A(x)._sym && node.k === "Selector") {
+      const doc = own(CONTEXT_FIELD_DOCS, tok.text);
+      return done({ markdown: md(doc?.sig ?? tok.text, `*field of* \`context\`${doc ? ` · ${doc.text}` : ""}`), weak: !doc });
+    }
+    const head: Sym | undefined = x.k === "Ident" ? A(x)._sym ?? a.analyzer.lookup(x.name, scope, null) : undefined;
+    if (head?.kind === "pkg") return done({ markdown: md(`${head.name}.${tok.text}`, `*member of Odin package* \`${head.path}\``), weak: true });
+    let recv: Ty | undefined;
+    try {
+      recv = a.analyzer.typeOf(x, scope);
+    } catch {}
+    const xSym: Sym | undefined = x.k === "Ident" ? A(x)._sym : undefined;
+    const caseTy = xSym && switchVars.has(xSym) ? caseType(a, file, tokRange(x.toks[x.start]).start) : undefined;
+    if (caseTy) recv = { t: "node", node: caseTy, scope };
+    const def = shape(a, recv);
+    const anon = def && (A(def)._anonFields as AnonFieldType[] | undefined)?.find((fl) => fl.name === tok.text);
+    if (anon) return done(anonFieldHover(anon));
+    if (def?.k === "StructType" && node.k === "Selector") {
+      const h = fieldDeclHover(def, tok.text, typeName(a, recv).replace(/^\^/, ""));
+      if (h) return done(h);
+    }
+    const what = node.k === "ArrowCall" ? "method" : "field";
+    if (def?.k === "InterfaceType" && node.k === "Selector") {
+      return done({ markdown: md(`${nodeText(x)}.${tok.text}`, `*field of an interface value* · interface values are a data pointer (\`data\`) and a method table (\`__vtable\`)`) });
+    }
+    return done({ markdown: md(recv ? `${tok.text} (${what} of ${typeName(a, recv)})` : tok.text, `*${what}*`), weak: true });
+  }
+
+  // `pkg.name` in tokens that were never parsed (quoted code)
+  const owner = prev?.text === "." && f.toks[i - 2]?.kind === "ident" ? a.analyzer.lookup(f.toks[i - 2].text, scope, null) : undefined;
+  if (owner?.kind === "pkg") {
+    const member = owner.target?.scope.syms.get(tok.text);
+    if (member) return done({ markdown: describe(a, member) });
+    return done({ markdown: md(`${owner.name}.${tok.text}`, `*member of Odin package* \`${owner.path}\``), weak: true });
+  }
+
+  const builtin = builtinHover(tok.text);
+  if (builtin) return done(builtin);
+
+  if (tok.kind === "ident") return done({ markdown: md(tok.text, "*identifier* · not declared in vidar code, so Odin resolves it"), weak: true });
+  return undefined;
+}
+
 // ---- navigation ----
 
 export function definition(a: Analysis, index: Index, file: string, p: Position): Location | undefined {
@@ -670,7 +1005,7 @@ export function definition(a: Analysis, index: Index, file: string, p: Position)
     const t = declToken(ref.sym);
     return t && { file: t.pos.file, range: tokRange(t) };
   }
-  return memberAt(a, file, p)?.target;
+  return memberAt(a, file, p)?.target ?? tokenHover(a, file, p)?.target;
 }
 
 export function references(index: Index, file: string, p: Position, includeDecl = true): Location[] {

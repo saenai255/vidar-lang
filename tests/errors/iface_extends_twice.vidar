@@ -1,0 +1,6 @@
+// error: 'A' is listed twice in interface 'B'
+package main
+A :: interface { a }
+a :: proc(x: A) ---
+B :: interface { using A, using A }
+main :: proc() {}

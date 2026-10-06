@@ -1,0 +1,191 @@
+/** Hover text for names vidar knows without a declaration: keywords, builtins, and compile-time helpers. */
+
+export interface Doc {
+  /** shown as an Odin code block */
+  sig?: string;
+  text: string;
+}
+
+const kw = (text: string, sig?: string): Doc => ({ text, sig });
+
+export const KEYWORD_DOCS: Record<string, Doc> = {
+  package: kw("Names the package this file belongs to. Every file in a directory must use the same name."),
+  import: kw('Imports a package: `import "core:fmt"`, `import alias "path"`. Vidar packages may import each other in cycles.'),
+  foreign: kw("Declares a block of procedures from a foreign (C) library."),
+  proc: kw("A procedure: `name :: proc(params) -> results { ... }`. `proc!` declares a comptime proc (a macro); `proc[captures]` a closure literal."),
+  struct: kw("A struct type: `Name :: struct { field: Type, ... }`."),
+  union: kw("A tagged union type: `Name :: union { A, B }`. Inspect it with a type switch: `switch v in u { ... }`."),
+  enum: kw("An enumeration: `Name :: enum { A, B }`. Members are written `.A` where the type is known."),
+  bit_set: kw("A set of enum members or a range, stored as bits: `bit_set[Enum]`."),
+  bit_field: kw("A struct whose fields are packed into bits of a backing integer."),
+  map: kw("A hash map type: `map[Key]Value`. Create with `make(map[K]V)`, release with `delete`."),
+  dynamic: kw("A growable array: `[dynamic]T`. Grow with `append`, release with `delete`."),
+  matrix: kw("A matrix type: `matrix[rows, cols]T`."),
+  distinct: kw("Makes a new type with the same layout as another but not interchangeable with it: `Id :: distinct int`."),
+  using: kw("Brings the fields of a struct (or the members of a package) into scope. In an interface, `using Parent` extends `Parent`."),
+  when: kw("Compile-time `if`: only the taken branch is type checked and compiled."),
+  where: kw("Constrains the parameters of a polymorphic procedure or struct."),
+  if: kw("Conditional: `if cond { ... } else { ... }`; `if x := f(); x > 0 { ... }` with an init statement."),
+  else: kw("The branch taken when the `if` condition is false; `a if cond else b` in a ternary."),
+  for: kw("Loop: `for cond { }`, `for i := 0; i < n; i += 1 { }`, `for x in xs { }`, `for i in 0..<n { }`."),
+  in: kw("Iterates in a `for` loop, binds the value in a type switch, or tests set membership: `x in set`."),
+  not_in: kw("Tests that a value is not in a `bit_set` or map."),
+  do: kw("Introduces a one-statement body on the same line: `if x do return`."),
+  switch: kw("Multi-way branch: `switch x { case 1: ... case: ... }`; `switch v in u { case T: ... }` for unions and `any`."),
+  case: kw("A branch of a `switch`; `case:` alone is the default branch."),
+  break: kw("Leaves the innermost loop or switch (or the labeled one)."),
+  continue: kw("Jumps to the next iteration of the innermost loop."),
+  fallthrough: kw("Continues into the next `case` of a switch."),
+  defer: kw("Runs a statement when the enclosing scope exits."),
+  return: kw("Returns from the enclosing procedure. A bare `return` returns the named results."),
+  cast: kw("Converts a value: `cast(T)x` (same as `T(x)`)."),
+  transmute: kw("Reinterprets the bits of a value as another type of the same size: `transmute(T)x`."),
+  auto_cast: kw("Converts to whatever type the context expects."),
+  or_else: kw("`x := f() or_else default`: the default when the last result of `f` is false, nil or an error."),
+  or_return: kw("Returns early when the last result is a failure. Vidar adds `f() or_return .Err` to return a different error."),
+  or_break: kw("Breaks out of the enclosing loop when the last result is a failure."),
+  or_continue: kw("Continues the enclosing loop when the last result is a failure."),
+  asm: kw("Inline assembly."),
+  typeid: kw("The type of a type: a runtime id for any type.", "typeid"),
+  context: kw("The implicit context passed to every Odin procedure: allocators, logger, user data. Assign to its fields to change them for the rest of the scope.", "context: runtime.Context"),
+  nil: kw("The zero value of pointers, maps, slices, dynamic arrays, procs, closures, interfaces, unions and `any`."),
+  true: kw("Boolean true.", "true: untyped bool"),
+  false: kw("Boolean false.", "false: untyped bool"),
+  // vidar
+  closure: kw("A closure type: `closure(params) -> results`. Any proc literal with a capture list `proc[a, &b]() { ... }` has one; plain procs convert to it."),
+  quote: kw("Inside a comptime proc, builds code: `quote(expr)` gives an `Expr`, `quote { stmts }` a `Stmt`. `$name` and `$(expr)` splice compile-time values in."),
+  take: kw("Gives the value of a `do! { ... }` or `comptime! { ... }` block: `take x` (or `take a, b`)."),
+  interface: kw("An interface: `Name :: interface { method, ... }` lists procs whose first parameter is `Name`. `interface { using Parent, ... }` extends another interface."),
+  impl: kw("Binds procs to an interface's methods for a type: `impl Iface for Type { method = proc_name }`."),
+  catch: kw("Handles the error result of a statement: `x := f() catch err { ... }` (the block must leave the scope) or `f() catch unreachable`."),
+  errdefer: kw("A `defer` that only runs when the procedure returns a failure (a non-nil last result)."),
+  unreachable: kw("Marks code that cannot run. `f() catch unreachable` panics if `f` fails."),
+};
+
+export const BUILTIN_TYPE_DOCS: Record<string, string> = {
+  int: "Signed integer of pointer size (64-bit on 64-bit targets).",
+  uint: "Unsigned integer of pointer size.",
+  i8: "8-bit signed integer.", i16: "16-bit signed integer.", i32: "32-bit signed integer.", i64: "64-bit signed integer.", i128: "128-bit signed integer.",
+  u8: "8-bit unsigned integer.", u16: "16-bit unsigned integer.", u32: "32-bit unsigned integer.", u64: "64-bit unsigned integer.", u128: "128-bit unsigned integer.",
+  uintptr: "Unsigned integer large enough to hold a pointer.",
+  byte: "Alias of `u8`.",
+  f16: "16-bit float.", f32: "32-bit float.", f64: "64-bit float.",
+  bool: "Boolean (1 byte).", b8: "8-bit boolean.", b16: "16-bit boolean.", b32: "32-bit boolean.", b64: "64-bit boolean.",
+  string: "UTF-8 string: a pointer and a byte length. Not null-terminated.",
+  cstring: "Null-terminated C string.",
+  rune: "A Unicode code point (32-bit).",
+  rawptr: "Untyped pointer (`void*`).",
+  any: "Any value, as a pointer to its data and its `typeid`.",
+  complex64: "Complex number of two `f32`.", complex128: "Complex number of two `f64`.",
+  quaternion256: "Quaternion of four `f64`.",
+};
+
+const b = (sig: string, text: string): Doc => ({ sig, text });
+
+export const BUILTIN_PROC_DOCS: Record<string, Doc> = {
+  len: b("len :: proc(v: $T) -> int", "Number of elements of an array, slice, dynamic array, map or string (bytes for strings)."),
+  cap: b("cap :: proc(v: $T) -> int", "Capacity of a dynamic array or map."),
+  size_of: b("size_of :: proc($T: typeid) -> int", "Size of a type in bytes."),
+  align_of: b("align_of :: proc($T: typeid) -> int", "Alignment of a type in bytes."),
+  offset_of: b("offset_of :: proc($T: typeid, field) -> uintptr", "Byte offset of a struct field."),
+  type_of: b("type_of :: proc(x: expr) -> type", "The type of an expression."),
+  type_info_of: b("type_info_of :: proc($T: typeid) -> ^runtime.Type_Info", "Runtime type information."),
+  typeid_of: b("typeid_of :: proc($T: typeid) -> typeid", "The `typeid` of a type."),
+  min: b("min :: proc(values: ..T) -> T", "The smallest of its arguments."),
+  max: b("max :: proc(values: ..T) -> T", "The largest of its arguments."),
+  abs: b("abs :: proc(v: T) -> T", "Absolute value."),
+  clamp: b("clamp :: proc(v, lo, hi: T) -> T", "`v` limited to `lo..=hi`."),
+  swizzle: b("swizzle :: proc(v: [N]T, indices: ..int) -> [len(indices)]T", "Rearranges the elements of an array."),
+  append: b("append :: proc(array: ^[dynamic]$E, args: ..E) -> int", "Appends to a dynamic array, growing it as needed."),
+  inject_at: b("inject_at :: proc(array: ^[dynamic]$E, index: int, arg: E)", "Inserts into a dynamic array."),
+  assign_at: b("assign_at :: proc(array: ^[dynamic]$E, index: int, arg: E)", "Sets an element, growing the array if needed."),
+  pop: b("pop :: proc(array: ^[dynamic]$E) -> E", "Removes and returns the last element."),
+  pop_front: b("pop_front :: proc(array: ^[dynamic]$E) -> E", "Removes and returns the first element."),
+  ordered_remove: b("ordered_remove :: proc(array: ^[dynamic]$E, index: int)", "Removes an element, keeping the order."),
+  unordered_remove: b("unordered_remove :: proc(array: ^[dynamic]$E, index: int)", "Removes an element by swapping the last one in."),
+  remove_range: b("remove_range :: proc(array: ^[dynamic]$E, lo, hi: int)", "Removes a range of elements."),
+  clear: b("clear :: proc(v: ^$T)", "Empties a dynamic array or map, keeping its memory."),
+  reserve: b("reserve :: proc(v: ^$T, capacity: int)", "Grows the capacity of a dynamic array or map."),
+  resize: b("resize :: proc(array: ^[dynamic]$E, length: int)", "Sets the length of a dynamic array."),
+  shrink: b("shrink :: proc(v: ^$T)", "Frees unused capacity."),
+  copy: b("copy :: proc(dst, src: []$E) -> int", "Copies elements between slices; returns how many."),
+  make: b("make :: proc($T: typeid, args: ..int, allocator := context.allocator) -> T", "Allocates a slice, dynamic array or map."),
+  new: b("new :: proc($T: typeid, allocator := context.allocator) -> ^T", "Allocates a zeroed value and returns a pointer to it."),
+  new_clone: b("new_clone :: proc(value: $T, allocator := context.allocator) -> ^T", "Allocates a copy of a value and returns a pointer to it."),
+  free: b("free :: proc(ptr: rawptr, allocator := context.allocator)", "Frees memory allocated with `new`."),
+  free_all: b("free_all :: proc(allocator := context.allocator)", "Frees everything an allocator owns."),
+  delete: b("delete :: proc(v: $T, allocator := context.allocator)", "Frees a string, slice, dynamic array or map."),
+  delete_key: b("delete_key :: proc(m: ^map[$K]$V, key: K) -> (K, V)", "Removes a key from a map."),
+  raw_data: b("raw_data :: proc(v: $T) -> [^]E", "A pointer to the first element of a slice, array or string."),
+  assert: b("assert :: proc(cond: bool, message := \"\")", "Panics when the condition is false (unless asserts are disabled)."),
+  panic: b("panic :: proc(message: string) -> !", "Stops the program with a message."),
+  unimplemented: b("unimplemented :: proc(message := \"\") -> !", "Panics: this code is not written yet."),
+  card: b("card :: proc(s: bit_set) -> int", "Number of members in a bit_set."),
+  real: b("real :: proc(z: complex) -> float", "Real part of a complex number."),
+  imag: b("imag :: proc(z: complex) -> float", "Imaginary part of a complex number."),
+  conj: b("conj :: proc(z: complex) -> complex", "Complex conjugate."),
+  expand_values: b("expand_values :: proc(s: struct or array) -> (..)", "Spreads a struct's fields or an array's elements as multiple values."),
+};
+
+/** Builtins only callable inside comptime procs and `comptime!` blocks. */
+export const COMPTIME_BUILTIN_DOCS: Record<string, Doc> = {
+  type_name: b("type_name :: proc!(T: Type) -> string", "The spelling of a type, at compile time."),
+  type_fields: b("type_fields :: proc!(T: Type) -> []string", "The field names of a struct type, at compile time."),
+  type_of_expr: b("type_of_expr :: proc!(e: Expr) -> Type", "The type of an expression argument, when vidar can infer it."),
+  stringify: b("stringify :: proc!(v: any) -> string", "The source text of a code value, or the display form of a constant."),
+  ident: b("ident :: proc!(name: string) -> Ident", "Makes an identifier from a string, to splice into quoted code: `$(ident(name))`."),
+  compile_error: b("compile_error :: proc!(args: ..any)", "Stops compilation with an error at the macro call site."),
+  call_site: b("call_site :: proc!() -> string", "`file:line` of the macro call being expanded."),
+  is_literal: b("is_literal :: proc!(e: Expr) -> bool", "Whether an expression argument is a literal."),
+  parse_expr: b("parse_expr :: proc!(text: string) -> Expr", "Parses a string as an expression."),
+  split_comparison: b("split_comparison :: proc!(e: Expr) -> (lhs: Expr, op: string, rhs: Expr)", "Splits a comparison into its operands."),
+  split_range: b("split_range :: proc!(e: Expr) -> (lo: Expr, op: string, hi: Expr)", "Splits a range expression into its bounds."),
+  once: b("once :: proc!(e: Expr) -> Expr", "Evaluates an expression argument once (hoisting it into a temporary) so it can be spliced several times."),
+  block_value: b("block_value :: proc!(T: Type, body: Stmt) -> Expr", "The value given by `take` in a block (what `do!` expands to)."),
+  comptime_value: b("comptime_value :: proc!(body: Stmt) -> Expr", "Runs a block at compile time and gives its `take` value (what `comptime!` expands to)."),
+};
+
+export const MACRO_KIND_DOCS: Record<string, string> = {
+  Expr: "Macro parameter or result kind: an expression. `Expr(T)` requires the expression to have type `T`.",
+  Stmt: "Macro parameter or result kind: one or more statements (a trailing `{ ... }` block argument).",
+  Type: "Macro parameter or result kind: a type.",
+  Ident: "Macro parameter kind: a bare identifier, e.g. a name the macro declares.",
+};
+
+export const ODIN_CONSTANT_DOCS: Record<string, Doc> = {
+  ODIN_OS: b("ODIN_OS: runtime.Odin_OS_Type", "The target operating system (`.Darwin`, `.Linux`, `.Windows`, ...)."),
+  ODIN_ARCH: b("ODIN_ARCH: runtime.Odin_Arch_Type", "The target architecture (`.amd64`, `.arm64`, ...)."),
+  ODIN_OS_STRING: b("ODIN_OS_STRING: string", "The target operating system, as a string."),
+  ODIN_ARCH_STRING: b("ODIN_ARCH_STRING: string", "The target architecture, as a string."),
+  ODIN_DEBUG: b("ODIN_DEBUG: bool", "Whether compiling with `-debug`."),
+  ODIN_DISABLE_ASSERT: b("ODIN_DISABLE_ASSERT: bool", "Whether `assert` is compiled out."),
+  ODIN_OPTIMIZATION_MODE: b("ODIN_OPTIMIZATION_MODE: runtime.Odin_Optimization_Mode", "The `-o:` optimization mode."),
+  ODIN_ENDIAN: b("ODIN_ENDIAN: runtime.Odin_Endian_Type", "The target byte order."),
+  ODIN_VERSION: b("ODIN_VERSION: string", "The compiler version."),
+  ODIN_ROOT: b("ODIN_ROOT: string", "The Odin installation directory."),
+  ODIN_BUILD_MODE: b("ODIN_BUILD_MODE: runtime.Odin_Build_Mode_Type", "The `-build-mode:` (exe, dll, obj, ...)."),
+};
+
+export const CONTEXT_FIELD_DOCS: Record<string, Doc> = {
+  allocator: b("allocator: runtime.Allocator", "The default allocator for `new`, `make`, `append`, ..."),
+  temp_allocator: b("temp_allocator: runtime.Allocator", "The temporary (arena) allocator, freed with `free_all(context.temp_allocator)`."),
+  logger: b("logger: runtime.Logger", "The logger used by `core:log`."),
+  random_generator: b("random_generator: runtime.Random_Generator", "The generator used by `core:math/rand`."),
+  assertion_failure_proc: b("assertion_failure_proc: runtime.Assertion_Failure_Proc", "Called when an assertion fails."),
+  user_ptr: b("user_ptr: rawptr", "Free for the program's own use."),
+  user_index: b("user_index: int", "Free for the program's own use."),
+};
+
+export const ATTRIBUTE_DOCS: Record<string, string> = {
+  private: 'Hides a declaration from other packages (`@(private="file")`: from other files).',
+  require_results: "Warns when a call's results are ignored.",
+  deprecated: "Warns on use, with a message.",
+  export: "Exports the symbol from the binary.",
+  link_name: "The symbol name used for linking.",
+  init: "Runs the procedure before `main`.",
+  fini: "Runs the procedure after `main` returns.",
+  cold: "Hints that the procedure is rarely called.",
+  disabled: "Removes calls to the procedure when the condition is true.",
+  thread_local: "Gives each thread its own copy of a global.",
+  static: "Makes a local variable live for the whole program.",
+};

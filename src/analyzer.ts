@@ -50,6 +50,8 @@ export interface ImplInfo {
   key: string;
   /** interface method name -> the proc bound to it */
   methods: Map<string, GlobalSym>;
+  /** set when implied by an impl of an interface extending this one */
+  implied?: boolean;
 }
 
 /** `name :: proc(x: I, ...) ---` listed in `I :: interface { name, ... }`. */
@@ -127,6 +129,7 @@ export class Analyzer {
       }
     }
     for (const p of this.pendingIfaces) this.guard(() => this.resolveIface(p.node, p.sym));
+    for (const p of this.pendingIfaces) this.guard(() => this.allMethods(p.sym));
     for (const b of this.bodiless) this.guard(() => this.checkBodiless(b.sym, b.lit));
     for (const p of this.pendingImpls) this.guard(() => this.resolveImpl(p.node, p.scope, p.pkg));
     for (const pkg of packages) {
@@ -320,7 +323,7 @@ export class Analyzer {
           this.stmt(s.body, inner);
         } else {
           if (s.tag) this.expr(s.tag, inner);
-          if (s.typeSwitchVar) this.declareLocal(s.typeSwitchVar.name, inner, { declKind: "other" });
+          if (s.typeSwitchVar) A(s)._switchSym = this.declareLocal(s.typeSwitchVar.name, inner, { declKind: "other", declTok: s.toks[s.typeSwitchVar.tok] });
           for (const c of s.cases) {
             c.exprs.forEach((e) => this.expr(e, inner));
             const caseScope = new Scope(inner);
@@ -447,7 +450,7 @@ export class Analyzer {
       case "StructType":
       case "UnionType": {
         const inner = new Scope(scope);
-        if (e.polyParams) this.params(e.polyParams, inner, false);
+        if (e.polyParams) A(e)._polyParams = this.params(e.polyParams, inner, false, e.toks);
         for (const c of children(e)) this.node(c, inner);
         return;
       }
@@ -472,7 +475,7 @@ export class Analyzer {
           throw new CompileError(`'${fnSym!.name}' is a comptime proc: call it as '${fnSym!.name}!(...)'`, posOf(e));
         if (ifaceVal?.k === "InterfaceType") {
           A(e)._ifaceConv = fnSym;
-          if (e.args.length === 1) this.requirePointer(e.args[0], fnSym);
+          if (e.args.length === 1 && !this.upcast(e.args[0], fnSym)) this.requirePointer(e.args[0], fnSym);
           return;
         }
         if (e.fn.k === "Ident" && e.fn.name === "append" && !fnSym && e.args.length > 1) {
@@ -486,7 +489,9 @@ export class Analyzer {
           if (e.args.some((a) => a.k === "FieldValue")) throw new CompileError("named arguments are not supported when calling closures", posOf(e));
           A(e)._closure = ft;
         }
-        if (ft?.t === "sig") this.convertArgs(e.args, ft, fnSym?.kind === "global" && this.ifaceMethods.has(fnSym) ? 1 : 0);
+        const method = fnSym?.kind === "global" ? this.ifaceMethods.get(fnSym) : undefined;
+        if (method && e.args[0]) this.upcast(e.args[0], method.iface);
+        if (ft?.t === "sig") this.convertArgs(e.args, ft, method ? 1 : 0);
         return;
       }
       case "CompoundLit": {
@@ -580,7 +585,7 @@ export class Analyzer {
 
   private declarePolys(e: Expr, scope: Scope): void {
     if (e.k === "Poly") {
-      if (!scope.syms.has(e.name)) this.declareLocal(e.name, scope, { isConst: true, declKind: "param" });
+      if (!scope.syms.has(e.name)) A(e)._polySym = this.declareLocal(e.name, scope, { isConst: true, declKind: "param", declTok: e.toks[e.start + 1] });
       return;
     }
     for (const c of children(e)) if (!isStmt(c) && c.k !== "Case") this.declarePolys(c as Expr, scope);
@@ -873,10 +878,69 @@ export class Analyzer {
     if (e.k === "Ident" && e.name === "nil") return;
     if (e.k === "Lit" && e.kind === "undef") return;
     if (e.k === "CompoundLit" && !e.type) return;
-    if (e.k === "Call" && A(e)._ifaceConv) return;
-    if (this.ifaceOf(this.typeOf(e, this.global)) === iface && e.k !== "Unary") return;
+    if (e.k === "Call" && A(e)._ifaceConv === iface) return;
+    if (this.upcast(e, iface)) return;
+    const from = e.k === "Call" && A(e)._ifaceConv ? A(e)._ifaceConv : this.ifaceOf(this.typeOf(e, this.global));
+    if (from === iface && e.k !== "Unary") return;
+    if (from) throw new CompileError(`'${from.name}' does not extend '${iface.name}'`, posOf(e));
     this.requirePointer(e, iface);
     A(e)._wrapIface = iface;
+  }
+
+  /** Marks `e` for conversion to `iface` when it holds an interface extending it. */
+  private upcast(e: Expr, iface: GlobalSym): boolean {
+    const from = e.k === "Call" && A(e)._ifaceConv ? A(e)._ifaceConv : this.ifaceOf(this.typeOf(e, this.global));
+    if (!from || from === iface || !this.basePath(from, iface)) return false;
+    A(e)._upcast = { from, to: iface };
+    return true;
+  }
+
+  ifaceNode(sym: GlobalSym): Extract<Expr, { k: "InterfaceType" }> {
+    return sym.decl.values[sym.index] as Extract<Expr, { k: "InterfaceType" }>;
+  }
+
+  /** the interfaces `sym` extends directly */
+  basesOf(sym: GlobalSym): GlobalSym[] {
+    return A(this.ifaceNode(sym))._bases ?? [];
+  }
+
+  /** every interface `sym` extends, nearest first */
+  ancestorsOf(sym: GlobalSym): GlobalSym[] {
+    const out: GlobalSym[] = [];
+    const walk = (s: GlobalSym) => {
+      for (const b of this.basesOf(s)) if (!out.includes(b)) out.push(b), walk(b);
+    };
+    walk(sym);
+    return out;
+  }
+
+  /** the chain of bases leading from `from` to its ancestor `to` (ending with `to`) */
+  basePath(from: GlobalSym, to: GlobalSym): GlobalSym[] | undefined {
+    for (const b of this.basesOf(from)) {
+      if (b === to) return [b];
+      const rest = this.basePath(b, to);
+      if (rest) return [b, ...rest];
+    }
+    return undefined;
+  }
+
+  /** inherited methods (in base order) followed by the interface's own */
+  allMethods(sym: GlobalSym, visiting: GlobalSym[] = []): IfaceMethod[] {
+    const node = this.ifaceNode(sym);
+    if (A(node)._allMethods) return A(node)._allMethods;
+    if (visiting.includes(sym))
+      throw new CompileError(`interface '${sym.name}' extends itself: ${[...visiting.slice(visiting.indexOf(sym)), sym].map((s) => s.name).join(" -> ")}`, posOf(node));
+    const out: IfaceMethod[] = [];
+    const add = (m: IfaceMethod) => {
+      const clash = out.find((x) => x.name === m.name);
+      if (clash && clash.sym !== m.sym)
+        throw new CompileError(`interface '${sym.name}' gets two methods named '${m.name}', from '${clash.iface.name}' and '${m.iface.name}'`, posOf(node));
+      if (!clash) out.push(m);
+    };
+    for (const b of this.basesOf(sym)) this.allMethods(b, [...visiting, sym]).forEach(add);
+    ((A(node)._methods as IfaceMethod[] | undefined) ?? []).forEach(add);
+    A(node)._allMethods = out;
+    return out;
   }
 
   /** Interface values refer to their data; converting a plain value would hide a heap copy. */
@@ -900,7 +964,17 @@ export class Analyzer {
   readonly impls: ImplInfo[] = [];
 
   private resolveIface(node: Extract<Expr, { k: "InterfaceType" }>, ifaceSym: GlobalSym): void {
-    if (!node.methods.length) throw new CompileError(`interface '${ifaceSym.name}' has no methods`, posOf(node));
+    if (!node.methods.length && !node.parents.length) throw new CompileError(`interface '${ifaceSym.name}' has no methods`, posOf(node));
+    const bases: GlobalSym[] = [];
+    for (const p of node.parents) {
+      if (p.k !== "Ident" && p.k !== "Selector") throw new CompileError(`'${nodeText(p)}' is not an interface`, posOf(p));
+      this.expr(p, ifaceSym.scope);
+      const base = this.resolveName(p, ifaceSym.scope, null);
+      if (base?.kind !== "global" || base.decl.values[base.index]?.k !== "InterfaceType") throw new CompileError(`'${nodeText(p)}' is not an interface`, posOf(p));
+      if (bases.includes(base)) throw new CompileError(`'${nodeText(p)}' is listed twice in interface '${ifaceSym.name}'`, posOf(p));
+      bases.push(base);
+    }
+    A(node)._bases = bases;
     const methods: IfaceMethod[] = [];
     for (const m of node.methods) {
       const pos = node.toks[m.tok].pos;
@@ -949,9 +1023,10 @@ export class Analyzer {
     const t = this.resolveName(s.target, scope, null);
     if (t && t.kind !== "global") throw new CompileError(`'${nodeText(s.target)}' is not a type`, posOf(s.target));
     const key = `${pkg.unit.merged ? pkg.name + "_" : ""}${nodeText(s.target)}`.replace(/\W/g, "_");
-    if (this.impls.some((x) => x.iface === ifaceSym && x.key === key)) throw new CompileError(`'${nodeText(s.target)}' already implements '${ifaceSym.name}'`, pos);
+    const prior = this.impls.find((x) => x.iface === ifaceSym && x.key === key);
+    if (prior && !prior.implied) throw new CompileError(`'${nodeText(s.target)}' already implements '${ifaceSym.name}'`, pos);
 
-    const wanted: IfaceMethod[] = A(ifaceNode)._methods ?? [];
+    const wanted = this.allMethods(ifaceSym);
     const targetText = nodeText(s.target).replace(/\s+/g, "");
     const arity = (sig: ProcSig) => sig.params.reduce((n, p) => n + Math.max(1, p.names.length), 0);
     const methods = new Map<string, GlobalSym>();
@@ -976,9 +1051,22 @@ export class Analyzer {
     }
     const missing = wanted.filter((m) => !methods.has(m.name)).map((m) => m.name);
     if (missing.length) throw new CompileError(`impl of '${ifaceSym.name}' for '${nodeText(s.target)}' is missing: ${missing.join(", ")}`, pos);
-    const info: ImplInfo = { node: s, iface: ifaceSym, pkg, key, methods };
-    this.impls.push(info);
-    A(s)._impl = info;
+    const infos: ImplInfo[] = [];
+    const add = (iface: GlobalSym, implied: boolean) => {
+      const own = new Map(this.allMethods(iface).map((m) => [m.name, methods.get(m.name)!]));
+      const other = this.impls.find((x) => x.iface === iface && x.key === key);
+      if (other) {
+        const diff = [...own].find(([name, sym]) => other.methods.get(name) !== sym);
+        if (diff) throw new CompileError(`'${nodeText(s.target)}' implements '${iface.name}' twice, binding '${diff[0]}' differently`, pos);
+        if (implied || other.implied) return;
+      }
+      const info: ImplInfo = { node: s, iface, pkg, key, methods: own, implied };
+      this.impls.push(info);
+      infos.push(info);
+    };
+    add(ifaceSym, false);
+    for (const a of this.ancestorsOf(ifaceSym)) if (a.pkg.unit === pkg.unit) add(a, true);
+    A(s)._impls = infos;
   }
 
   // ---- error handling: `or_return <value>`, `catch`, `errdefer` ----
@@ -1052,8 +1140,9 @@ export class Analyzer {
     this.stmt(inner, scope);
     if (!s.body) return;
     const sig = this.callSig(value, scope);
-    const names = inner.k === "ValueDecl" ? inner.names.length : inner.k === "Assign" ? inner.lhs.length : 0;
-    const errTy = sig ? this.resultTy(sig, names) : undefined;
+    // the error is the last result, whatever the left-hand side keeps
+    const results = sig ? sig.sig.results.reduce((n, r) => n + Math.max(1, r.names.length), 0) : 0;
+    const errTy = sig && results ? this.resultTy(sig, results - 1) : undefined;
     const bodyScope = new Scope(scope);
     if (s.errName) {
       const sym = this.declareLocal(s.errName, bodyScope, { ty: errTy, declTok: s.toks[s.errTok] });

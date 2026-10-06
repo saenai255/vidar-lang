@@ -1,0 +1,10 @@
+// error: impl of 'B' for 'T' is missing: a
+package main
+A :: interface { a }
+a :: proc(x: A) ---
+B :: interface { using A, b }
+b :: proc(x: B) ---
+T :: struct {}
+t_b :: proc(t: ^T) {}
+impl B for T { b = t_b }
+main :: proc() {}

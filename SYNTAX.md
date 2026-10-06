@@ -50,6 +50,8 @@ Example: [examples/closures](examples/closures).
 | `m(i, args)` with `i: I` | dynamic call through the vtable |
 | `pkg.m(...)` | calling another package's method, like any proc |
 | `I(&x)` | explicit conversion from `^T` or an `I` |
+| `I :: interface { using A, using pkg.B, m }` | extending interfaces: `I` has `A`'s and `B`'s methods plus its own |
+| `a: A = i`, `name(i)`, `A(i)` with `i: I` | converting to a base interface (implicit or explicit); inherited methods dispatch through it |
 | `s: I = &x`, `f(&x)`, `return &x`, `S{field = &x}`, `append(&list, &x)` | implicit conversion wherever the expected type is known to be an interface |
 
 ```odin
@@ -76,7 +78,9 @@ Rules:
 - Interface values hold a pointer: converting a plain value is an error (use `&x`, or `new_clone(x)` for an owned copy).
 - `x->m()` on an interface value is an error; call `m(x)`.
 - Impl blocks are only allowed at file scope, and impl targets must be named types.
-- No interface embedding and no generic impls. There is no builtin cleanup interface; declare `Destroy :: interface { destroy }` yourself.
+- `impl I for T` binds every method of `I`, inherited ones included, and also implements each base of `I` declared in the same package (or import cycle). A base in another package is reached by converting an `I` value; `base_method(&x)` static calls need an impl of that base itself.
+- Extending is transitive and may form diamonds; an interface can't extend itself, list a base twice, or get two different methods with the same name.
+- No generic impls. There is no builtin cleanup interface; declare `Destroy :: interface { destroy }` yourself.
 
 Examples: [examples/interfaces](examples/interfaces), [examples/methods](examples/methods).
 
