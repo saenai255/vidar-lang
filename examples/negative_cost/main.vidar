@@ -2,7 +2,7 @@ package main
 
 // Code written at a high level that comes out faster than the plain Odin you'd write by hand.
 // Every section prints a checksum; with --bench it also prints how long it took.
-// bench/bench.js builds this with and without -opt and compares.
+// Compare: `vidar run examples/negative_cost -- --bench`, then the same with -opt.
 
 import "core:fmt"
 import "core:os"
@@ -142,6 +142,25 @@ allocs :: proc(calls: int) {
 	section("scratch allocations", start, int(sum))
 }
 
+// ---- -opt: a loop that appends a known number of times reserves first ----
+
+doubled :: proc(src: []int) -> int {
+	out: [dynamic]int
+	defer delete(out)
+	for x in src do append(&out, x * 2)
+	return len(out) + out[len(out) / 2]
+}
+
+appends :: proc(n, calls: int) {
+	src := make([]int, n)
+	defer delete(src)
+	for i in 0..<n do src[i] = i % 97
+	start := time.tick_now()
+	total := 0
+	for _ in 0..<calls do total += doubled(src)
+	section("append in a loop", start, total)
+}
+
 // ---- @(specialize): a copy per set of constant arguments ----
 
 @(specialize)
@@ -183,6 +202,34 @@ blur :: proc(n, reps: int) {
 	section("blur, @(specialize)", start, dst[n / 2])
 }
 
+// ---- -opt: a copy of a proc per closure literal passed to it, calling the body directly ----
+
+@(no_specialize)
+pairs_plain :: proc(a: []int, f: closure(int, int) -> int) -> (sum: int) {
+	for i in 1..<len(a) do sum += f(a[i - 1], a[i])
+	return
+}
+
+pairs :: proc(a: []int, f: closure(int, int) -> int) -> (sum: int) {
+	for i in 1..<len(a) do sum += f(a[i - 1], a[i])
+	return
+}
+
+closures :: proc(n, reps: int) {
+	a := make([]int, n)
+	defer delete(a)
+	for i in 0..<n do a[i] = noise(i)
+	k := 3
+	start := time.tick_now()
+	total := 0
+	for _ in 0..<reps do total += pairs_plain(a, proc[k](x, y: int) -> int { return x * k - y if x > y else y - x })
+	section("closure, called through", start, total)
+	start = time.tick_now()
+	total = 0
+	for _ in 0..<reps do total += pairs(a, proc[k](x, y: int) -> int { return x * k - y if x > y else y - x })
+	section("closure, specialized", start, total)
+}
+
 // ---- @(table): every result computed once ----
 
 // steps the Collatz sequence takes from b + 1 down to 1
@@ -222,6 +269,34 @@ steps :: proc(n, reps: int) {
 	section("collatz, @(table)", start, total)
 }
 
+// ---- -opt: a local array of wide structs, looped over a few fields at a time, becomes #soa ----
+
+Body :: struct {
+	x, y, z:    f32,
+	vx, vy, vz: f32,
+	mass:       f32,
+	id:         int,
+	name:       string,
+	tags:       [4]u32,
+}
+
+bodies :: proc(n, reps: int) {
+	bs := make([]Body, n)
+	defer delete(bs)
+	for i in 0..<n do bs[i] = Body{vx = f32(noise(i) % 7), vy = f32(noise(i + 1) % 5), vz = 1, mass = 1, id = i, name = "rock"}
+	start := time.tick_now()
+	for _ in 0..<reps {
+		for &b in bs {
+			b.x += b.vx
+			b.y += b.vy
+			b.z += b.vz
+		}
+	}
+	sum: f64
+	for b in bs do sum += f64(b.x + b.y + b.z)
+	section("bodies, 3 of 10 fields", start, int(sum))
+}
+
 main :: proc() {
 	BENCH = len(os.args) > 1 && os.args[1] == "--bench"
 	scale := 50 if BENCH else 1
@@ -229,6 +304,9 @@ main :: proc() {
 	status(20_000 * scale)
 	bounds(100_000, 10 * scale)
 	allocs(20_000 * scale)
+	appends(1_000, 1_000 * scale)
 	blur(100_000, 2 * scale)
 	steps(100_000, scale)
+	bodies(100_000, 10 * scale)
+	closures(100_000, 2 * scale)
 }

@@ -1,0 +1,18 @@
+for_each: 45
+third call sees 3
+calls outside: 0
+fold: 15
+fold f64: 5
+filter_map done
+filter_map: [6, 12]
+installed: 4
+apply_twice: 9
+plain: 15
+nested: 36
+inner: 8
+inner: 10
+times: 65432
+start 2 3
+down 1
+down 0
+repeat: 18 3

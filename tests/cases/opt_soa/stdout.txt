@@ -1,0 +1,13 @@
+dynamic: 10 true 162 26 Particle{x = 9, y = 3, vx = 3, vy = 1, id = 3, alive = false}
+fixed: 3.5 Particle{x = 1.5, y = 0, vx = 1.5, vy = 0, id = 0, alive = false}
+slice: 30 Particle{x = 0, y = 0, vx = 0, vy = 0, id = 16, alive = false}
+cleared: 0
+sliced: 4
+passed: 8
+addressed: 9
+narrow: Pair{a = 3, b = 0}
+whole: Particle{x = 0, y = 0, vx = 0, vy = 0, id = 7, alive = false}
+captured: 1
+by_ref: 6
+returned: 4
+reassigned: 0

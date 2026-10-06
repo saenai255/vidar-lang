@@ -1,10 +1,10 @@
 import { CompileError, Token } from "./lexer";
 import { Block, Expr, File, Node, ProcSig, Stmt, children } from "./ast";
 import { posix } from "node:path";
-import { A, AnonField, AnonTemp, Analyzer, IfaceMethod, ImplInfo, SpecInfo, TableInfo, isStmt, nodeText, posOf } from "./analyzer";
+import { A, AnonField, AnonTemp, Analyzer, ClosureSpec, IfaceMethod, ImplInfo, MAX_DEVIRTUAL, SpecInfo, TableInfo, isStmt, nodeText, posOf } from "./analyzer";
 import { joinTokens, repeatable } from "./comptime";
-import { FmtPiece, decodeString, encodeString, parseFormat } from "./fmtspec";
-import { AllocGroup, optimizeProc } from "./optimize";
+import { decodeString, encodeString, fmtPlan } from "./fmtspec";
+import { AllocGroup, Reserve, optimizeProc } from "./optimize";
 import type { CaptureSym, GlobalSym, LocalSym, PackageInfo, PkgSym, Sym, Ty, Unit } from "./scope";
 
 type ProcLit = Extract<Expr, { k: "ProcLit" }>;
@@ -148,7 +148,11 @@ failed :: #force_inline proc(e: $T) -> bool {
 	}
 }
 
+// -opt: \`if expect(failed(e), false)\` marks the failure path cold
+expect :: intrinsics.expect
+
 // \`catch unreachable\`: the error was not supposed to happen
+@(cold)
 unexpected :: proc(e: $T, loc := #caller_location) -> ! {
 	when T == bool {
 		panic("unexpected failure", loc)
@@ -241,8 +245,6 @@ ${procs.join("\n")}`;
 
 const RUNTIME_ALIAS = "__vidar";
 const RUNTIME_MARK = "\u0000vidar-runtime\u0000";
-/** past this many vtables to test, a dispatcher keeps the plain indirect call */
-const MAX_DEVIRTUAL = 8;
 
 // Generated line breaks are written as markers and resolved into a line map once the file is done.
 // A real "\n" always comes from the source, so it advances the source line.
@@ -298,6 +300,13 @@ export class Emitter {
   private poolLoops = 0;
   /** -opt: specialized fmt procs of this unit, by what they write */
   private fmtProcs = new Map<string, string>();
+  /** copies of procs that call the closure literals a call passes directly, by that call */
+  private closureClones = new Map<Call, string>();
+  private closureCloneCount = 0;
+  /** copies still to write, once the file's own code is done */
+  private cloneJobs: (() => string)[] = [];
+  /** while such a copy is written: its closure parameters, and the lifted body and environment calls go to */
+  private inlinedClosures = new Map<Sym, { proc: string; env?: string }>();
 
   constructor(private an: Analyzer, private unit: Unit) {}
 
@@ -311,6 +320,7 @@ export class Emitter {
     for (const t of f.toks) if (t.pre.includes("\n") && !this.indents.has(t.pos.line)) this.indents.set(t.pos.line, t.pre.slice(t.pre.lastIndexOf("\n") + 1));
     const root = { k: "Block", toks: f.toks, start: 0, end: f.toks.length, stmts: f.stmts } as Block;
     let out = f.toks[0].pre + this.generic(root, 0, f.toks.length, f.stmts);
+    while (this.cloneJobs.length) this.helpers.push(this.cloneJobs.shift()!());
     const runtime = this.fileUsesRuntime ? `; import ${RUNTIME_ALIAS} "${relImport(this.unit.outDir, "vidar_runtime")}"` : "";
     out = out.replace(RUNTIME_MARK, runtime);
     const { text, lines } = resolveLines(out);
@@ -460,7 +470,7 @@ export class Emitter {
       }
       case "ErrDefer":
         this.fileUsesRuntime = this.usesRuntime = true;
-        return `defer if ${RUNTIME_ALIAS}.failed(${A(n)._errName}) { ${this.emit(n.stmt)} }`;
+        return `defer if ${this.failed(A(n)._errName)} { ${this.emit(n.stmt)} }`;
       case "ProcLit":
         return A(n)._ifaceMethod ? this.methodGroup(n, A(n)._ifaceMethod) : this.procLit(n);
       case "Labeled":
@@ -475,6 +485,7 @@ export class Emitter {
         return this.generic(n);
       }
       case "Call": {
+        if (A(n)._closureSpec) return this.closureSpecCall(n, A(n)._closureSpec);
         const spec: { sym: GlobalSym; key: string } | undefined = A(n)._spec;
         if (spec) return this.qualify(spec.sym, `${spec.sym.odinName}__${spec.key}`, `call '${spec.sym.name}'`) + this.generic(n, n.fn.end);
         if (A(n)._pool) return this.qualify(A(n)._pool, poolName(A(n)._pool));
@@ -579,7 +590,8 @@ export class Emitter {
       const hoisted: Stmt[] = A(s)._pre ?? [];
       const before = hoisted.length ? this.inPretty(s, () => hoisted.map((h): [number, string] => [this.lineOf(h), this.hoisted(h)])) : [];
       const body = this.emit(s);
-      const lines: [number, string][] = [...this.notes.map((c) => [-Math.abs(this.lineOf(s)), c] as [number, string]), ...before];
+      const reserves = ((A(s)._reserve as Reserve[] | undefined) ?? []).map((r): [number, string] => [-Math.abs(this.lineOf(s)), this.reserve(r)]);
+      const lines: [number, string][] = [...this.notes.map((c) => [-Math.abs(this.lineOf(s)), c] as [number, string]), ...before, ...reserves];
       if (!lines.length) return body;
       const head = lines.map(([, text], i) => (i ? nl(lines[i][0]) + indent : "") + text).join("");
       return body ? head + nl(this.lineOf(s)) + indent + body : head;
@@ -689,7 +701,7 @@ export class Emitter {
     this.fileUsesRuntime = this.usesRuntime = true;
     const { head, tail } = this.failHead(s, this.emit(info.postfix.x), info.errVar);
     const values = [...Array(info.results - 1).fill("{}"), this.emit(info.postfix.value!)];
-    return `${head}; if ${RUNTIME_ALIAS}.failed(${info.errVar}) do return ${values.join(", ")}${tail && `; ${tail}`}`;
+    return `${head}; if ${this.failed(info.errVar)} do return ${values.join(", ")}${tail && `; ${tail}`}`;
   }
 
   /**
@@ -700,7 +712,7 @@ export class Emitter {
     this.fileUsesRuntime = this.usesRuntime = true;
     const errVar: string = A(s)._errVar;
     const { head, tail } = this.failHead(s.stmt, this.emit(A(s)._value), errVar);
-    const check = `if ${RUNTIME_ALIAS}.failed(${errVar}) `;
+    const check = `if ${this.failed(errVar)} `;
     if (this.listed !== s || this.pretty || this.compact) return `${head}; ${check}${this.catchHandler(s, errVar, false)}${tail && `; ${tail}`}`;
     const gen = nl(-this.lineOf(s));
     if (s.stmt.k === "ValueDecl") {
@@ -716,6 +728,12 @@ export class Emitter {
     } finally {
       this.deeper = outer;
     }
+  }
+
+  /** -opt: the failure branch is hinted unlikely */
+  private failed(errVar: string): string {
+    const test = `${RUNTIME_ALIAS}.failed(${errVar})`;
+    return this.an.optimize ? `${RUNTIME_ALIAS}.expect(${test}, false)` : test;
   }
 
   private catchHandler(s: Extract<Stmt, { k: "Catch" }>, errVar: string, multiline: boolean): string {
@@ -966,7 +984,7 @@ export class Emitter {
   // ---- @(specialize) and @(table) ----
 
   /** A copy of a @(specialize) proc where the parameters calls pass constants to are compile-time (`$x`). */
-  private specClone(sym: GlobalSym, info: SpecInfo, key: string, consts: string[]): string {
+  private specClone(sym: GlobalSym, info: Pick<SpecInfo, "lit">, key: string, consts: string[], closures?: { params: Map<string, string[]>; prologue: string[]; what: string }): string {
     const value = sym.decl.values[sym.index];
     const p = info.lit;
     let open = p.start;
@@ -978,15 +996,82 @@ export class Emitter {
       else if (t === ")" && --depth === 0) break;
     }
     const params = p.sig.params.flatMap((g) =>
-      g.names.map((n) => `${n.prefix ?? ""}${consts.includes(n.name) ? "$" : ""}${n.name}${g.type ? `: ${this.emit(g.type)}` : " :"}${g.value ? `${g.type ? " " : ""}= ${this.emit(g.value)}` : ""}`),
+      g.names.flatMap((n) => closures?.params.get(n.name) ?? [`${n.prefix ?? ""}${consts.includes(n.name) ? "$" : ""}${n.name}${g.type ? `: ${this.emit(g.type)}` : " :"}${g.value ? `${g.type ? " " : ""}= ${this.emit(g.value)}` : ""}`]),
     );
     const ps: LocalSym[] = A(p)._params ?? [];
-    const shadowed = ps.filter((x) => x.refCaptured).map(addressable);
+    const shadowed = [...ps.filter((x) => x.refCaptured).map(addressable), ...(closures?.prologue ?? [])];
     if (shadowed.length) this.prologue.set(p.body!, shadowed);
     const before = value !== p ? this.generic(value, value.start, p.start) + " " : "";
     const after = this.generic(p, close + 1, p.body!.start);
     const head = `${before}${this.generic(p, p.start, open)}(${params.join(", ")})${after ? " " + after : ""}`;
-    return `// ${sym.name} with ${consts.join(", ")} known at compile time\n${sym.odinName}__${key} :: ${head.trimEnd()} ${this.emit(p.body!)}`;
+    const what = [...(consts.length ? [`${consts.join(", ")} known at compile time`] : []), ...(closures ? [closures.what] : [])].join(", ");
+    return `// ${sym.name} with ${what}\n${sym.odinName}__${key} :: ${head.trimEnd()} ${this.emit(p.body!)}`;
+  }
+
+  /** `f(xs, proc[k](x: int) {...})` -> `f__closure0(xs, k)`, a copy of `f` calling the closure's body directly. */
+  private closureSpecCall(c: Call, spec: ClosureSpec): string {
+    let name = this.closureClones.get(c);
+    if (!name) {
+      const key = [...spec.consts, `closure${this.closureCloneCount++}`].join("_");
+      name = `${spec.sym.odinName}__${key}`;
+      this.closureClones.set(c, name);
+      this.cloneJobs.push(() => this.closureClone(spec, key));
+    }
+    const names = spec.lit.sig.params.flatMap((p) => p.names.map((n) => n.name));
+    const kept = c.args.filter((_, i) => !spec.closures.has(names[i]));
+    const args = c.args.flatMap((a, i) => (spec.closures.has(names[i]) ? (A(a)._captures as CaptureSym[]).map((cap) => this.captureArg(cap)) : [this.emit(a)]));
+    let lines = 0;
+    if (c.toks === this.file.toks) {
+      for (let i = c.start + 1; i < c.end; i++) if (!kept.some((a) => i > a.start && i < a.end)) lines += c.toks[i].pre.split("\n").length - 1;
+    }
+    return `${name}(${args.join(", ")})` + SKIP_LINE.repeat(lines);
+  }
+
+  /** The copy: each closure's captures come in as parameters and make up its environment, on the stack. */
+  private closureClone(spec: ClosureSpec, key: string): string {
+    const params = new Map<string, string[]>();
+    const prologue: string[] = [];
+    const syms: LocalSym[] = A(spec.lit)._params ?? [];
+    const outer = this.inlinedClosures;
+    this.inlinedClosures = new Map(outer);
+    for (const [param, lit] of spec.closures) {
+      const caps: CaptureSym[] = A(lit)._captures;
+      const proc = `__${spec.sym.odinName}__${key}_${param}`;
+      const types = caps.map((_, i) => `__${param}_T${i}`);
+      const values = caps.map((_, i) => `__${param}_c${i}`);
+      this.helpers.push(this.liftedClosure(lit, proc, caps));
+      params.set(param, caps.map((_, i) => `${values[i]}: $${types[i]}`));
+      const env = caps.length ? `__${param}_env` : undefined;
+      if (env) prologue.push(`${env} := ${proc}_Env(${types.join(", ")}){${values.join(", ")}}`);
+      this.inlinedClosures.set(syms.find((s) => s.name === param)!, { proc, env });
+    }
+    const lines = [...spec.closures.values()].map((l) => posOf(l).line);
+    const what = `the closure${lines.length > 1 ? "s" : ""} from line ${[...new Set(lines)].join(", ")} called directly`;
+    try {
+      return this.specClone(spec.sym, spec, key, spec.consts, { params, prologue, what });
+    } finally {
+      this.inlinedClosures = outer;
+    }
+  }
+
+  /** A closure literal's body as a proc of its own, taking a pointer to its environment. */
+  private liftedClosure(p: ProcLit, name: string, caps: CaptureSym[]): string {
+    if (A(p)._nameResults) this.nameResults(p);
+    if (this.an.optimize && !A(p)._optimized) {
+      A(p)._optimized = true;
+      optimizeProc(p.body!, this.an);
+    }
+    const shadowed = ((A(p)._params ?? []) as LocalSym[]).filter((s) => s.refCaptured).map(addressable);
+    if (shadowed.length) this.prologue.set(p.body!, shadowed);
+    let paren = p.start;
+    while (!(p.toks[paren].kind === "op" && p.toks[paren].text === "]")) paren++;
+    const signature = this.generic(p, paren + 1, p.body!.start);
+    if (!caps.length) return `${name} :: proc${signature} ${this.emit(p.body!)}`;
+    const polys = caps.map((_, i) => `$__T${i}`);
+    const env = `__env: ^${name}_Env(${polys.join(", ")})`;
+    const withEnv = /^\(\s*\)/.test(signature) ? signature.replace(/^\(\s*\)/, `(${env})`) : signature.replace(/^\(/, `(${env}, `);
+    const struct = `${name}_Env :: struct(${polys.join(", ")}: typeid) {\n${caps.map((c, i) => `\t${c.name}: __T${i},\n`).join("")}}`;
+    return `${struct}\n\n${name} :: proc${withEnv} ${this.emit(p.body!)}`;
   }
 
   /** @(table): the proc becomes a lookup; the table is a literal, or filled at startup from the original body. */
@@ -1029,6 +1114,23 @@ export class Emitter {
     return `${names.join(", ")} := ${RUNTIME_ALIAS}.make_group${g.members.length}(${args.join(", ")})${ptrs.join("")}`;
   }
 
+  // ---- -opt: reserve before append loops ----
+
+  /** `reserve(&xs, len(xs) + n)` before `for i in 0..<n { append(&xs, i) }`. */
+  private reserve(r: Reserve): string {
+    const grouped = (e: Expr, cast: boolean) => {
+      const text = this.emit(e);
+      if (cast) return `int(${text})`;
+      return ["Ident", "Lit", "Call", "Selector", "Paren", "Index"].includes(e.k) ? text : `(${text})`;
+    };
+    const t = r.trip;
+    const terms = "of" in t ? [`len(${this.emit(t.of)})`] : [grouped(t.hi, t.cast), ...(t.lo ? [`- ${grouped(t.lo, t.cast)}`] : []), ...(t.inclusive ? ["+ 1"] : [])];
+    let count = terms.join(" ");
+    if (r.perIteration > 1) count = `${r.perIteration} * ${terms.length > 1 ? `(${count})` : count}`;
+    const target = this.emit(r.target);
+    return `reserve(${target}, len(${r.array ? this.emit(r.array) : `${target}^`}) + ${count})`;
+  }
+
   // ---- -opt: fmt calls with a literal format ----
 
   /**
@@ -1036,23 +1138,10 @@ export class Emitter {
    * "/" and max directly: no format parsing at run time, no `any` boxing, no type switch.
    */
   private fmtCall(c: Call): string | undefined {
-    const entry = fmtEntry(c);
-    if (!entry) return undefined;
+    const plan = fmtPlan(this.an, c);
+    if (!plan) return undefined;
+    const { entry, lead, values, pieces } = plan;
     const fn = c.fn as Extract<Expr, { k: "Selector" }>;
-    if (c.args.some((a) => a.k === "FieldValue" || a.k === "Spread")) return undefined;
-    const lead = c.args.slice(0, entry.lead);
-    const values = c.args.slice(entry.lead + (entry.format ? 1 : 0));
-    const scope = A(c)._scope ?? this.an.global;
-    const single = (v: Expr) => this.an.isSingleValue(v, scope) || (v.k === "Call" && !!fmtEntry(v));
-    if (lead.length < entry.lead || values.some((v) => (v.k === "Ident" && v.name === "nil") || !single(v))) return undefined;
-    let pieces: FmtPiece[] | undefined;
-    if (entry.format) {
-      const f = c.args[entry.lead];
-      const text = f?.k === "Lit" && f.kind === "string" ? decodeString(this.tok(f.toks[f.start])) : undefined;
-      pieces = text === undefined ? undefined : parseFormat(text);
-      if (!pieces || pieces.filter((p) => p.k === "arg").length !== values.length) return undefined;
-    } else pieces = values.flatMap((_, i): FmtPiece[] => [...(i ? [{ k: "text" as const, text: " " }] : []), { k: "arg", verb: "v", spec: "%v" }]);
-    if (entry.newline) pieces.push({ k: "text", text: "\n" });
 
     const kept: Expr[] = [];
     const writes: string[] = [];
@@ -1153,7 +1242,7 @@ export class Emitter {
     if (A(p)._nameResults) this.nameResults(p);
     if (this.an.optimize && p.body && !A(p)._optimized) {
       A(p)._optimized = true;
-      optimizeProc(p.body);
+      optimizeProc(p.body, this.an);
     }
     const params: LocalSym[] = A(p)._params ?? [];
     const shadowedParams = params.filter((s) => s.refCaptured).map(addressable);
@@ -1171,20 +1260,33 @@ export class Emitter {
     const withEnv = /^\(\s*\)/.test(signature)
       ? signature.replace(/^\(\s*\)/, "(__env_raw: rawptr)")
       : signature.replace(/^\(/, "(__env_raw: rawptr, ");
-    this.prologue.set(p.body, [...(caps.length ? ["__env := cast(^__Env)__env_raw"] : []), ...shadowedParams]);
+    const inPtr = !!A(p)._envInPtr;
+    const envLine = inPtr ? "__env := __Env{cast(T0)__env_raw}" : "__env := cast(^__Env)__env_raw";
+    this.prologue.set(p.body, [...(caps.length ? [envLine] : []), ...shadowedParams]);
     const body = this.emit(p.body);
     const procText = `proc${withEnv} ${body}`;
     if (!caps.length) return `${sigText}{call = ${procText}, env = nil}`;
 
     const id = this.closureCount++;
     const helper = `__closure_${id}`;
+    const ret = (env: string) => `\treturn ${sigText}{\n\t\tcall = ${procText},\n\t\tenv = ${env},\n\t}\n}`;
+    const args = caps.map((c) => this.captureArg(c));
+    if (A(p)._envOnStack) {
+      const envType = `${helper}_Env`;
+      const polys = caps.map((_, i) => `T${i}`);
+      this.helpers.push(
+        `${envType} :: struct(${polys.map((t) => `$${t}: typeid`).join(", ")}) {\n${caps.map((c, i) => `\t${c.name}: T${i},\n`).join("")}}\n\n` +
+          `${helper} :: proc(__env_ptr: ^${envType}(${polys.map((t) => "$" + t).join(", ")})) -> ${sigText} {\n` +
+          `\t__Env :: ${envType}(${polys.join(", ")})\n` + ret("__env_ptr"),
+      );
+      return `${helper}(&${envType}(${args.map((a) => `type_of(${a})`).join(", ")}){${args.join(", ")}})` + this.skipLines(p);
+    }
     this.helpers.push(
       `${helper} :: proc(${caps.map((c, i) => `__c${i}: $T${i}`).join(", ")}) -> ${sigText} {\n` +
         `\t__Env :: struct {\n${caps.map((c, i) => `\t\t${c.name}: T${i},\n`).join("")}\t}\n` +
-        `\treturn ${sigText}{\n\t\tcall = ${procText},\n` +
-        `\t\tenv = new_clone(__Env{${caps.map((_, i) => `__c${i}`).join(", ")}}),\n\t}\n}`,
+        ret(inPtr ? "rawptr(__c0)" : `new_clone(__Env{${caps.map((_, i) => `__c${i}`).join(", ")}})`),
     );
-    return `${helper}(${caps.map((c) => this.captureArg(c)).join(", ")})` + this.skipLines(p);
+    return `${helper}(${args.join(", ")})` + this.skipLines(p);
   }
 
   /** The value handed to a closure constructor for one capture, as seen at the creation site. */
@@ -1209,6 +1311,8 @@ export class Emitter {
     const ty: Extract<Ty, { t: "sig" }> = A(c)._closure;
     const callee = this.emit(c.fn);
     const args = c.args.map((a) => this.emit(a));
+    const inlined = c.fn.k === "Ident" ? this.inlinedClosures.get(A(c.fn)._sym) : undefined;
+    if (inlined) return `${inlined.proc}(${[...(inlined.env ? [`&${inlined.env}`] : []), ...args].join(", ")})`;
     if (this.isSimple(c.fn)) return `${callee}.call(${[`${callee}.env`, ...args].join(", ")})`;
     const sig = this.closureType(ty.sig);
     let name = this.callHelpers.has(sig) ? undefined : `__call_closure_${this.callHelperCount++}`;
@@ -1221,26 +1325,6 @@ export class Emitter {
     } else name = /^(\S+) ::/.exec(this.callHelpers.get(sig)!)![1];
     return `${name}(${[callee, ...args].join(", ")})`;
   }
-}
-
-/** fmt procs -opt specializes: where they write, and how many arguments come before the format */
-const FMT_ENTRIES = new Map<string, { kind: "out" | "err" | "t" | "a" | "sb" | "w"; lead: number; format: boolean; newline: boolean }>(
-  (
-    [["", "out", 0], ["e", "err", 0], ["t", "t", 0], ["a", "a", 0], ["sb", "sb", 1], ["w", "w", 1]] as const
-  ).flatMap(([prefix, kind, lead]) => [
-    [`${prefix}printf`, { kind, lead, format: true, newline: false }],
-    [`${prefix}printfln`, { kind, lead, format: true, newline: true }],
-    [`${prefix}print`, { kind, lead, format: false, newline: false }],
-    [`${prefix}println`, { kind, lead, format: false, newline: true }],
-  ]),
-);
-
-/** `fmt.<name>(...)` for one of the procs -opt specializes */
-function fmtEntry(c: Call) {
-  const fn = c.fn;
-  if (fn.k !== "Selector" || fn.x.k !== "Ident") return undefined;
-  const pkg: Sym | undefined = A(fn.x)._sym;
-  return pkg?.kind === "pkg" && pkg.path === "core:fmt" ? FMT_ENTRIES.get(fn.name) : undefined;
 }
 
 /** verbs the runtime writes directly for basic types (see fmtRuntime) */

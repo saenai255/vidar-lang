@@ -3,6 +3,7 @@ import { Block, Expr, File, Node, Param, ProcSig, Stmt, children } from "./ast";
 import { Parser } from "./parser";
 import { CaptureSym, Ctx, GlobalSym, LocalSym, PackageInfo, PkgSym, Scope, Sym, Ty } from "./scope";
 import { autoOptimize } from "./autoopt";
+import { closureEnvs } from "./escape";
 import { CallSpan, Interp, NotConstant, Val, joinTokens, repeatable, respace, valueToTokens, tokensOf } from "./comptime";
 
 /** Annotation accessor: analysis results live in `_`-prefixed fields on nodes. */
@@ -72,6 +73,22 @@ export interface SpecInfo {
   eligible?: Set<string>;
 }
 
+/** A call passing closure literals: it calls a copy of `sym` that calls their bodies directly. */
+/** Closure literals a copy of `callee` calls directly: they get no env of their own. */
+export function markInlined(callee: Node, closures: Map<string, Node>): void {
+  A(callee)._closureCopies = true;
+  for (const l of closures.values()) A(l)._inlined = true;
+}
+
+export interface ClosureSpec {
+  sym: GlobalSym;
+  lit: ProcLit;
+  /** parameters also compile-time in the copy (@(specialize)) */
+  consts: string[];
+  /** parameter -> the closure literal passed to it */
+  closures: Map<string, ProcLit>;
+}
+
 /** A @(table) proc: `values` holds the table when it was computed at compile time. */
 export interface TableInfo {
   lit: ProcLit;
@@ -81,6 +98,19 @@ export interface TableInfo {
   result: Expr;
   values?: string[];
 }
+
+/** An -opt decision shown after token `tok` of `at` (editor inlay hint) and listed by -opt-report. */
+export interface OptHint {
+  at: Node;
+  tok: number;
+  /** the proc it is about, when shown after a proc's name */
+  name?: string;
+  label: string;
+  tooltip?: string;
+}
+
+/** past this many vtables to test, a dispatcher keeps the plain indirect call */
+export const MAX_DEVIRTUAL = 8;
 
 /** `name :: proc(x: I, ...) ---` listed in `I :: interface { name, ... }`. */
 export interface IfaceMethod {
@@ -173,7 +203,9 @@ export class Analyzer {
         for (const s of f.stmts) this.guard(() => this.topStmt(s, fileScope));
       }
     }
+    for (const p of this.closureCalls) this.guard(() => this.specializeClosures(p.e, p.sym, p.info, p.consts));
     if (this.optimize) this.guard(() => autoOptimize(this));
+    if (this.optimize) this.guard(() => closureEnvs(this, packages));
   }
 
   // ---- declarations ----
@@ -567,6 +599,7 @@ export class Analyzer {
           // the method's proc group has a dispatcher for each interface in its unit that inherits it
           if (A(e.args[0])._upcast.from.pkg.unit === method.iface.pkg.unit) delete A(e.args[0])._upcast;
         }
+        if (method && e.args[0]) this.dispatchHint(e, e.args[0], method);
         if (ft?.t === "sig") this.convertArgs(e.args, ft, method ? 1 : 0);
         return;
       }
@@ -1006,6 +1039,20 @@ export class Analyzer {
     return true;
   }
 
+  /** Whether a method call reaches the bound proc directly, through a dispatcher that tests known vtables, or through the vtable. */
+  private dispatchHint(call: Call, self: Expr, m: IfaceMethod): void {
+    if (!this.hints) return;
+    const conv = self.k === "Call" && A(self)._ifaceConv;
+    const via: GlobalSym | undefined = this.poolVar(self) || A(self)._upcast ? m.iface : conv || this.ifaceOf(this.typeOf(self, this.global));
+    if (!via) {
+      if (this.typeOf(self, this.global)) this.hint(call, "direct", `not an interface value: calls the proc bound to '${m.name}' directly`);
+      return;
+    }
+    const tests = this.impls.filter((i) => i.iface.pkg.unit === via.pkg.unit).reduce((n, i) => n + this.basePaths(i.iface, via).length, 0);
+    if (tests && tests <= MAX_DEVIRTUAL) this.hint(call, "devirtualized", `the dispatcher compares the vtable with the ${tests} impl${tests === 1 ? "" : "s"} of '${via.name}' and calls the match directly`);
+    else this.hint(call, "vtable", tests ? `${tests} vtables to test, more than ${MAX_DEVIRTUAL}: an indirect call` : `no impl of '${via.name}' to test for: an indirect call`);
+  }
+
   ifaceNode(sym: GlobalSym): Extract<Expr, { k: "InterfaceType" }> {
     return sym.decl.values[sym.index] as Extract<Expr, { k: "InterfaceType" }>;
   }
@@ -1062,13 +1109,28 @@ export class Analyzer {
   readonly optOut = new Map<GlobalSym, Set<string>>();
   /** -opt: the direct calls to each proc that isn't @(specialize), to decide on it after analysis */
   readonly callSites = new Map<GlobalSym, CallSite[]>();
-  /** -opt-report: what was specialized or tabulated, and why not elsewhere */
-  report: { pos: Pos; name: string; text: string }[] | null = null;
+  /** -opt decisions, for -opt-report and the editor; null when nobody asked */
+  hints: OptHint[] | null = null;
+  /** calls to @(specialize) procs passing closure literals, decided once every body is analyzed */
+  private readonly closureCalls: { e: Call; sym: GlobalSym; info: SpecInfo; consts: string[] }[] = [];
   /** analyzing a call vidar made up, which isn't a call site */
   private synthetic = false;
 
+  /** Records an -opt decision after a proc's name or a node; a label starting with "no"/"not" is a decision against. */
+  hint(at: Node | GlobalSym, label: string, tooltip?: string): void {
+    if (!this.hints || this.synthetic) return;
+    const sym = "k" in at ? undefined : at;
+    const node = sym ? sym.decl : (at as Node);
+    if (this.hints.some((h) => h.at === node && h.label === label)) return;
+    let tok = sym ? (sym.decl.names[sym.index]?.tok ?? node.start) : node.end - 1;
+    while (!sym && tok > node.start && (node.toks[tok].kind === "semi" || node.toks[tok].kind === "eof")) tok--;
+    this.hints.push({ at: node, tok, name: sym?.name, label, tooltip });
+  }
+
+  /** `hint` for a proc, from "label: reason" text. */
   note(sym: GlobalSym, text: string): void {
-    this.report?.push({ pos: posOf(sym.decl), name: sym.name, text });
+    const i = text.indexOf(": ");
+    this.hint(sym, i < 0 ? text : text.slice(0, i), i < 0 ? undefined : text.slice(i + 2));
   }
 
   /** Removes vidar's own attributes from a declaration (Odin rejects unknown ones) and returns those found. */
@@ -1132,10 +1194,96 @@ export class Analyzer {
     const eligible = this.specParams(info);
     const names = info.lit.sig.params.flatMap((p) => p.names.map((n) => n.name));
     const consts = names.filter((n, i) => i < e.args.length && eligible.has(n) && this.isConstant(e.args[i], scope));
+    if (e.args.some((a) => a.k === "ProcLit" && a.captures)) this.closureCalls.push({ e, sym, info, consts });
+    else this.specializeConsts(e, sym, info, consts);
+  }
+
+  private specializeConsts(e: Call, sym: GlobalSym, info: SpecInfo, consts: string[]): void {
     if (!consts.length) return;
     const key = consts.join("_");
     info.clones.set(key, consts);
     A(e)._spec = { sym, key };
+  }
+
+  private specializeClosures(e: Call, sym: GlobalSym, info: SpecInfo, consts: string[]): void {
+    const closures = this.closureLits(sym, info.lit, e);
+    if (!closures.size) {
+      const why = this.closureMisses(sym, info.lit, [e]);
+      if (why) this.hint(e, "closure not inlined", why);
+      return this.specializeConsts(e, sym, info, consts);
+    }
+    A(e)._closureSpec = { sym, lit: info.lit, consts, closures } satisfies ClosureSpec;
+    markInlined(info.lit, closures);
+    this.hint(e, "closure inlined", `@(specialize): a copy of ${sym.name} ${consts.length ? `with ${consts.join(", ")} known at compile time, ` : ""}calling the closure passed to ${[...closures.keys()].join(", ")} directly`);
+  }
+
+  /**
+   * The closure parameters of a proc whose body only calls them, so a copy can call the body of a
+   * closure literal passed there directly; for the others, why not.
+   */
+  calledOnlyParams(lit: ProcLit, scope: Scope): Map<string, string | undefined> {
+    if (A(lit)._calledOnly) return A(lit)._calledOnly;
+    const out = new Map<string, string | undefined>();
+    const syms: LocalSym[] = A(lit)._params ?? [];
+    for (const p of lit.sig.unnamed ? [] : lit.sig.params) {
+      const t = p.type && this.normalize({ t: "node", node: p.type, scope });
+      if (t?.t !== "sig" || !t.closure) continue;
+      for (const n of p.names) {
+        const sym = syms.find((s) => s.name === n.name);
+        if (n.prefix || p.value || !sym) out.set(n.name, `${n.name} ${n.prefix ? `is a '${n.prefix}' parameter` : "has a default value"}`);
+        else out.set(n.name, sym.refCaptured ? `${n.name} is captured by reference` : this.notOnlyCalled(lit.body!, sym));
+      }
+    }
+    return (A(lit)._calledOnly = out);
+  }
+
+  /** Why a body does something with `sym` other than call it, if it does. */
+  private notOnlyCalled(body: Block, sym: LocalSym): string | undefined {
+    let calls = 0;
+    let why: string | undefined;
+    const visit = (n: Node | undefined): void => {
+      if (!n || why) return;
+      if (n.k === "Call" && n.fn.k === "Ident" && A(n.fn)._sym === sym) {
+        calls++;
+        return n.args.forEach(visit);
+      }
+      if (n.k === "Ident" && A(n)._sym === sym) return void (why = `${sym.name} is used as a value (line ${posOf(n).line})`);
+      if (n.k === "ProcLit") {
+        if ((A(n)._captures as CaptureSym[] | undefined)?.some((c) => c.target === sym)) why = `a closure captures ${sym.name} (line ${posOf(n).line})`;
+        return;
+      }
+      const exp: Node | Node[] | undefined = A(n)._expansion;
+      if (exp) (Array.isArray(exp) ? exp : [exp]).forEach(visit);
+      children(n).forEach(visit);
+    };
+    visit(body);
+    return why ?? (calls ? undefined : `${sym.name} is never called`);
+  }
+
+  /** The closure literals a call passes straight to parameters `calledOnlyParams` allows, by parameter. */
+  closureLits(sym: GlobalSym, lit: ProcLit, e: Call): Map<string, ProcLit> {
+    const out = new Map<string, ProcLit>();
+    // the copy is written next to the proc, so the closure body must see the same imports
+    if (e.toks !== lit.toks || e.args.some((a) => a.k === "FieldValue" || a.k === "Spread")) return out;
+    const params = this.calledOnlyParams(lit, sym.scope);
+    const names = lit.sig.params.flatMap((p) => p.names.map((n) => n.name));
+    e.args.forEach((a, i) => {
+      if (a.k === "ProcLit" && a.captures && a.body && params.has(names[i]) && !params.get(names[i])) out.set(names[i], a);
+    });
+    return out;
+  }
+
+  /** Why calls passing closure literals to `lit` can't get a copy, when one of them could have. */
+  closureMisses(sym: GlobalSym, lit: ProcLit, calls: Call[]): string | undefined {
+    const params = this.calledOnlyParams(lit, sym.scope);
+    const names = lit.sig.params.flatMap((p) => p.names.map((n) => n.name));
+    for (const e of calls)
+      for (const [i, a] of e.args.entries()) {
+        if (!(a.k === "ProcLit" && a.captures)) continue;
+        if (params.get(names[i])) return params.get(names[i]);
+        if (params.has(names[i]) && e.toks !== lit.toks) return `the call at line ${posOf(e).line} is in another file`;
+      }
+    return undefined;
   }
 
   /** Known at compile time: literals, constants, enum values, and arithmetic on them. */
@@ -1199,7 +1347,7 @@ export class Analyzer {
     else throw new CompileError(`@(table) needs a parameter of type bool, u8, i8 or an enum, not ${name}`, posOf(type));
     Object.assign(info, { domain, param: params[0].name.name, type, result: res[0].type });
     if (domain !== "enum") info.values = this.tabulate(sym, domain);
-    this.note(sym, info.values ? "@(table): computed at compile time" : "@(table): filled at startup");
+    this.hint(sym, "table", info.values ? "@(table): computed at compile time" : "@(table): filled at startup");
   }
 
   /** `sym(x)` for every x of a bool, u8 or i8 parameter, run at compile time; undefined when the body can't run there. */

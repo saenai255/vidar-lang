@@ -10,8 +10,8 @@
 // other way, and must print the same.
 const { readdirSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, statSync } = require("node:fs");
 const { join } = require("node:path");
-const { tmpdir } = require("node:os");
-const { spawnSync, execSync } = require("node:child_process");
+const { tmpdir, availableParallelism } = require("node:os");
+const { spawn, execSync } = require("node:child_process");
 const { transpile } = require("../dist/cli.js");
 const { loadProgram, emitProgram } = require("../dist/project.js");
 const { CompileError } = require("../dist/lexer.js");
@@ -20,9 +20,13 @@ const UPDATE = process.argv.includes("--update");
 
 let pass = 0;
 let fail = 0;
-const report = (ok, name, detail = "") => {
+const JOBS = Number(process.argv.find((a) => a.startsWith("-j"))?.slice(2)) || Math.max(2, Math.floor(availableParallelism() / 2));
+
+/** Counts the result and prints it, or adds it to `log` to print in order later. */
+const report = (ok, name, detail = "", log = null) => {
   ok ? pass++ : fail++;
-  console.log(`${ok ? "PASS" : "FAIL"} ${name}${detail ? `\n${detail}` : ""}`);
+  const line = `${ok ? "PASS" : "FAIL"} ${name}${detail ? `\n${detail}` : ""}`;
+  log ? log.push(line) : console.log(line);
 };
 
 function firstDiffLine(a, b) {
@@ -66,13 +70,45 @@ const cases = [
 ];
 
 const work = mkdtempSync(join(tmpdir(), "vidar-test-"));
-for (const c of cases) {
+
+/** Runs `cmd` and resolves with its exit and output; a run past `ms` is killed. */
+function run(cmd, args, ms) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    child.stdout.setEncoding("utf8").on("data", (d) => (stdout += d));
+    child.stderr.setEncoding("utf8").on("data", (d) => (stderr += d));
+    const timer = setTimeout(() => ((timedOut = true), child.kill("SIGKILL")), ms);
+    child.on("error", (err) => ((stderr += err.message), resolve({ status: -1, stdout, stderr, timedOut })));
+    child.on("close", (status) => (clearTimeout(timer), resolve({ status: timedOut ? -1 : status, stdout, stderr, timedOut })));
+  });
+}
+
+// build and run apart, so a hang in either fails the case instead of the whole run
+async function odinRun(dir) {
+  const prog = join(dir, "prog");
+  let b;
+  // odin's checker sometimes hangs; one retry
+  for (let i = 0; i < 2; i++) {
+    b = await run("odin", ["build", dir, `-out:${prog}`], 120_000);
+    if (!b.timedOut) break;
+  }
+  if (b.status !== 0) return { status: b.status, stdout: "", stderr: b.timedOut ? "odin build timed out\n" : b.stderr };
+  const r = await run(prog, [], 30_000);
+  return r.timedOut ? { ...r, stderr: `timed out after 30s\n${r.stderr}` } : r;
+}
+
+/** Transpiles a case and checks it against its fixture; resolves with the lines to print. */
+async function testCase(c) {
+  const log = [];
   let out;
   try {
     out = emitProgram(loadProgram(c.entry, { optimize: !!c.optimize })).files;
   } catch (err) {
-    report(false, c.name, `  transpile error: ${err.message}`);
-    continue;
+    report(false, c.name, `  transpile error: ${err.message}`, log);
+    return log;
   }
 
   if (UPDATE) {
@@ -94,30 +130,52 @@ for (const c of cases) {
     const [only] = out.values();
     if (out.size !== 1 || only !== input) diffs.push(`  plain Odin was not passed through unchanged, first change at line ${firstDiffLine(input, only ?? "")}`);
   }
-  report(!diffs.length, `${c.name} (transpiled)`, diffs.join("\n"));
-
-  const dir = join(work, c.name.replace(/\//g, "_"));
-  writeTree(dir, out);
-  const r = spawnSync("odin", ["run", dir, `-out:${join(dir, "prog")}`], { encoding: "utf8" });
-  if (UPDATE && r.status === 0) writeFileSync(c.stdout, r.stdout);
-  const expected = existsSync(c.stdout) ? readFileSync(c.stdout, "utf8") : undefined;
-  const ok = r.status === 0 && r.stdout === expected;
-  report(ok, `${c.name} (run)`, ok ? "" : `  exit ${r.status}\n--- expected\n${expected ?? "<missing fixture>\n"}--- got\n${r.stdout}${r.stderr}`);
+  report(!diffs.length, `${c.name} (transpiled)`, diffs.join("\n"), log);
 
   // the same program transpiled the other way must behave the same
   let other;
   try {
     other = emitProgram(loadProgram(c.entry, { optimize: !c.optimize })).files;
   } catch (err) {
-    report(false, `${c.name} (${c.optimize ? "without" : "with"} -opt)`, `  transpile error: ${err.message}`);
-    continue;
+    other = err;
   }
-  if ([...other].every(([f, text]) => out.get(f) === text) && other.size === out.size) continue;
-  const odir = join(work, c.name.replace(/\//g, "_") + "_other");
-  writeTree(odir, other);
-  const o = spawnSync("odin", ["run", odir, `-out:${join(odir, "prog")}`], { encoding: "utf8" });
-  const same = o.status === 0 && o.stdout === expected;
-  report(same, `${c.name} (run ${c.optimize ? "without" : "with"} -opt)`, same ? "" : `  exit ${o.status}\n--- expected\n${expected}--- got\n${o.stdout}${o.stderr}`);
+  const differs = !(other instanceof Error) && !([...other].every(([f, text]) => out.get(f) === text) && other.size === out.size);
+  const dir = join(work, c.name.replace(/\//g, "_"));
+  writeTree(dir, out);
+  let odir;
+  if (differs) writeTree((odir = dir + "_other"), other);
+  const [r, o] = await Promise.all([odinRun(dir), odir && odinRun(odir)]);
+
+  if (UPDATE && r.status === 0) writeFileSync(c.stdout, r.stdout);
+  const expected = existsSync(c.stdout) ? readFileSync(c.stdout, "utf8") : undefined;
+  const ok = r.status === 0 && r.stdout === expected;
+  report(ok, `${c.name} (run)`, ok ? "" : `  exit ${r.status}\n--- expected\n${expected ?? "<missing fixture>\n"}--- got\n${r.stdout}${r.stderr}`, log);
+
+  const other_ = `${c.name} (${c.optimize ? "without" : "with"} -opt)`;
+  if (other instanceof Error) report(false, other_, `  transpile error: ${other.message}`, log);
+  else if (o) {
+    const same = o.status === 0 && o.stdout === expected;
+    report(same, `${c.name} (run ${c.optimize ? "without" : "with"} -opt)`, same ? "" : `  exit ${o.status}\n--- expected\n${expected}--- got\n${o.stdout}${o.stderr}`, log);
+  }
+  return log;
+}
+
+/** Runs the cases JOBS at a time, printing each one's results in case order as soon as all before it are done. */
+async function runCases() {
+  const logs = new Array(cases.length);
+  let next = 0;
+  let printed = 0;
+  const flush = () => {
+    while (printed < cases.length && logs[printed]) for (const line of logs[printed++]) console.log(line);
+  };
+  const worker = async () => {
+    while (next < cases.length) {
+      const i = next++;
+      logs[i] = await testCase(cases[i]);
+      flush();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(JOBS, cases.length) }, worker));
 }
 
 function expectError(name, want, f) {
@@ -130,32 +188,36 @@ function expectError(name, want, f) {
   }
 }
 
-for (const f of readdirSync("tests/errors").filter((f) => f.endsWith(".vidar"))) {
-  const path = join("tests/errors", f);
-  const text = readFileSync(path, "utf8");
-  expectError(path, text.match(/^\/\/ error: (.*)$/m)[1], () => transpile([{ path, text }]));
-}
+(async () => {
+  await runCases();
 
-// multi-package programs that must fail; the expected message is on the first line of main.vidar
-for (const d of readdirSync("tests/errors_pkg")) {
-  const dir = join("tests/errors_pkg", d);
-  const want = readFileSync(join(dir, "main.vidar"), "utf8").match(/^\/\/ error: (.*)$/m)[1];
-  expectError(dir, want, () => emitProgram(loadProgram(dir)));
-}
+  for (const f of readdirSync("tests/errors").filter((f) => f.endsWith(".vidar"))) {
+    const path = join("tests/errors", f);
+    const text = readFileSync(path, "utf8");
+    expectError(path, text.match(/^\/\/ error: (.*)$/m)[1], () => transpile([{ path, text }]));
+  }
 
-// Real-world plain Odin must come out byte-for-byte unchanged.
-const root = execSync("odin root", { encoding: "utf8" }).trim();
-const sample = ["core/fmt/fmt.odin", "core/strings/strings.odin", "core/mem/allocators.odin", "core/math/linalg/general.odin", "core/encoding/json/parser.odin"];
-for (const rel of sample) {
-  const path = join(root, rel);
-  const text = readFileSync(path, "utf8");
-  let ok = false;
-  try {
-    const out = transpile([{ path, text }]);
-    ok = out.size === 1 && [...out.values()][0] === text;
-  } catch {}
-  report(ok, `passthrough $ODIN_ROOT/${rel}`);
-}
+  // multi-package programs that must fail; the expected message is on the first line of main.vidar
+  for (const d of readdirSync("tests/errors_pkg")) {
+    const dir = join("tests/errors_pkg", d);
+    const want = readFileSync(join(dir, "main.vidar"), "utf8").match(/^\/\/ error: (.*)$/m)[1];
+    expectError(dir, want, () => emitProgram(loadProgram(dir)));
+  }
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+  // Real-world plain Odin must come out byte-for-byte unchanged.
+  const root = execSync("odin root", { encoding: "utf8" }).trim();
+  const sample = ["core/fmt/fmt.odin", "core/strings/strings.odin", "core/mem/allocators.odin", "core/math/linalg/general.odin", "core/encoding/json/parser.odin"];
+  for (const rel of sample) {
+    const path = join(root, rel);
+    const text = readFileSync(path, "utf8");
+    let ok = false;
+    try {
+      const out = transpile([{ path, text }]);
+      ok = out.size === 1 && [...out.values()][0] === text;
+    } catch {}
+    report(ok, `passthrough $ODIN_ROOT/${rel}`);
+  }
+
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();
