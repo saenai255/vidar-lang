@@ -122,7 +122,10 @@ export function lex(src: string, file: string): Token[] {
     if (/[A-Za-z_]/.test(c) || c.charCodeAt(0) > 127) {
       let j = i;
       while (j < src.length && (/[A-Za-z0-9_]/.test(src[j]) || src.charCodeAt(j) > 127)) j++;
-      push(KEYWORDS.has(src.slice(i, j)) ? "kw" : "ident", j - i);
+      // `do!` (a macro call) and `do :: ...` (its declaration) name the macro, not the keyword
+      const word = src.slice(i, j);
+      const asName = word === "do" && ((src[j] === "!" && src[j + 1] !== "=") || /^\s*::/.test(src.slice(j, j + 8)));
+      push(KEYWORDS.has(word) && !asName ? "kw" : "ident", j - i);
       continue;
     }
     if (/[0-9]/.test(c) || (c === "." && /[0-9]/.test(src[i + 1] ?? "") && toks[toks.length - 1]?.text !== ".")) {

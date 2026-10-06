@@ -1,0 +1,6 @@
+// error: match!: '_' must be in the last arm
+package main
+main :: proc() {
+	x := 1
+	_ = match!(x) { _ => 0, 1 => 1 }
+}

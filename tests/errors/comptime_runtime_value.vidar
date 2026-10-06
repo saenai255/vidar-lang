@@ -1,0 +1,8 @@
+// error: comptime expression cannot be evaluated at compile time: 'k' is a runtime value
+package main
+square :: proc(x: int) -> int { return x * x }
+main :: proc() {
+	k := 3
+	x := comptime square(k)
+	_ = x
+}

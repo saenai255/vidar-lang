@@ -21,6 +21,8 @@ const STMT_DIRECTIVES = new Set(["#no_type_assert", "#type_assert", "#partial", 
 
 const ALWAYS_STMT_DIRECTIVES = new Set(["#no_bounds_check", "#bounds_check", "#no_type_assert", "#type_assert"]);
 
+const EXPR_START_KEYWORDS = new Set(["cast", "transmute", "auto_cast", "struct", "union", "enum", "bit_set", "map", "distinct", "matrix", "typeid", "dynamic"]);
+
 const STMT_KEYWORDS = new Set(["for", "switch", "if", "when"]);
 
 export interface ParseOptions {
@@ -621,6 +623,28 @@ export class Parser {
     });
   }
 
+  /** `comptime` is a prefix when an expression follows on the same line; `comptime(x)` stays a call. */
+  private comptimePrefixAhead(): boolean {
+    const t = this.peek();
+    if (t.pre.includes("\n")) return false;
+    switch (t.kind) {
+      case "ident":
+      case "int":
+      case "float":
+      case "imag":
+      case "string":
+      case "rune":
+      case "directive":
+        return true;
+      case "kw":
+        return EXPR_START_KEYWORDS.has(t.text);
+      case "op":
+        if (t.text === "(" || t.text === "[") return t.pre !== "";
+        return ["-", "!", "~", "&"].includes(t.text) && t.pre !== "" && this.peek(2).pre === "";
+    }
+    return false;
+  }
+
   /** `closure(...)` followed by `->` is a closure type even outside a type position. */
   private closureTypeAhead(): boolean {
     let depth = 0;
@@ -817,6 +841,11 @@ export class Parser {
         if (t.text === "comptime" && this.isKw("proc", this.peek())) {
           this.i++;
           return this.parseProc(true, start);
+        }
+        if (t.text === "comptime" && this.comptimePrefixAhead()) {
+          this.i++;
+          const x = this.parseExpr();
+          return this.node("Comptime", start, { x });
         }
         if (t.text === "closure" && this.isOp("(", this.peek()) && (typeCtx || this.closureTypeAhead())) {
           this.i++;

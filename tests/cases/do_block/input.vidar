@@ -1,0 +1,45 @@
+package main
+
+import "core:fmt"
+
+Point :: struct { x, y: f32 }
+
+classify :: proc(n: int) -> string {
+	return do! {
+		if n < 2 do return "small"
+		for d in 2..<n {
+			if n % d == 0 do return "composite"
+		}
+		return "prime"
+	}
+}
+
+main :: proc() {
+	xs := []int{3, 1, 4, 1, 5}
+	total := do! {
+		sum := 0
+		for x in xs do sum += x
+		return sum
+	} * 2
+	p := do! {
+		q := Point{1, 2}
+		q.x += 10
+		return q
+	}
+	half := do!(f32) { return 3 }
+	avg := do! {
+		if len(xs) == 0 do return 0
+		return f64(total) / 4
+	}
+	nested := do! {
+		inner := do! { return 20 }
+		return inner + match!(inner) { 20 => 1, _ => 0 }
+	}
+	fn := proc() -> int { return 7 }
+	callback := do! {
+		f := proc() -> int { return 100 }
+		return f() + fn()
+	}
+	fmt.println(total, p, half / 2, avg, nested, callback)
+	fmt.println(classify(1), classify(9), classify(7))
+}

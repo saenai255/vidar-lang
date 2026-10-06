@@ -174,7 +174,7 @@
         },
         {
           "name": "storage.modifier.comptime.vidar",
-          "match": "\\bcomptime\\b(?=\\s+proc)"
+          "match": "\\bcomptime\\b(?=[ \\t]+[A-Za-z_0-9\"'(\\[#.!~&-])"
         },
         {
           "name": "constant.language.vidar",

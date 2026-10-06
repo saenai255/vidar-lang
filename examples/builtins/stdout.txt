@@ -4,4 +4,7 @@ total: 13
 with_allocator: allocations tracked: 1
 with_allocator: all freed: true
 locked: counter = 4000
+match: 4 A B C
+match: positive
+do: 10 8
 mode: 2

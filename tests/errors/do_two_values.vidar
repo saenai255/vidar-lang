@@ -1,0 +1,6 @@
+// error: do!: 'return' takes exactly one value
+package main
+main :: proc() {
+	x := do! { return 1, 2 }
+	_ = x
+}

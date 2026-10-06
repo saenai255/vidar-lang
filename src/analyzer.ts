@@ -2,7 +2,7 @@ import { CompileError, Pos, Token } from "./lexer";
 import { Block, Expr, File, Node, Param, ProcSig, Stmt, children } from "./ast";
 import { Parser } from "./parser";
 import { CaptureSym, Ctx, GlobalSym, LocalSym, PackageInfo, PkgSym, Scope, Sym, Ty } from "./scope";
-import { CallSpan, Interp, Val, respace, valueToTokens, tokensOf } from "./comptime";
+import { CallSpan, Interp, NotConstant, Val, joinTokens, respace, valueToTokens, tokensOf } from "./comptime";
 
 /** Annotation accessor: analysis results live in `_`-prefixed fields on nodes. */
 export const A = (n: object) => n as Record<string, any>;
@@ -10,6 +10,7 @@ export const A = (n: object) => n as Record<string, any>;
 type ProcLit = Extract<Expr, { k: "ProcLit" }>;
 type ValueDecl = Extract<Stmt, { k: "ValueDecl" }>;
 type MacroCall = Extract<Expr, { k: "MacroCall" }>;
+type ComptimeExpr = Extract<Expr, { k: "Comptime" }>;
 type ImplBlock = Extract<Stmt, { k: "ImplBlock" }>;
 type Selector = Extract<Expr, { k: "Selector" }>;
 type CompoundLit = Extract<Expr, { k: "CompoundLit" }>;
@@ -91,6 +92,7 @@ export class Analyzer {
   readonly tokText = new Map<Token, string>();
   private depth = 0;
   private stmtStack: Node[] = [];
+  private macroCalls: MacroCall[] = [];
   private pendingImpls: { node: ImplBlock; scope: Scope; pkg: PackageInfo }[] = [];
   private pendingIfaces: { node: Extract<Expr, { k: "InterfaceType" }>; sym: GlobalSym }[] = [];
   private bodiless: { sym: GlobalSym; lit: ProcLit }[] = [];
@@ -457,6 +459,8 @@ export class Analyzer {
         e.args.forEach((a) => this.expr(a, scope));
         const fnSym = e.fn.k === "Ident" ? A(e.fn)._sym : e.fn.k === "Selector" ? A(e.fn)._pkgMember : undefined;
         const ifaceVal = fnSym?.kind === "global" ? fnSym.decl.values[fnSym.index] : undefined;
+        if (ifaceVal?.k === "ProcLit" && ifaceVal.comptime)
+          throw new CompileError(`'${fnSym!.name}' is a comptime proc: invoke it as a macro with '${fnSym!.name}!(...)', or fold it with 'comptime ${fnSym!.name}(...)' when every argument is a constant`, posOf(e));
         if (ifaceVal?.k === "InterfaceType") {
           A(e)._ifaceConv = fnSym;
           if (e.args.length === 1) this.requirePointer(e.args[0], fnSym);
@@ -499,6 +503,12 @@ export class Analyzer {
       case "InterfaceType":
         if (!A(e)._ifaceSym) throw new CompileError("interfaces must be declared as named constants: Name :: interface { ... }", posOf(e));
         return;
+      case "Comptime": {
+        const out = this.foldComptime(e, scope);
+        A(e)._expansion = out;
+        this.expr(out, scope);
+        return;
+      }
       case "Quote":
         throw new CompileError("'quote' is only allowed inside comptime procs", posOf(e));
       default:
@@ -694,6 +704,8 @@ export class Analyzer {
         return { t: "sig", closure: !!e.captures, sig: e.sig, scope };
       case "MacroCall":
         return A(e)._expansion ? this.typeOf(A(e)._expansion, scope, depth + 1) : undefined;
+      case "Comptime":
+        return this.typeOf(A(e)._expansion ?? e.x, scope, depth + 1);
       case "Call": {
         const fn = e.fn;
         if (fn.k === "Ident") {
@@ -1093,29 +1105,76 @@ export class Analyzer {
     }
   }
 
-  expandMacro(call: MacroCall, scope: Scope, position: "expr" | "stmt"): Expr | Stmt[] {
+  /** Resolves a macro call and its arguments; `evalValue` evaluates constant arguments (default: in `scope`). */
+  macroInvocation(call: MacroCall, scope: Scope, evalValue?: (e: Expr) => Val): { sym: GlobalSym; lit: ProcLit; args: Val[] } {
     const { sym, lit } = this.macroSym(call, scope);
     A(call)._macroSym = sym;
     A(call)._scope = scope;
     const params = lit.sig.params.flatMap((p) => p.names.map((n) => ({ name: n.name, type: p.type!, def: p.value })));
     const given = this.bindMacroArgs(call, params, sym);
+    const args = params.map((p, i) => (given[i] ? this.macroArg(p.name, p.type, given[i]!, scope, sym, evalValue) : this.macroDefault(p.name, p.type, p.def!, sym)));
+    return { sym, lit, args };
+  }
+
+  expandMacro(call: MacroCall, scope: Scope, position: "expr" | "stmt"): Expr | Stmt[] {
+    const { sym, lit, args } = this.macroInvocation(call, scope);
     {
-      const args = params.map((p, i) => (given[i] ? this.macroArg(p.name, p.type, given[i]!, scope, sym) : this.macroDefault(p.name, p.type, p.def!, sym)));
       let result: Val;
+      this.macroCalls.push(call);
       try {
-        result = this.interp.callComptime(sym, lit, args, posOf(call));
+        result = this.interp.callComptime(sym, lit, args, posOf(call), scope);
       } catch (err) {
         if (err instanceof CompileError) {
           err.message = `in expansion of '${sym.name}!': ${err.message}`;
           err.pos ??= posOf(call);
         }
         throw err;
+      } finally {
+        this.macroCalls.pop();
       }
       return this.macroResult(result, lit, sym, scope, position, call);
     }
   }
 
-  private callSpan(call: MacroCall): CallSpan {
+  /** The code a `comptime expr` folds to. */
+  private foldComptime(e: ComptimeExpr, scope: Scope): Expr {
+    const pos = posOf(e);
+    let v: Val;
+    try {
+      v = this.interp.evalAt(e.x, scope, pos);
+    } catch (err) {
+      if (err instanceof NotConstant) err.message = `comptime expression cannot be evaluated at compile time: ${err.message}`;
+      else if (err instanceof CompileError) err.message = `in comptime expression: ${err.message}`;
+      throw err;
+    }
+    if (v.k === "proc") throw new CompileError("comptime expression produced a proc, which is already a constant: drop 'comptime'", pos);
+    const toks = respace(this.comptimeTokens(v, pos), this.callSpan(e));
+    return this.parseTokens([...toks, eofTok(pos)], (p) => p.parseExpr());
+  }
+
+  private comptimeTokens(v: Val, pos: Pos): Token[] {
+    const brace = (inner: Token[]): Token[] => [{ kind: "op", text: "{", pre: "", pos }, ...inner, { kind: "op", text: "}", pre: "", pos }];
+    switch (v.k) {
+      case "void":
+        throw new CompileError("comptime expression has no value", pos);
+      case "stmts":
+        throw new CompileError("comptime expression produced statements, not an expression", pos);
+      case "array":
+        return brace(v.items.flatMap((x, i) => [...(i ? [{ kind: "op" as const, text: ",", pre: "", pos }] : []), ...this.comptimeTokens(x, pos)]));
+      case "struct":
+        return brace(
+          [...v.fields].flatMap(([name, x], i) => [
+            ...(i ? [{ kind: "op" as const, text: ",", pre: "", pos }] : []),
+            { kind: "ident" as const, text: name, pre: " ", pos },
+            { kind: "op" as const, text: "=", pre: " ", pos },
+            ...this.comptimeTokens(x, pos),
+          ]),
+        );
+    }
+    return valueToTokens(v, pos, "expr");
+  }
+
+  private callSpan(call: MacroCall | ComptimeExpr): CallSpan {
     return { file: posOf(call).file, from: posOf(call).line, to: call.toks[call.end - 1].pos.line };
   }
 
@@ -1164,7 +1223,7 @@ export class Analyzer {
     return this.interp.evalIn(def, macro.scope);
   }
 
-  private macroArg(name: string, type: Expr, toks: Token[], scope: Scope, macro: GlobalSym): Val {
+  private macroArg(name: string, type: Expr, toks: Token[], scope: Scope, macro: GlobalSym, evalValue?: (e: Expr) => Val): Val {
     const pos = toks[0].pos;
     const { kind, of } = this.paramKind(type);
     switch (kind) {
@@ -1186,7 +1245,7 @@ export class Analyzer {
       case "value": {
         const node = this.parseTokens(toks, (p) => p.parseExpr());
         try {
-          return this.interp.evalIn(node, scope);
+          return evalValue ? evalValue(node) : this.interp.evalIn(node, scope);
         } catch (err) {
           if (err instanceof CompileError) err.message = `argument '${name}' of '${macro.name}!' must be a compile-time constant: ${err.message}`;
           throw err;
@@ -1212,6 +1271,101 @@ export class Analyzer {
     const check = this.parseTokens([...respace(toks.slice(0, -1)), toks[toks.length - 1]], (p) => p.parseStmt());
     this.stmt(check, scope);
     (A(owner)._pre ??= []).push(check);
+  }
+
+  /** Declares `name := <toks>` just before the statement being analyzed; the result names it. */
+  hoist(toks: Token[], scope: Scope | undefined, pos: Pos, name: string): Val {
+    const owner = this.hoistTarget(scope, pos, `'${joinTokens(toks)}' must be evaluated once here; assign it to a variable first`);
+    const decl = this.parseTokens([...respace([...tokensOf(`${name} :=`, pos), ...toks]), eofTok(pos)], (p) => p.parseStmt());
+    this.stmt(decl, scope!);
+    (A(owner)._pre ??= []).push(decl);
+    return identVal(name, pos);
+  }
+
+  /** The statement code can be hoisted in front of; anywhere else, that could change when (or whether) it runs. */
+  private hoistTarget(scope: Scope | undefined, pos: Pos, message: string): Node {
+    const owner = this.stmtStack[this.stmtStack.length - 1];
+    if (!owner || !scope?.ctx || !["ValueDecl", "Assign", "ExprStmt", "Return"].includes(owner.k)) throw new CompileError(message, pos);
+    return owner;
+  }
+
+  /**
+   * `do! { ...; return v }`: the block runs just before the current statement, as a labeled block
+   * where each `return v` stores `v` and leaves it; the result names the stored value.
+   */
+  blockValue(type: Token[] | undefined, body: Token[], scope: Scope | undefined, pos: Pos, id: number): Val {
+    const owner = this.hoistTarget(scope, pos, "do! can only be used in a declaration, an assignment, an expression statement or a return");
+    const label = `__do${id}`;
+    const result = `__do${id}_result`;
+    const block = this.parseTokens([...body, eofTok(pos)], (p) => p.parseBlock());
+    const returns: Extract<Stmt, { k: "Return" }>[] = [];
+    const findReturns = (n: Node) => {
+      if (n.k === "ProcLit") return;
+      if (n.k === "Return") returns.push(n);
+      children(n).forEach(findReturns);
+    };
+    block.stmts.forEach(findReturns);
+    if (!returns.length) throw new CompileError("do!: the block needs a 'return value'", pos);
+    for (const r of returns) if (r.results.length !== 1) throw new CompileError("do!: 'return' takes exactly one value", posOf(r));
+
+    const snippet = (src: string, at: Pos, pre: string) => respace(tokensOf(src, at).filter((t) => t.kind !== "semi" || t.text === ";")).map((t, j) => (j ? t : { ...t, pre }));
+    const toks: Token[] = snippet(`${label}:`, pos, "");
+    let i = block.start;
+    for (const r of returns) {
+      const ret = r.toks[r.start];
+      const before = block.toks.slice(i, r.start);
+      // Odin rejects `do { ... }`
+      const viaDo = before[before.length - 1]?.kind === "kw" && before[before.length - 1].text === "do";
+      if (viaDo) before.pop();
+      toks.push(...before, ...snippet(`{ ${result} =`, ret.pos, viaDo ? " " : ret.pre), ...slice(r.results[0]), ...snippet(`; break ${label} }`, ret.pos, ""));
+      i = r.end;
+    }
+    const close = block.end - 1;
+    toks.push(...block.toks.slice(i, close));
+    const end = block.toks[close];
+    const fellOff = block.stmts[block.stmts.length - 1]?.k !== "Return";
+    // on the closing brace's line, so a panic points there
+    if (fellOff) toks.push(...snippet("; __vidar.do_fell_off()", end.pos, end.pre));
+    toks.push(fellOff ? { ...end, pre: " " } : end);
+    const labeled = this.parseTokens([...toks, eofTok(pos)], (p) => p.parseStmt());
+
+    const sym = this.declareLocal(result, scope!, {});
+    this.stmt(labeled, scope!);
+    const typeText = type ? joinTokens(type) : this.blockResultType(labeled, result, scope!, pos);
+    const decl = this.parseTokens([...respace(tokensOf(`${result}: ${typeText}`, pos)), eofTok(pos)], (p) => p.parseStmt());
+    this.stmt(decl, scope!);
+    sym.ty = (A(decl)._syms as LocalSym[])[0].ty;
+    (A(owner)._pre ??= []).push(decl, labeled);
+    // the block already takes up the call's lines
+    const call = this.macroCalls[this.macroCalls.length - 1];
+    if (call) A(call)._linesHoisted = true;
+    return identVal(result, pos);
+  }
+
+  /** The type of the values a `do!` block stores in `result`: the first typed one, else the default type of the untyped ones. */
+  private blockResultType(labeled: Stmt, result: string, scope: Scope, pos: Pos): string {
+    const types: Ty[] = [];
+    const visit = (n: Node, sc: Scope) => {
+      if (n.k === "ProcLit") return;
+      if (n.k === "Block" && A(n)._scope) sc = A(n)._scope;
+      if (n.k === "Assign" && n.lhs[0]?.k === "Ident" && n.lhs[0].name === result) {
+        const ty = this.typeOf(n.rhs[0], sc);
+        if (ty) types.push(ty);
+      }
+      children(n).forEach((c) => visit(c, sc));
+    };
+    visit(labeled, scope);
+    const typed = types.find((t) => this.normalize(t)?.t !== "untyped");
+    const cannot = () => new CompileError("do!: cannot infer the type of the result; give it as do!(T) { ... }", pos);
+    if (typed) {
+      if (typed.t === "node" && typed.scope.package !== scope.package) throw cannot();
+      return this.typeName(typed) ?? (() => { throw cannot(); })();
+    }
+    const kinds = types.map((t) => this.normalize(t)).map((t) => (t?.t === "untyped" ? t.kind : ""));
+    const kind = kinds.includes("float") ? "float" : kinds[0];
+    const name = ({ int: "int", float: "f64", string: "string", rune: "rune", bool: "bool" } as Record<string, string>)[kind];
+    if (!name) throw cannot();
+    return name;
   }
 
   private isBasic(ty: Ty): boolean {
@@ -1243,6 +1397,14 @@ export class Analyzer {
 
 export function eofTok(pos: Pos): Token {
   return { kind: "eof", text: "", pre: "", pos };
+}
+
+function identVal(name: string, pos: Pos): Val {
+  return { k: "expr", toks: tokensOf(name, pos).filter((t) => t.kind !== "semi") };
+}
+
+function slice(n: { toks: Token[]; start: number; end: number }): Token[] {
+  return n.toks.slice(n.start, n.end);
 }
 
 function synthIdent(name: string, pos: Pos): Expr {

@@ -1,0 +1,6 @@
+// error: do!: the block needs a 'return value'
+package main
+main :: proc() {
+	x := do! { y := 1; _ = y }
+	_ = x
+}

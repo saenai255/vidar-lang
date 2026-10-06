@@ -1,0 +1,11 @@
+// error: comptime expression cannot be evaluated at compile time: 'n' is a runtime value
+package main
+main :: proc() {
+	n := 4
+	x := comptime do! {
+		total := 0
+		for i in 1..=n do total += i
+		return total
+	}
+	_ = x
+}

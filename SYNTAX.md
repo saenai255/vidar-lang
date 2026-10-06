@@ -212,6 +212,10 @@ Comptime builtins:
 | `ident(s)` | a name from a string |
 | `parse_expr(s)` | an `Expr` parsed from a string |
 | `split_comparison(e)` | `[lhs, op, rhs]` for a comparison, otherwise empty |
+| `split_range(e)` | `[lo, op, hi]` for a range `lo..<hi` / `lo..=hi`, otherwise empty |
+| `match_arms(body)` | the arms of a `{ p1, p2 => value, ... }` block: structs with `patterns` and `value` |
+| `block_value(T, body)` | what `do!` expands to: `body` hoisted before the current statement, its `return`s storing the result (`T` is `_` to infer it) |
+| `once(e)` | `e` when evaluating it twice is harmless (no calls), otherwise a temporary holding it, declared just before the current statement |
 | `is_literal(e)` | whether `e` is a literal (optionally negated or parenthesized) |
 | `call_site()` | `"file:line"` of the macro call |
 | `compile_error(...)` | stop compilation with a message |
@@ -226,6 +230,28 @@ Rules:
 - A `Stmt` macro can also be invoked at file scope, e.g. to generate declarations.
 
 Example: [examples/macros](examples/macros).
+
+### `comptime` expressions
+
+| Syntax | Meaning |
+|---|---|
+| `comptime expr` | evaluate `expr` at compile time and replace it with the result; a compile error if it can't be |
+| `comptime do! { ...; return v }` | run a block at compile time; folds to `v` |
+
+```odin
+a := comptime fib(20)                      // a := 6765
+primes: [5]int = comptime first_primes(5)  // { 2, 3, 5, 7, 11 }
+total := comptime do! { s := 0; for i in 1..=10 do s += i; return s }  // 55
+d := comptime square(k)                    // error: 'k' is a runtime value
+```
+
+Rules:
+- Applies to the whole expression after it. Only a prefix when an expression follows on the same line; `comptime(x)` is a call.
+- Comptime and regular procs are called directly, without `!`. Macros are expanded and their code is evaluated too.
+- Numbers, strings and booleans fold to literals; arrays and structs to untyped compound literals.
+- Anything that needs run-time values, `compile_error` and other evaluation errors stop compilation.
+
+Example: [examples/comptime](examples/comptime).
 
 ## Goroutines and channels
 
@@ -259,6 +285,10 @@ Available in every file with no import; a declaration of your own with the same 
 | `track!("label") { ... }` / `track! { ... }` | gives the block a tracking `context.allocator` and prints every allocation still live at its end to stderr (label defaults to the call site); without `-debug` the block runs untracked |
 | `track!(allocator) { ... }` / `track!(allocator, "label") { ... }` | same, tracking allocations made from `allocator`; the label is told apart by being a string literal |
 | `format!("hi {name}, {x:.2f}")` | interpolated temp string; `{expr}` uses `%v`, `{expr:spec}` uses `%spec`, `{{` and `}}` are literal braces |
+| `match!(value) { p => result, ... }` | the result of the first arm whose pattern matches `value`: a value (`==`), a range `lo..<hi` / `lo..=hi`, `p1, p2` for either, or `_` for anything (last arm only); panics when nothing matches. `value` is evaluated once |
+| `match! { cond => result, ... }` | the result of the first arm whose condition holds |
+| `do! { ...; return value }` | evaluates to the returned value; the block runs just before the enclosing statement, and `return` leaves the block, not the procedure |
+| `do!(T) { ... }` | same, with the result type given when it can't be inferred |
 | `dbg!(expr)` | prints `[file:line] expr = value` to stderr and evaluates to the value |
 | `check!(cond)` / `check!(cond, "msg")` | panics when `cond` is false, showing the expression and the values of non-literal comparison operands |
 | `todo!()` / `todo!("msg")` | panics with "not yet implemented" |

@@ -67,7 +67,9 @@ export type Expr =
   | N<"Raw", {}>
   /** `blockArg`: the last argument was written as a trailing block, `name!(...) { ... }` or `name! { ... }` */
   | N<"MacroCall", { path: string[]; args: Token[][]; blockArg: boolean; _expansion?: Expr }>
-  | N<"Quote", { kind: "expr" | "stmt"; body: Token[] }>;
+  | N<"Quote", { kind: "expr" | "stmt"; body: Token[] }>
+  /** `comptime expr`: folded to a constant when it can be evaluated at compile time, otherwise left as is */
+  | N<"Comptime", { x: Expr }>;
 
 export interface Block extends Base {
   k: "Block";

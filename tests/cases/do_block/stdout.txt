@@ -1,0 +1,2 @@
+28 Point{x = 11, y = 2} 1.5 7 21 107
+small composite prime

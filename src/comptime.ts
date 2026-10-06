@@ -26,6 +26,9 @@ interface Cell {
   v: Val;
 }
 
+/** The expression depends on something only known at run time. */
+export class NotConstant extends CompileError {}
+
 const VOID: Val = { k: "void" };
 const MAX_STEPS = 5_000_000;
 const BASIC_TYPES = new Set([
@@ -62,23 +65,45 @@ export class Interp {
   private steps = 0;
   /** where the macro currently being expanded was invoked */
   callSite: Pos | undefined;
+  /** the scope it was invoked in */
+  scope: Scope | undefined;
+  /** while folding a `comptime` expression: the environment macros invoked from it see */
+  foldEnv: Env | undefined;
 
-  constructor(private an: Analyzer) {}
+  constructor(readonly an: Analyzer) {}
 
-  callComptime(sym: GlobalSym, lit: ProcLit, args: Val[], pos: Pos): Val {
+  callComptime(sym: GlobalSym, lit: ProcLit, args: Val[], pos: Pos, scope?: Scope): Val {
     this.steps = 0;
-    const outer = this.callSite;
+    const [outerSite, outerScope, outerFold] = [this.callSite, this.scope, this.foldEnv];
     this.callSite = pos;
+    this.scope = scope;
+    this.foldEnv = undefined;
     try {
       return this.invoke({ k: "proc", sym, lit }, args, pos);
     } finally {
-      this.callSite = outer;
+      this.callSite = outerSite;
+      this.scope = outerScope;
+      this.foldEnv = outerFold;
     }
   }
 
   evalIn(e: Expr, scope: Scope): Val {
     this.steps = 0;
     return this.eval(e, new Env(null, scope));
+  }
+
+  /** Evaluates a `comptime expr` written in ordinary code. */
+  evalAt(e: Expr, scope: Scope, pos: Pos): Val {
+    const [outerSite, outerScope, outerSteps, outerFold] = [this.callSite, this.scope, this.steps, this.foldEnv];
+    this.callSite = pos;
+    this.scope = scope;
+    this.steps = 0;
+    this.foldEnv = new Env(null, scope);
+    try {
+      return this.eval(e, this.foldEnv);
+    } finally {
+      [this.callSite, this.scope, this.steps, this.foldEnv] = [outerSite, outerScope, outerSteps, outerFold];
+    }
   }
 
   private tick(pos: Pos): void {
@@ -94,7 +119,7 @@ export class Interp {
       if (!v) throw new CompileError(`missing argument '${param.name}' for '${p.sym.name}'`, pos);
       env.vars.set(param.name, { v });
     });
-    if (!p.lit.body) throw new CompileError(`'${p.sym.name}' has no body to evaluate`, pos);
+    if (!p.lit.body) throw new NotConstant(`'${p.sym.name}' has no body to evaluate`, pos);
     const c = this.block(p.lit.body, env);
     return c.k === "return" ? c.v : VOID;
   }
@@ -109,7 +134,7 @@ export class Interp {
     const sym = this.an.lookup(name, env.scope, null);
     if (!sym) {
       if (BASIC_TYPES.has(name)) return { k: "type", toks: tokensOf(name, pos) };
-      throw new CompileError(`'${name}' is not known at compile time`, pos);
+      throw new NotConstant(`'${name}' is not known at compile time`, pos);
     }
     return this.symVal(sym, pos);
   }
@@ -118,7 +143,7 @@ export class Interp {
     switch (sym.kind) {
       case "global": {
         const value = sym.decl.values[sym.index];
-        if (!sym.isConst || !value) throw new CompileError(`'${sym.name}' is a runtime variable and is not available at compile time`, pos);
+        if (!sym.isConst || !value) throw new NotConstant(`'${sym.name}' is a runtime variable and is not available at compile time`, pos);
         if (value.k === "ProcLit") return { k: "proc", sym, lit: value };
         if (isType(value)) return { k: "type", toks: slice(value), node: value, scope: sym.scope };
         if (sym.constVal) return sym.constVal;
@@ -136,9 +161,9 @@ export class Interp {
           if (isType(sym.value)) return { k: "type", toks: slice(sym.value), node: sym.value, scope: sym.scope };
           return this.eval(sym.value, new Env(null, sym.scope));
         }
-        throw new CompileError(`'${sym.name}' is a runtime value and is not available at compile time`, pos);
+        throw new NotConstant(`'${sym.name}' is a runtime value and is not available at compile time`, pos);
       default:
-        throw new CompileError(`'${sym.name}' is not available at compile time`, pos);
+        throw new NotConstant(`'${sym.name}' is not available at compile time`, pos);
     }
   }
 
@@ -222,7 +247,7 @@ export class Interp {
         if (s.op === "continue") return { k: "continue" };
         break;
     }
-    throw new CompileError(`'${s.k}' is not supported in comptime code`, posOf(s));
+    throw new NotConstant(`'${s.k}' is not supported in comptime code`, posOf(s));
   }
 
   private rangeFor(s: Extract<Stmt, { k: "RangeFor" }>, env: Env): Completion {
@@ -289,7 +314,7 @@ export class Interp {
         if (e.op === "-" && (v.k === "int" || v.k === "float")) return { k: v.k, v: -v.v };
         if (e.op === "+") return v;
         if (e.op === "~" && v.k === "int") return { k: "int", v: ~v.v };
-        throw new CompileError(`unsupported unary '${e.op}' at compile time`, posOf(e));
+        throw new NotConstant(`unsupported unary '${e.op}' at compile time`, posOf(e));
       }
       case "Binary": {
         if (e.op === "&&") return { k: "bool", v: truthy(this.eval(e.x, env), posOf(e)) && truthy(this.eval(e.y, env), posOf(e)) };
@@ -322,7 +347,7 @@ export class Interp {
           if (!f) throw new CompileError(`no field '${e.name}'`, posOf(e));
           return f;
         }
-        throw new CompileError(`cannot select '${e.name}' from ${obj.k} at compile time`, posOf(e));
+        throw new NotConstant(`cannot select '${e.name}' from ${obj.k} at compile time`, posOf(e));
       }
       case "CompoundLit":
         return this.compound(e, env);
@@ -335,9 +360,39 @@ export class Interp {
       case "Quote":
         return instantiate(e.body, e.kind, env, this, posOf(e));
       case "MacroCall":
-        throw new CompileError("inside comptime procs, call other comptime procs directly (without '!')", posOf(e));
+        if (this.foldEnv) return this.foldMacro(e, env);
+        throw new NotConstant("inside comptime procs, call other comptime procs directly (without '!')", posOf(e));
     }
-    throw new CompileError(`this expression is not supported at compile time`, posOf(e));
+    throw new NotConstant(`this expression is not supported at compile time`, posOf(e));
+  }
+
+  /** A macro called from a `comptime` expression: expand it, then evaluate the code it produced. */
+  private foldMacro(call: Extract<Expr, { k: "MacroCall" }>, env: Env): Val {
+    const pos = posOf(call);
+    const { sym, lit, args } = this.an.macroInvocation(call, env.scope, (node) => this.eval(node, env));
+    const outerFold = this.foldEnv;
+    this.foldEnv = env;
+    let v: Val;
+    try {
+      v = this.invoke({ k: "proc", sym, lit }, args, pos);
+    } finally {
+      this.foldEnv = outerFold;
+    }
+    if (v.k === "stmts") throw new NotConstant(`'${sym.name}!' produces statements`, pos);
+    if (v.k !== "expr") return v;
+    const p = new Parser([...v.toks, { kind: "eof", text: "", pre: "", pos }]);
+    const node = p.parseExpr();
+    p.expectEnd();
+    return this.eval(node, env);
+  }
+
+  /** `do!` while folding: runs the block now and yields what it returns. */
+  runBlock(body: Token[], type: string | undefined, pos: Pos): Val {
+    const env = this.foldEnv!;
+    const block = new Parser([...body, { kind: "eof", text: "", pre: "", pos }]).parseBlock();
+    const c = this.block(block, env);
+    if (c.k !== "return") throw new CompileError("do!: the block needs a 'return value'", pos);
+    return type ? convert(type, c.v) : c.v;
   }
 
   private refCell(e: Expr, env: Env): Cell {
@@ -370,14 +425,14 @@ export class Interp {
     }
     if (fn.k === "Selector" && fn.x.k === "Ident" && fn.x.name === "fmt" && !env.find("fmt")) {
       const b = FMT[fn.name];
-      if (!b) throw new CompileError(`fmt.${fn.name} is not available at compile time`, pos);
+      if (!b) throw new NotConstant(`fmt.${fn.name} is not available at compile time`, pos);
       return b(e.args.map((a) => this.eval(a, env)), pos, this);
     }
     const f = this.eval(fn, env);
     const args = e.args.map((a) => this.eval(a.k === "FieldValue" ? a.value : a, env));
     if (f.k === "proc") return this.invoke(f, args, pos);
     if (f.k === "type") return convert(f.toks.map((t) => t.text).join(""), args[0]);
-    throw new CompileError(`${f.k} is not callable at compile time`, pos);
+    throw new NotConstant(`${f.k} is not callable at compile time`, pos);
   }
 
   fieldsOf(t: Extract<Val, { k: "type" }>, pos: Pos): string[] {
@@ -555,11 +610,16 @@ function strArg(args: Val[], i: number, name: string, pos: Pos): string {
 
 function format(fmt: string, args: Val[]): string {
   let i = 0;
-  return fmt.replace(/%[-+ #0-9.]*([vdsfqi%])/g, (m, c: string) => {
+  return fmt.replace(/%[-+ #0-9.]*([vdsfqixXboc%])/g, (m, c: string) => {
     if (c === "%") return "%";
     const v = args[i++];
     if (!v) return m;
     if (c === "q") return JSON.stringify(display(v));
+    if (v.k === "int" && "xXbo".includes(c)) {
+      const digits = Math.abs(v.v).toString(c === "b" ? 2 : c === "o" ? 8 : 16);
+      return (v.v < 0 ? "-" : "") + (c === "X" ? digits.toUpperCase() : digits);
+    }
+    if (v.k === "int" && c === "c") return String.fromCodePoint(v.v);
     return display(v);
   });
 }
@@ -581,19 +641,117 @@ function exprNode(v: Extract<Val, { k: "expr" }>, pos: Pos): Expr | undefined {
   }
 }
 
+const RANGES = new Set(["..<", "..="]);
+
+function splitBinary(args: Val[], pos: Pos, name: string, ops: Set<string>): Val {
+  const v = args[0];
+  if (v?.k !== "expr") throw new CompileError(`${name}: expected an Expr`, pos);
+  let e = exprNode(v, pos);
+  while (e?.k === "Paren") e = e.x;
+  if (e?.k !== "Binary" || !ops.has(e.op)) return { k: "array", items: [] };
+  const part = (x: Expr): Val => ({ k: "expr", toks: slice(x), node: x, scope: v.scope });
+  return { k: "array", items: [part(e.x), { k: "string", v: e.op }, part(e.y)] };
+}
+
+/** Whether evaluating `e` twice is the same as evaluating it once: no calls, no macros. */
+function repeatable(e: Expr): boolean {
+  switch (e.k) {
+    case "Ident": case "Lit": case "ImplicitSelector":
+      return true;
+    case "Paren": case "Deref": case "Unary": case "Selector":
+      return repeatable(e.x);
+    case "Binary":
+      return repeatable(e.x) && repeatable(e.y);
+    case "Index":
+      return repeatable(e.x) && e.indices.every((i) => !i || repeatable(i));
+  }
+  return false;
+}
+
+/**
+ * The arms of a `{ p1, p2 => value, ... }` block, as `{patterns, value}` structs. Arms end at a
+ * newline or a top-level comma after the value.
+ */
+function matchArms(body: Token[], pos: Pos): Val[] {
+  const toks = isOp(body[0], "{") && isOp(body[body.length - 1], "}") ? body.slice(1, -1) : body;
+  const expr = (from: number, to: number, what: string): Val => {
+    const part = toks.slice(from, to).filter((t) => t.kind !== "semi");
+    const at = toks[from]?.pos ?? toks[from - 1]?.pos ?? pos;
+    if (!part.length) throw new CompileError(`match!: expected ${what}`, at);
+    const eof: Token = { kind: "eof", text: "", pre: "", pos: at };
+    const p = new Parser([...part, eof]);
+    const node = p.parseExpr();
+    p.expectEnd();
+    return { k: "expr", toks: part, node };
+  };
+  const arms: Val[] = [];
+  let i = 0;
+  const skipSemis = () => {
+    while (toks[i]?.kind === "semi") i++;
+  };
+  for (skipSemis(); i < toks.length; skipSemis()) {
+    const patterns: Val[] = [];
+    let depth = 0;
+    let start = i;
+    for (;; i++) {
+      const t = toks[i];
+      if (!t) throw new CompileError("match!: expected '=>' after the pattern", toks[i - 1]?.pos ?? pos);
+      if (isOp(t, "(") || isOp(t, "[") || isOp(t, "{")) depth++;
+      else if (isOp(t, ")") || isOp(t, "]") || isOp(t, "}")) depth--;
+      else if (depth === 0 && isOp(t, ",")) {
+        patterns.push(expr(start, i, "a pattern"));
+        start = i + 1;
+      } else if (depth === 0 && isOp(t, "=") && isOp(toks[i + 1], ">") && toks[i + 1].pre === "") {
+        patterns.push(expr(start, i, "a pattern"));
+        i += 2;
+        break;
+      }
+    }
+    skipSemis();
+    start = i;
+    depth = 0;
+    for (; i < toks.length; i++) {
+      const t = toks[i];
+      if (isOp(t, "(") || isOp(t, "[") || isOp(t, "{")) depth++;
+      else if (isOp(t, ")") || isOp(t, "]") || isOp(t, "}")) depth--;
+      else if (depth === 0 && (isOp(t, ",") || t.kind === "semi")) break;
+    }
+    const value = expr(start, i, "a value after '=>'");
+    i++;
+    arms.push({ k: "struct", fields: new Map([["patterns", { k: "array", items: patterns }], ["value", value]]) });
+  }
+  return arms;
+}
+
 const BUILTINS: Record<string, Builtin> = {
   call_site(_args, pos, interp) {
     const at = interp.callSite ?? pos;
     return { k: "string", v: `${at.file.split(/[\\/]/).pop()}:${at.line}` };
   },
   split_comparison(args, pos) {
+    return splitBinary(args, pos, "split_comparison", COMPARISONS);
+  },
+  split_range(args, pos) {
+    return splitBinary(args, pos, "split_range", RANGES);
+  },
+  match_arms(args, pos) {
+    const body = args[0];
+    if (body?.k !== "stmts") throw new CompileError("match_arms: expected a Stmt", pos);
+    return { k: "array", items: matchArms(body.toks, pos) };
+  },
+  block_value(args, pos, interp) {
+    const [type, body] = args;
+    if (type?.k !== "type" || body?.k !== "stmts") throw new CompileError("block_value: expected a Type and a Stmt", pos);
+    const inferred = type.toks.length === 1 && type.toks[0].text === "_";
+    if (interp.foldEnv) return interp.runBlock(body.toks, inferred ? undefined : type.toks.map((t) => t.text).join(""), pos);
+    return interp.an.blockValue(inferred ? undefined : type.toks, body.toks, interp.scope, interp.callSite ?? pos, ++gensym);
+  },
+  once(args, pos, interp) {
     const v = args[0];
-    if (v?.k !== "expr") throw new CompileError("split_comparison: expected an Expr", pos);
-    let e = exprNode(v, pos);
-    while (e?.k === "Paren") e = e.x;
-    if (e?.k !== "Binary" || !COMPARISONS.has(e.op)) return { k: "array", items: [] };
-    const part = (x: Expr): Val => ({ k: "expr", toks: slice(x), node: x, scope: v.scope });
-    return { k: "array", items: [part(e.x), { k: "string", v: e.op }, part(e.y)] };
+    if (v?.k !== "expr") throw new CompileError("once: expected an Expr", pos);
+    const e = exprNode(v, pos);
+    if ((e && repeatable(e)) || interp.foldEnv) return v;
+    return interp.an.hoist(v.toks, v.scope, interp.callSite ?? pos, `__once_${++gensym}`);
   },
   is_literal(args, pos) {
     const v = args[0];
@@ -714,7 +872,8 @@ export function respace(toks: Token[], call?: CallSpan): Token[] {
     if (fromCall(t) && fromCall(prev) && t.pos.line > prev.pos.line && t.origPre?.includes("\n")) return { ...t, pre: t.origPre };
     const prevPrev = toks[i - 2];
     let space = true;
-    if (t.kind === "semi" || (t.kind === "op" && NO_SPACE_BEFORE.has(t.text))) space = false;
+    const implicitSelector = t.text === "." && t.kind === "op" && !valueEnd(prev);
+    if (t.kind === "semi" || (t.kind === "op" && NO_SPACE_BEFORE.has(t.text) && !implicitSelector)) space = false;
     else if (prev.kind === "op" && NO_SPACE_AFTER.has(prev.text)) space = false;
     else if ((t.text === "(" || t.text === "[") && t.kind === "op" && (valueEnd(prev) || (prev.kind === "kw" && prev.text === "proc"))) space = false;
     else if (t.kind === "op" && t.text === "^" && valueEnd(prev)) space = false;

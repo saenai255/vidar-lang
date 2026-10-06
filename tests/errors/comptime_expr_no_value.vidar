@@ -1,0 +1,7 @@
+// error: comptime expression has no value
+package main
+noop :: comptime proc() {}
+main :: proc() {
+	x := comptime noop()
+	_ = x
+}

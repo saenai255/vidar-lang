@@ -125,6 +125,20 @@ not_done :: proc(what: string, message: string, loc := #caller_location) -> ! {
 	panic(message != "" ? fmt.tprintf("%s: %s", what, message) : what, loc)
 }
 
+match_ok :: proc(ok: bool, loc := #caller_location) -> bool {
+	if !ok do panic("match: no arm matched", loc)
+	return true
+}
+
+match_ok_on :: proc(ok: bool, value: $T, loc := #caller_location) -> bool {
+	if !ok do panic(fmt.tprintf("match: no arm matched %v", value), loc)
+	return true
+}
+
+do_fell_off :: proc(loc := #caller_location) -> ! {
+	panic("do!: the block ended without a return", loc)
+}
+
 tprintf :: proc(format: string, args: ..any) -> string { return fmt.tprintf(format, ..args) }
 
 // whether a result signals failure: false for an ok-bool, otherwise anything but the zero/nil value
@@ -246,6 +260,8 @@ export class Emitter {
         return `import ${sym.name} "${relImport(this.unit.outDir, target.unit.outDir)}"`;
       }
       case "MacroCall":
+        return A(n)._linesHoisted ? this.emit(A(n)._expansion) : keepLines(n, this.emit(A(n)._expansion));
+      case "Comptime":
         return keepLines(n, this.emit(A(n)._expansion));
       case "ExprStmt": {
         const exp: Block | undefined = A(n)._expansion;

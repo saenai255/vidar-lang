@@ -24,6 +24,16 @@ parse_mode :: proc(s: string) -> int {
 	__vidar.not_done("not yet implemented", "decide what unknown modes do")
 }
 
+Shape :: enum { Circle, Square, Triangle }
+
+grade :: proc(score: int) -> string {
+	return ("A" if (score >= 90 && score <= 100) else ("B" if (score >= 75 && score < 90) else "C"))
+
+
+
+
+}
+
 main :: proc() {
 	// format!: string interpolation
 	name := "vidar"
@@ -32,7 +42,7 @@ main :: proc() {
 	fmt.println(__vidar.tprintf("{{literal braces}} and 100%%"))
 
 	// dbg!: prints the source location, expression and value to stderr, and passes the value through
-	total := __vidar.dbg(area(3, 4), "area(3, 4)", "main.vidar:35") + 1
+	total := __vidar.dbg(area(3, 4), "area(3, 4)", "main.vidar:45") + 1
 	fmt.println("total:", total)
 
 	// check!: an assert that explains itself
@@ -68,7 +78,7 @@ main :: proc() {
 	fmt.println("locked: counter =", counter)
 
 	// timed!: how long a block took, printed to stderr
-	{ start__2 := __vidar.timer_start(); defer __vidar.timer_report("busy loop", "main.vidar:71", start__2); {
+	{ start__2 := __vidar.timer_start(); defer __vidar.timer_report("busy loop", "main.vidar:81", start__2); {
 		x := 0;
 		for i in 0..<1_000_000 do x += i;
 		_ = x;
@@ -76,13 +86,48 @@ main :: proc() {
 
 	// track!: in -debug builds, prints every allocation the block left live, to stderr
 	kept: []int
-	{ context.allocator = __vidar.track_begin(context.allocator); defer __vidar.track_end(context.allocator, "cache", "main.vidar:79"); {
+	{ context.allocator = __vidar.track_begin(context.allocator); defer __vidar.track_end(context.allocator, "cache", "main.vidar:89"); {
 		scratch := make([dynamic] int);
 		append(&scratch, 1, 2, 3);
 		delete(scratch);
 		kept = make([] int, 8); // reported: still live when the block ends
 	}; }
 	delete(kept)
+
+	// match!: a switch that evaluates to a value
+	shape := Shape.Square
+	corners := (0 if (shape == .Circle) else (4 if (shape == .Square) else (3 if __vidar.match_ok_on((shape == .Triangle), shape) else 3)))
+
+
+
+
+	fmt.println("match:", corners, grade(95), grade(80), grade(12))
+	sign := ("negative" if (total < 0) else ("zero" if (total == 0) else "positive"))
+
+
+
+
+	fmt.println("match:", sign)
+
+	// do!: a block that evaluates to the value it returns
+	__do3_result: int; __do3: {
+		count := 0
+		for n in 2..<30 {
+			prime := true
+			for d in 2..<n {
+				if n % d == 0 do prime = false
+			}
+			if prime do count += 1
+		}
+		{ __do3_result = count; break __do3 };
+	}; primes := __do3_result
+	__do4_result: int; __do4: {
+		for x in ([]int{3, 7, 8, 5}) {
+			if x % 2 == 0 { __do4_result = x; break __do4 };
+		}
+		{ __do4_result = -1; break __do4 };
+	}; first_even := __do4_result
+	fmt.println("do:", primes, first_even)
 
 	fmt.println("mode:", parse_mode("safe"))
 }

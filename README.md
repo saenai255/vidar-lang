@@ -261,6 +261,9 @@ Some macros come with the language: they're available in every file without an i
 | `timed!("label") { ... }` | prints how long the block took to stderr; the label defaults to the source location |
 | `track!(allocator, "label") { ... }` | gives the block a tracking `context.allocator` over `allocator`; at its end, prints every allocation still live (size and location) to stderr. Both arguments are optional (allocator defaults to `context.allocator`, label to the source location); the label must be a string literal. Only active in `-debug` builds; otherwise the block runs on `allocator` untracked |
 | `format!("hi {name}, {x:.2f}")` | string interpolation into a temp-allocated string. `{expr}` prints with `%v`, `{expr:spec}` uses `%spec` (`.2f`, `5d`, `x`, `q`...), and `{{` / `}}` are literal braces. Malformed templates are compile errors. |
+| `match!(value) { pattern => result, ... }` | evaluates to the result of the first arm whose pattern matches `value`. A pattern is a value (compared with `==`), a range `lo..<hi` / `lo..=hi`, or `_` for anything (only in the last arm); `p1, p2 => result` matches either. Arms are separated by newlines or commas. `value` is evaluated once: if it contains calls it is stored in a temporary declared just before the statement. If no arm matches, it panics and shows `value` |
+| `match! { condition => result, ... }` | evaluates to the result of the first arm whose condition holds; `_` matches anything |
+| `do! { ...; return value }` | a block that evaluates to a value: inside it, `return value` leaves the block (not the procedure) with that value. The block runs just before the statement it's in, so it can be used in a declaration, an assignment, an expression statement or a `return`. The result type is inferred from the returned values; write `do!(T) { ... }` to give it. Reaching the end of the block without a `return` panics |
 | `dbg!(expr)` | prints `[file:line] expr = value` to stderr and evaluates to the value, so it can wrap any expression |
 | `check!(cond)` / `check!(cond, "msg")` | panics when `cond` is false, showing the expression. For a comparison it also shows each non-literal operand's value, and each operand is evaluated once. |
 | `todo!()` / `todo!("msg")` | panics with "not yet implemented", for code paths that aren't written yet |
@@ -349,6 +352,30 @@ Builtins:
 - `fmt.tprintf`, `fmt.println` (prints to the compiler's stderr)
 
 See [examples/macros](examples/macros), which includes a struct printer built with `type_fields`.
+
+### `comptime` expressions
+
+Put `comptime` before any expression to evaluate it at compile time, with the same interpreter that runs macro bodies. It can call comptime procs and regular procs directly (without `!`), and use macros: their code is folded too.
+
+```odin
+a := comptime fib(20)                          // a := 6765
+label := comptime fmt.tprintf("v%d", VERSION)  // label := "v3"
+primes: [5]int = comptime first_primes(5)      // primes: [5]int = { 2, 3, 5, 7, 11 }
+total := comptime do! {                        // total := 55
+	sum := 0
+	for i in 1..=10 do sum += i
+	return sum
+}
+d := comptime square(k)                        // error: 'k' is a runtime value
+```
+
+- Numbers, strings and booleans fold to literals. Arrays and structs fold to untyped compound literals, so the target needs a known type.
+- `comptime do! { ... }` runs the block in the transpiler and folds to the value it returns: a compile-time block with no helper proc. Macros inside it (`match!`, your own) fold as well.
+- If the expression cannot be evaluated at compile time (it reads a variable, calls a foreign proc, uses an unsupported statement, or a macro whose code needs the runtime such as `format!`), compilation fails.
+- `compile_error`, out-of-bounds indexes and the step limit also stop compilation.
+- `comptime` applies to the whole expression after it: `comptime a + b` folds `a + b`. It is only a prefix when an expression follows on the same line, so `comptime` stays usable as a name and `comptime(x)` is still a call.
+
+See [examples/comptime](examples/comptime): lookup tables, struct configs, static assertions and `comptime do!` blocks.
 
 ## Language server
 

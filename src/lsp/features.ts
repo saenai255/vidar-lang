@@ -152,6 +152,12 @@ export class Index {
         if (a._expansion) this.visit(a._expansion);
         return;
       }
+      case "Comptime":
+        if (a._expansion) {
+          this.visit(a._expansion);
+          return;
+        }
+        break;
       case "ExprStmt":
         if (a._expansion) {
           for (const s of (a._expansion as Block).stmts) this.visit(s);

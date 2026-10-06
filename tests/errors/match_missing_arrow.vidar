@@ -1,0 +1,6 @@
+// error: match!: expected '=>' after the pattern
+package main
+main :: proc() {
+	x := 1
+	_ = match!(x) { 1 => 2, 3 }
+}

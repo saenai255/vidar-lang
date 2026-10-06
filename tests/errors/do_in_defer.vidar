@@ -1,0 +1,6 @@
+// error: do! can only be used in a declaration, an assignment, an expression statement or a return
+package main
+import "core:fmt"
+main :: proc() {
+	defer fmt.println(do! { return 1 })
+}

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "main": "dist/cli.js",
   "scripts": {
-    "build": "tsc -p .",
+    "build": "tsc -p . && node -e \"require('fs').copyFileSync('src/prelude.vidar', 'dist/prelude.vidar')\"",
     "test": "npm run build && node --test tests/unit/ && node scripts/test.js && node scripts/test-lsp.js",
     "vidar": "node dist/cli.js",
     "test:update": "npm run build && node scripts/test.js --update",

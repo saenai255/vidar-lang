@@ -24,6 +24,16 @@ parse_mode :: proc(s: string) -> int {
 	todo!("decide what unknown modes do")
 }
 
+Shape :: enum { Circle, Square, Triangle }
+
+grade :: proc(score: int) -> string {
+	return match!(score) {
+		90..=100 => "A",
+		75..<90  => "B",
+		_        => "C",
+	}
+}
+
 main :: proc() {
 	// format!: string interpolation
 	name := "vidar"
@@ -83,6 +93,41 @@ main :: proc() {
 		kept = make([]int, 8) // reported: still live when the block ends
 	}
 	delete(kept)
+
+	// match!: a switch that evaluates to a value
+	shape := Shape.Square
+	corners := match!(shape) {
+		.Circle => 0
+		.Square => 4
+		.Triangle => 3
+	}
+	fmt.println("match:", corners, grade(95), grade(80), grade(12))
+	sign := match! {
+		total < 0  => "negative",
+		total == 0 => "zero",
+		_          => "positive",
+	}
+	fmt.println("match:", sign)
+
+	// do!: a block that evaluates to the value it returns
+	primes := do! {
+		count := 0
+		for n in 2..<30 {
+			prime := true
+			for d in 2..<n {
+				if n % d == 0 do prime = false
+			}
+			if prime do count += 1
+		}
+		return count
+	}
+	first_even := do! {
+		for x in ([]int{3, 7, 8, 5}) {
+			if x % 2 == 0 do return x
+		}
+		return -1
+	}
+	fmt.println("do:", primes, first_even)
 
 	fmt.println("mode:", parse_mode("safe"))
 }

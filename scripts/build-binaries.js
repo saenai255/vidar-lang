@@ -39,7 +39,7 @@ require("esbuild").buildSync({
   target: "node20",
   format: "cjs",
   outfile: join(build, "vidar.cjs"),
-  define: { VIDAR_VERSION: JSON.stringify(version) },
+  define: { VIDAR_VERSION: JSON.stringify(version), VIDAR_PRELUDE: JSON.stringify(readFileSync("src/prelude.vidar", "utf8")) },
   logLevel: "warning",
 });
 
