@@ -9,8 +9,17 @@ shout :: proc!(s: Expr(string)) -> Expr(string) {
 	return quote(strings.to_upper($s))
 }
 
+say :: proc!(s: Expr(string)) -> Stmt {
+	return quote { fmt.println($s) }
+}
+
 main :: proc() {
 	name := "odin"
 	fmt.println(shout!(name))
 	fmt.println(shout!(strings.concatenate({"plus", "plus"})))
+
+	// the check goes before the statement, so it must stay under the `do`
+	quiet := true
+	if !quiet do say!(strings.to_lower("LOUD"))
+	fmt.println("quiet")
 }

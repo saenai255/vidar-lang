@@ -1,0 +1,106 @@
+package entity
+
+import "core:fmt"
+import "core:strconv"
+import "core:strings"
+import "../save"
+import "../world"
+
+Player_Record :: struct {
+	name:                string,
+	x, y:                int,
+	hp, max_hp:          int,
+	level, xp:           int,
+	gold, kills, deaths: int,
+}
+
+save.derive!(Player_Record, "record")
+
+Player :: struct {
+	using rec: Player_Record,
+	out:       closure(msg: string),
+}
+
+NEW_PLAYER :: "hp=30\nmax_hp=30\nlevel=1\n"
+
+new_player :: proc(rec: Player_Record, out: closure(msg: string)) -> ^Player {
+	return new_clone(Player{rec = rec, out = out})
+}
+
+free_player :: proc(p: ^Player) {
+	delete(p.name)
+	free(p)
+}
+
+fresh_record :: proc(name: string) -> Player_Record {
+	rec := parse_fields(NEW_PLAYER) catch unreachable
+	rec.name = strings.clone(name)
+	return rec
+}
+
+parse_fields :: proc(text: string) -> (rec: Player_Record, err: save.Error) {
+	errdefer delete(rec.name)
+	text := text
+	for line in strings.split_lines_iterator(&text) {
+		if line == "" do continue
+		key, _, value := strings.partition(line, "=")
+		if key == "version" {
+			v := strconv.parse_int(value) or_return .Bad_Value
+			if v > save.FORMAT_VERSION do return rec, .Too_New
+			continue
+		}
+		record_read(&rec, key, value) or_return
+	}
+	return rec, .None
+}
+
+parse_record :: proc(text: string) -> (rec: Player_Record, err: save.Error) {
+	body := save.unseal(text) or_return
+	rec = parse_fields(body) or_return
+	if rec.name == "" do return rec, .Corrupt
+	return rec, .None
+}
+
+player_name :: proc(p: ^Player) -> string { return p.name }
+player_alive :: proc(p: ^Player) -> bool { return true }
+player_pos :: proc(p: ^Player) -> world.Pos { return {p.x, p.y} }
+
+player_describe :: proc(p: ^Player, b: ^strings.Builder) {
+	fmt.sbprintf(b, "%s [%d/%d]", p.name, p.hp, p.max_hp)
+}
+
+player_act :: proc(p: ^Player, w: ^world.World) {
+	if w.tick % world.PLAYER_REGEN_EVERY == 0 && p.hp < p.max_hp do p.hp += 1
+}
+
+player_hurt :: proc(p: ^Player, w: ^world.World, dmg: int, by: string) -> bool {
+	p.hp -= dmg
+	if p.hp > 0 {
+		world.tell(p, fmt.tprintf("* The %s hits you for %d. (hp %d/%d)\n", by, dmg, p.hp, p.max_hp))
+		return false
+	}
+	p.deaths += 1
+	p.gold /= 2
+	p.hp = p.max_hp
+	world.tell(p, fmt.tprintf("* The %s slays you! You wake up in the Spawn Pool.\n", by))
+	world.move_player(w, p, {0, 0})
+	return true
+}
+
+player_save_to :: proc(p: ^Player, b: ^strings.Builder) {
+	fmt.sbprintf(b, "version=%d\n", save.FORMAT_VERSION)
+	record_write(&p.rec, b)
+}
+
+player_load_from :: proc(p: ^Player, text: string) -> save.Error {
+	rec := parse_record(text) or_return
+	delete(p.name)
+	p.rec = rec
+	return .None
+}
+
+impl world.Hero for Player {
+	name = player_name, describe = player_describe,
+	act = player_act, hurt = player_hurt, alive = player_alive, pos = player_pos,
+	save_to = player_save_to, load_from = player_load_from,
+}

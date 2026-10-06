@@ -1,0 +1,44 @@
+package main
+
+import "core:fmt"
+import "core:net"
+import "vidar:sched"
+
+// Operations that finish at once, or on a worker thread, must resume their goroutine
+// even while another goroutine is still waiting on the network.
+main :: proc() {
+	listener, _ := sched.listen_tcp({net.IP4_Loopback, 0})
+	accepted := sched.make_chan(net.TCP_Socket, 1)
+	sched.go(proc[listener, accepted]() {
+		for {
+			conn, _, err := sched.accept(listener)
+			if err != nil do return
+			sched.send(accepted, conn)
+		}
+	})
+	sched.yield()
+
+	f, err := sched.open("/etc/hosts")
+	fmt.println("open:", err)
+	sched.close(f)
+
+	ran := false
+	sched.blocking(proc[&ran]() { ran = true })
+	fmt.println("blocking:", ran)
+
+	udp, _ := sched.udp_socket()
+	sched.bind(udp, {net.IP4_Loopback, 0})
+	to, _ := net.bound_endpoint(udp)
+	n, serr := sched.send_to(udp, transmute([]byte)string("ping"), to)
+	fmt.println("send_to:", n, serr)
+
+	endpoint, _ := net.bound_endpoint(listener)
+	client, _ := sched.dial(endpoint)
+	server_side := sched.recv(accepted)
+	hosts, _ := sched.open("/etc/hosts")
+	sent, ferr := sched.send_file(server_side, hosts)
+	fmt.println("send_file:", sent > 0, ferr)
+	sched.close(hosts)
+	sched.close(client)
+	sched.close(server_side)
+}

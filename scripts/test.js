@@ -50,7 +50,8 @@ function writeTree(dir, files) {
 
 const cases = [
   ...readdirSync("examples")
-    .filter((name) => statSync(join("examples", name)).isDirectory())
+    // a directory without main.vidar holds more than one program (e.g. examples/slime_mud)
+    .filter((name) => existsSync(join("examples", name, "main.vidar")))
     .map((name) => {
       const dir = join("examples", name);
       return { name: `examples/${name}`, entry: dir, golden: join(dir, "expected"), stdout: join(dir, "stdout.txt") };

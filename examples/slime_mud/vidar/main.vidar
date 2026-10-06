@@ -1,0 +1,124 @@
+package main
+
+import "core:fmt"
+import "core:mem/virtual"
+import "core:os"
+import "core:strconv"
+import "entity"
+import "server"
+import "world"
+
+USAGE :: `usage: slime_mud [flags]
+  --port N          TCP port (0 picks one; default 4000)
+  --udp-port N      UDP status port (default 4001)
+  --tick-ms N       world tick period, 0 for none (default 100)
+  --idle-secs N     disconnect idle players, 0 for never (default 300)
+  --slimes N        slimes to spawn (default 300)
+  --seed N          world seed (default 1)
+  --saves DIR       save directory (default saves)
+  --motd FILE       message of the day (default motd.txt)
+  --master H:P      send heartbeats to a master server
+  --ready-exit      start up, print the ports and exit
+  --sim TICKS       run an offline simulation instead of a server
+  --sim-players N   bots in the simulation (default 200)`
+
+Arg_Error :: enum { None, Unknown_Flag, Missing_Value, Bad_Number }
+
+parse_args :: proc(args: []string) -> (cfg: server.Config, err: Arg_Error) {
+	cfg = server.default_config()
+	for i := 0; i < len(args); i += 1 {
+		flag := args[i]
+		switch flag {
+		case "--ready-exit":
+			cfg.ready_exit = true
+			continue
+		case "--help", "-h":
+			cfg.help = true
+			continue
+		}
+		if i + 1 >= len(args) do return cfg, .Missing_Value
+		i += 1
+		value := args[i]
+		switch flag {
+		case "--port":        cfg.port = strconv.parse_int(value) or_return .Bad_Number
+		case "--udp-port":    cfg.udp_port = strconv.parse_int(value) or_return .Bad_Number
+		case "--tick-ms":     cfg.tick_ms = strconv.parse_int(value) or_return .Bad_Number
+		case "--idle-secs":   cfg.idle_secs = strconv.parse_int(value) or_return .Bad_Number
+		case "--slimes":      cfg.slimes = strconv.parse_int(value) or_return .Bad_Number
+		case "--seed":        cfg.seed = strconv.parse_u64(value) or_return .Bad_Number
+		case "--sim":         cfg.sim = strconv.parse_int(value) or_return .Bad_Number
+		case "--sim-players": cfg.sim_players = strconv.parse_int(value) or_return .Bad_Number
+		case "--saves":       cfg.saves = value
+		case "--motd":        cfg.motd = value
+		case "--master":      cfg.master = value
+		case:                 return cfg, .Unknown_Flag
+		}
+	}
+	return cfg, .None
+}
+
+// What a simulated player types on tick t.
+bot_line :: proc(w: ^world.World, p: ^entity.Player, rng: ^world.Rng, t: int) -> string {
+	if t % 17 == 0 do return "say hello"
+	if t % 13 == 0 do return "look"
+	if t % 11 == 0 do return "stats"
+	if t % 29 == 0 && p.gold > 0 do return fmt.tprintf("bet %d", p.gold / 2 + 1)
+	for m in world.room_at(w, {p.x, p.y}).monsters {
+		if world.alive(m) do return "attack slime"
+	}
+	return world.DIR_SHORT[world.Dir(world.roll(rng, 4))]
+}
+
+simulate :: proc(cfg: server.Config) {
+	arena: virtual.Arena
+	defer virtual.arena_destroy(&arena)
+	with_allocator!(virtual.arena_allocator(&arena)) {
+		w := world.make_world(cfg.seed, cfg.slimes)
+		quiet := proc[](msg: string) {}
+		bots: [dynamic]^entity.Player
+		for i in 0..<cfg.sim_players {
+			p, _ := world.join(w, entity.fresh_record(fmt.tprintf("bot%d", i)), quiet)
+			append(&bots, p)
+		}
+		rng := world.make_rng(cfg.seed + 1)
+		timed!("sim") {
+			for t in 1..=cfg.sim {
+				scoped! {
+					for p in bots do world.handle_line(w, p, bot_line(w, p, &rng, t))
+					world.tick(w)
+				}
+			}
+		}
+		totals := { xp = 0, gold = 0, kills = 0, deaths = 0, levels = 0 }
+		for p in bots {
+			totals.xp += p.xp
+			totals.gold += p.gold
+			totals.kills += p.kills
+			totals.deaths += p.deaths
+			totals.levels += p.level
+		}
+		alive := 0
+		for m in w.monsters {
+			if world.alive(m) do alive += 1
+		}
+		fmt.printf("sim ticks=%d players=%d slimes=%d\n", cfg.sim, len(bots), cfg.slimes)
+		fmt.printf("xp=%d gold=%d kills=%d deaths=%d levels=%d alive=%d rng=%x\n",
+			totals.xp, totals.gold, totals.kills, totals.deaths, totals.levels, alive, w.rng.s)
+	}
+}
+
+main :: proc() {
+	cfg := parse_args(os.args[1:]) catch err {
+		fmt.eprintf("error: %v\n%s\n", err, USAGE)
+		os.exit(2)
+	}
+	if cfg.help {
+		fmt.println(USAGE)
+		return
+	}
+	if cfg.sim > 0 {
+		simulate(cfg)
+		return
+	}
+	server.run(cfg) catch { os.exit(1) }
+}

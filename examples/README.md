@@ -20,3 +20,5 @@ Each example is its own directory, and the directory is the program. Run one wit
 See [SYNTAX.md](../SYNTAX.md) for a reference of all the syntax these use.
 
 Each directory also holds the generated Odin in `expected/` and the program's output in `stdout.txt`. `npm test` checks both; `npm run test:update` regenerates them.
+
+[slime_mud/](slime_mud) is a larger sample: a multiplayer text adventure server that uses nearly every feature at once. It is written twice, in idiomatic Vidar and in idiomatic Odin, and its README compares the two on build time, startup and run time. It has no `main.vidar` at the top, so `npm test` skips it; its benchmark checks that both versions behave identically.

@@ -1,0 +1,96 @@
+package save
+
+import "core:strconv"
+import "core:strings"
+
+// Save files are `key=value` lines, sealed with a `crc=` line over everything before it.
+
+FORMAT_VERSION :: 1
+
+Error :: enum { None, Io, Corrupt, Too_New, Unknown_Field, Bad_Value }
+
+crc32_table :: proc!() -> [dynamic]u32 {
+	out: [dynamic]u32
+	for i in 0..<256 {
+		c := u32(i)
+		for _ in 0..<8 {
+			c = (c >> 1) ~ 0xEDB88320 if c & 1 != 0 else c >> 1
+		}
+		append(&out, c)
+	}
+	return out
+}
+
+@(rodata)
+CRC_TABLE: [256]u32 = crc32_table!()
+
+crc32 :: proc(data: []byte) -> u32 {
+	c := ~u32(0)
+	for b in data do c = CRC_TABLE[(c ~ u32(b)) & 0xff] ~ (c >> 8)
+	return ~c
+}
+
+// derive!(T, "prefix") generates `prefix_write(^T, ^strings.Builder)` and
+// `prefix_read(^T, key, value) -> Error` from T's fields. The caller imports fmt and strings.
+derive :: proc!(T: Type, prefix: string) -> Stmt {
+	fields := type_fields(T)
+	if len(fields) == 0 do compile_error("save.derive!: " + type_name(T) + " has no fields")
+	put := ident(prefix + "_put")
+	writer := ident(prefix + "_write")
+	reader := ident(prefix + "_read")
+	r := ident("r")
+	b := ident("b")
+	key := ident("key")
+	value := ident("value")
+	puts: [dynamic]Stmt
+	reads: [dynamic]Stmt
+	for f in fields {
+		field := parse_expr("r." + f)
+		append(&puts, quote { $put($b, $f, $field) })
+		append(&reads, quote { if $key == $f do return save.read_field(&$field, $value) })
+	}
+	return quote {
+		$put :: proc(b: ^strings.Builder, key: string, v: $$T) { fmt.sbprintf(b, "%s=%v\n", key, v) }
+
+		$writer :: proc($r: ^$T, $b: ^strings.Builder) {
+			$puts
+		}
+
+		$reader :: proc($r: ^$T, $key, $value: string) -> save.Error {
+			$reads
+			return .Unknown_Field
+		}
+	}
+}
+
+read_int :: proc(dst: ^int, text: string) -> Error {
+	dst^ = strconv.parse_int(text) or_return .Bad_Value
+	return .None
+}
+
+read_string :: proc(dst: ^string, text: string) -> Error {
+	dst^ = strings.clone(text)
+	return .None
+}
+
+read_field :: proc{read_int, read_string}
+
+// Appends the crc line and hands back the builder's contents.
+seal :: proc(b: ^strings.Builder) -> string {
+	body := strings.to_string(b^)
+	strings.write_string(b, "crc=")
+	strings.write_u64(b, u64(crc32(transmute([]byte)body)), 16)
+	strings.write_byte(b, '\n')
+	return strings.to_string(b^)
+}
+
+// The body of a sealed file, once its crc line checks out.
+unseal :: proc(text: string) -> (body: string, err: Error) {
+	text := strings.trim_right(text, "\n")
+	at := strings.last_index(text, "\ncrc=")
+	if at < 0 do return "", .Corrupt
+	want := strconv.parse_u64_of_base(text[at + 5:], 16) or_return .Corrupt
+	body = text[:at + 1]
+	if u64(crc32(transmute([]byte)body)) != want do return "", .Corrupt
+	return body, .None
+}

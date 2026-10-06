@@ -559,7 +559,8 @@ export class Analyzer {
 
   private sig(sig: ProcSig, scope: Scope, declare: boolean, toks?: Token[], onResults?: (results: LocalSym[]) => void): LocalSym[] {
     const params = this.params(sig.params, scope, declare && !sig.unnamed, toks);
-    onResults?.(this.params(sig.results, scope, declare && !sig.resultsUnnamed, toks));
+    const results = this.params(sig.results, scope, declare && !sig.resultsUnnamed, toks);
+    onResults?.(results);
     return params;
   }
 

@@ -1,0 +1,146 @@
+package entity
+
+import "core:fmt"
+import "core:strings"
+import "../world"
+
+Slime_Kind :: enum { Green, Blue, Red }
+
+Slime_Stats :: struct {
+	name:               string,
+	hp, dmg, gold, xp:  int,
+}
+
+@(rodata)
+SLIME_STATS := [Slime_Kind]Slime_Stats{
+	.Green = {"Green Slime", 6, 2, 1, 3},
+	.Blue  = {"Blue Slime", 10, 3, 2, 5},
+	.Red   = {"Red Slime", 16, 5, 4, 9},
+}
+
+Slime :: struct {
+	kind:       Slime_Kind,
+	at:         world.Pos,
+	hp:         int,
+	alive:      bool,
+	respawn_at: int,
+}
+
+new_slime :: proc(kind: Slime_Kind, at: world.Pos) -> ^Slime {
+	return new_clone(Slime{kind = kind, at = at, hp = SLIME_STATS[kind].hp, alive = true})
+}
+
+slime_name :: proc(s: ^Slime) -> string { return SLIME_STATS[s.kind].name }
+slime_alive :: proc(s: ^Slime) -> bool { return s.alive }
+slime_pos :: proc(s: ^Slime) -> world.Pos { return s.at }
+
+slime_describe :: proc(s: ^Slime, b: ^strings.Builder) {
+	fmt.sbprintf(b, "%s [%d/%d]", SLIME_STATS[s.kind].name, s.hp, SLIME_STATS[s.kind].hp)
+}
+
+slime_hurt :: proc(s: ^Slime, w: ^world.World, dmg: int, by: string) -> bool {
+	s.hp -= dmg
+	if s.hp > 0 do return false
+	s.hp = 0
+	s.alive = false
+	s.respawn_at = w.tick + world.SLIME_RESPAWN
+	return true
+}
+
+slime_loot :: proc(s: ^Slime, w: ^world.World) -> world.Loot {
+	stats := SLIME_STATS[s.kind]
+	return {gold = stats.gold + world.roll(&w.rng, 3), xp = stats.xp}
+}
+
+slime_act :: proc(s: ^Slime, w: ^world.World) {
+	stats := SLIME_STATS[s.kind]
+	if !s.alive {
+		if w.tick >= s.respawn_at {
+			s.hp = stats.hp
+			s.alive = true
+			move_slime(s, w, {world.roll(&w.rng, world.WORLD_W), world.roll(&w.rng, world.WORLD_H)})
+		}
+		return
+	}
+	if w.tick % world.SLIME_REGEN_EVERY == 0 && s.hp < stats.hp do s.hp += 1
+	room := world.room_at(w, s.at)
+	if len(room.players) > 0 && world.roll(&w.rng, 3) == 0 {
+		target := room.players[world.roll(&w.rng, len(room.players))]
+		world.hurt(target, w, 1 + world.roll(&w.rng, stats.dmg), stats.name)
+		return
+	}
+	if world.roll(&w.rng, 4) == 0 {
+		to := s.at + world.DIR_DELTA[world.Dir(world.roll(&w.rng, 4))]
+		if world.in_bounds(to) do move_slime(s, w, to)
+	}
+}
+
+move_slime :: proc(s: ^Slime, w: ^world.World, to: world.Pos) {
+	world.relocate(w, s, s.at, to)
+	s.at = to
+}
+
+impl world.Monster for Slime {
+	name = slime_name, describe = slime_describe,
+	act = slime_act, hurt = slime_hurt, alive = slime_alive, pos = slime_pos,
+	loot = slime_loot,
+}
+
+KING_HP :: 80
+KING_DMG :: 8
+
+Slime_King :: struct {
+	at:         world.Pos,
+	hp:         int,
+	alive:      bool,
+	respawn_at: int,
+}
+
+new_king :: proc(at: world.Pos) -> ^Slime_King {
+	return new_clone(Slime_King{at = at, hp = KING_HP, alive = true})
+}
+
+king_name :: proc(k: ^Slime_King) -> string { return "Slime King" }
+king_alive :: proc(k: ^Slime_King) -> bool { return k.alive }
+king_pos :: proc(k: ^Slime_King) -> world.Pos { return k.at }
+king_roar :: proc(k: ^Slime_King) -> string { return "The Slime King roars: BLORP!" }
+
+king_describe :: proc(k: ^Slime_King, b: ^strings.Builder) {
+	fmt.sbprintf(b, "Slime King [%d/%d]", k.hp, KING_HP)
+}
+
+king_hurt :: proc(k: ^Slime_King, w: ^world.World, dmg: int, by: string) -> bool {
+	k.hp -= dmg
+	if k.hp > 0 do return false
+	k.hp = 0
+	k.alive = false
+	k.respawn_at = w.tick + world.KING_RESPAWN
+	return true
+}
+
+king_loot :: proc(k: ^Slime_King, w: ^world.World) -> world.Loot {
+	return {gold = 50 + world.roll(&w.rng, 50), xp = 100}
+}
+
+// The king never wanders: he waits in his corner.
+king_act :: proc(k: ^Slime_King, w: ^world.World) {
+	if !k.alive {
+		if w.tick >= k.respawn_at {
+			k.hp = KING_HP
+			k.alive = true
+		}
+		return
+	}
+	if w.tick % 2 == 0 && k.hp < KING_HP do k.hp += 1
+	room := world.room_at(w, k.at)
+	if len(room.players) > 0 && world.roll(&w.rng, 2) == 0 {
+		target := room.players[world.roll(&w.rng, len(room.players))]
+		world.hurt(target, w, 1 + world.roll(&w.rng, KING_DMG), "Slime King")
+	}
+}
+
+impl world.Boss for Slime_King {
+	name = king_name, describe = king_describe,
+	act = king_act, hurt = king_hurt, alive = king_alive, pos = king_pos,
+	loot = king_loot, roar = king_roar,
+}

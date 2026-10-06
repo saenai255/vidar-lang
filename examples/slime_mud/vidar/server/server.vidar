@@ -1,0 +1,382 @@
+package server
+
+import "core:fmt"
+import "core:nbio"
+import "core:net"
+import "core:os"
+import "core:strings"
+import "core:sync"
+import "core:time"
+import "vidar:sched"
+import "../entity"
+import "../save"
+import "../world"
+
+OUTBOX_CAP :: 256
+AUTOSAVE_TICKS :: 600
+HEARTBEAT_EVERY :: 5 * time.Second
+MAX_NAME :: 16
+
+Config :: struct {
+	port, udp_port: int,
+	tick_ms:        int,
+	idle_secs:      int,
+	slimes:         int,
+	seed:           u64,
+	saves, motd:    string,
+	master:         string,
+	ready_exit:     bool,
+	help:           bool,
+	sim, sim_players: int,
+}
+
+default_config :: proc() -> Config {
+	return {
+		port = 4000, udp_port = 4001, tick_ms = 100, idle_secs = 300,
+		slimes = 300, seed = 1, saves = "saves", motd = "motd.txt",
+		sim_players = 200,
+	}
+}
+
+Error :: enum { None, Listen_Failed, Bind_Failed }
+
+Request :: struct {
+	kind:  enum { Join, Line, Leave, Shutdown },
+	p:     ^entity.Player,
+	line:  string,
+	rec:   entity.Player_Record,
+	fresh: bool,
+	out:   closure(msg: string),
+	reply: sched.Chan(^entity.Player),
+}
+
+Server :: struct {
+	cfg:           Config,
+	w:             ^world.World,
+	requests:      sched.Chan(Request),
+	pending_saves: sched.Wait_Group,
+	save_mu:       sched.Mutex,
+	// written from worker threads, inside sched.blocking
+	stats: struct {
+		mu:           sync.Mutex,
+		saves, bytes: int,
+	},
+}
+
+log :: proc!(msg: Expr(string)) -> Stmt {
+	site := call_site()
+	return quote { fmt.eprintf("[%s] %s\n", $site, $msg) }
+}
+
+run :: proc(cfg: Config) -> Error {
+	s := new(Server)
+	s.cfg = cfg
+	s.w = world.make_world(cfg.seed, cfg.slimes)
+	s.requests = sched.make_chan(Request, 1024)
+
+	dir := cfg.saves
+	sched.blocking(proc[dir]() { os.make_directory_all(dir) })
+
+	listener := sched.listen_tcp({net.IP4_Loopback, cfg.port}) catch err {
+		log!(fmt.tprintf("listen on port %d: %v", cfg.port, err))
+		return .Listen_Failed
+	}
+	udp := sched.udp_socket() catch unreachable
+	sched.bind(udp, {net.IP4_Loopback, cfg.udp_port}) catch err {
+		log!(fmt.tprintf("bind udp port %d: %v", cfg.udp_port, err))
+		return .Bind_Failed
+	}
+	tcp_ep, _ := net.bound_endpoint(listener)
+	udp_ep, _ := net.bound_endpoint(udp)
+	fmt.printf("ready tcp=%d udp=%d\n", tcp_ep.port, udp_ep.port)
+	if cfg.ready_exit do return .None
+
+	s.w.saver = proc[s](p: ^entity.Player) -> bool {
+		save_async(s, p)
+		return true
+	}
+	append(&s.w.hooks, world.every(AUTOSAVE_TICKS, proc[s](w: ^world.World) {
+		for p in w.players do save_async(s, p)
+	}))
+
+	sched.go(proc[s]() { world_loop(s) })
+	sched.go(proc[s, udp]() { status_loop(s, udp) })
+	if cfg.master != "" do sched.go(proc[s]() { heartbeat_loop(s) })
+
+	for {
+		sock, _, err := sched.accept(listener)
+		if err != nil {
+			log!(fmt.tprintf("accept: %v", err))
+			continue
+		}
+		sched.go(proc[s, sock]() { session(s, sock) })
+	}
+}
+
+// The world goroutine owns the world: sessions talk to it through s.requests.
+world_loop :: proc(s: ^Server) {
+	ticks := sched.make_chan(bool, 1)
+	if s.cfg.tick_ms > 0 {
+		period := time.Duration(s.cfg.tick_ms) * time.Millisecond
+		sched.go(proc[ticks, period]() {
+			for {
+				sched.sleep(period)
+				sched.try_select(sched.on_send(ticks, true))
+			}
+		})
+	}
+	for {
+		req: Request
+		switch sched.select(sched.on_recv(s.requests, &req), sched.on_recv(ticks)) {
+		case 0: scoped! { handle(s, req) }
+		case 1: scoped! { world.tick(s.w) }
+		}
+	}
+}
+
+handle :: proc(s: ^Server, req: Request) {
+	switch req.kind {
+	case .Join:
+		p, ok := world.join(s.w, req.rec, req.out)
+		if ok {
+			b := strings.builder_make(context.temp_allocator)
+			fmt.sbprintf(&b, "Welcome, %s.\n" if req.fresh else "Welcome back, %s.\n", p.name)
+			world.look(s.w, p, &b)
+			strings.write_string(&b, "> ")
+			p.out(strings.to_string(b))
+		}
+		sched.send(req.reply, p)
+	case .Line:
+		req.p.out(world.handle_line(s.w, req.p, req.line))
+		delete(req.line)
+	case .Leave:
+		save_async(s, req.p)
+		world.leave(s.w, req.p)
+		sched.send(req.reply, req.p)
+	case .Shutdown:
+		shutdown(s)
+	}
+}
+
+// Serializes now, writes on a goroutine of its own.
+save_async :: proc(s: ^Server, p: ^entity.Player) {
+	h: world.Persistent = p
+	b := strings.builder_make()
+	world.save_to(h, &b)
+	data := save.seal(&b)
+	path := fmt.aprintf("%s/%s.sav", s.cfg.saves, p.name)
+	sched.add(&s.pending_saves)
+	sched.go(proc[s, path, data]() {
+		defer sched.done(&s.pending_saves)
+		write_save(s, path, data) catch err { log!(fmt.tprintf("save %s: %v", path, err)) }
+		delete(path)
+		delete(data)
+	})
+}
+
+// Writes a temp file and renames it over the old save, so a crash never leaves half a file.
+write_save :: proc(s: ^Server, path, data: string) -> save.Error {
+	sched.lock(&s.save_mu)
+	defer sched.unlock(&s.save_mu)
+	tmp := strings.concatenate({path, ".tmp"}, context.temp_allocator)
+	if sched.write_entire_file(tmp, transmute([]byte)data) != nil do return .Io
+	err := save.Error.None
+	sched.blocking(proc[s, tmp, path, data, &err]() {
+		if os.rename(tmp, path) != nil {
+			err = .Io
+			return
+		}
+		locked!(&s.stats.mu) {
+			s.stats.saves += 1
+			s.stats.bytes += len(data)
+		}
+	})
+	return err
+}
+
+load_record :: proc(dir, name: string) -> (rec: entity.Player_Record, err: save.Error) {
+	path := fmt.tprintf("%s/%s.sav", dir, name)
+	data := sched.read_entire_file(path) or_return .Io
+	defer delete(data)
+	return entity.parse_record(string(data))
+}
+
+load_or_create :: proc(s: ^Server, name: string) -> (rec: entity.Player_Record, fresh: bool) {
+	rec = load_record(s.cfg.saves, name) catch err {
+		if err != .Io do log!(fmt.tprintf("save for %s is unusable (%v), starting fresh", name, err))
+		return entity.fresh_record(name), true
+	}
+	return rec, false
+}
+
+valid_name :: proc(name: string) -> bool {
+	if len(name) == 0 || len(name) > MAX_NAME do return false
+	for c in name {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') do return false
+	}
+	return true
+}
+
+// Queues a copy of msg for the client; drops it if the client is too far behind.
+deliver :: proc(outbox: sched.Chan(string), msg: string) {
+	owned := strings.clone(msg)
+	if sched.try_select(sched.on_send(outbox, owned)) < 0 do delete(owned)
+}
+
+session :: proc(s: ^Server, sock: net.TCP_Socket) {
+	track!("session") {
+		if f, err := sched.open(s.cfg.motd); err == nil {
+			sched.send_file(sock, f)
+			sched.close(f)
+		}
+		outbox := sched.make_chan(string, OUTBOX_CAP)
+		writer_done := sched.make_chan(bool, 1)
+		sched.go(proc[sock, outbox, writer_done]() {
+			writer(sock, outbox)
+			sched.send(writer_done, true)
+		})
+		defer {
+			sched.close(outbox)
+			sched.recv(writer_done)
+			sched.close(sock)
+		}
+
+		idle := time.Duration(s.cfg.idle_secs) * time.Second
+		r := Line_Reader{sock = sock, idle = idle}
+		out := proc[outbox](msg: string) { deliver(outbox, msg) }
+		reply := sched.make_chan(^entity.Player, 1)
+
+		deliver(outbox, "Who goes there?\n> ")
+		p: ^entity.Player
+		for p == nil {
+			line := read_line(&r) catch { return }
+			name := strings.trim_space(line)
+			if !valid_name(name) {
+				deliver(outbox, "Names are 1-16 letters or digits.\n> ")
+				continue
+			}
+			rec, fresh := load_or_create(s, name)
+			sched.send(s.requests, Request{kind = .Join, rec = rec, fresh = fresh, out = out, reply = reply})
+			p = sched.recv(reply)
+			if p == nil {
+				delete(rec.name)
+				deliver(outbox, "That name is taken.\n> ")
+			}
+		}
+
+		for {
+			line := read_line(&r) catch err {
+				if err == .Timeout do deliver(outbox, "* You doze off and fade away.\n")
+				break
+			}
+			sched.send(s.requests, Request{kind = .Line, p = p, line = strings.clone(line)})
+			verb, _, _ := strings.partition(strings.trim_space(line), " ")
+			if verb == "quit" do break
+		}
+		sched.send(s.requests, Request{kind = .Leave, p = p, reply = reply})
+		sched.recv(reply)
+		entity.free_player(p)
+	}
+}
+
+writer :: proc(sock: net.TCP_Socket, outbox: sched.Chan(string)) {
+	connected := true
+	for {
+		msg, ok := sched.recv(outbox)
+		if !ok do return
+		if connected {
+			_, err := sched.send(sock, transmute([]byte)msg)
+			connected = err == nil
+		}
+		delete(msg)
+	}
+}
+
+Read_Error :: enum { None, Closed, Timeout, Too_Long }
+
+Line_Reader :: struct {
+	sock:   net.TCP_Socket,
+	idle:   time.Duration,
+	buf:    [1024]byte,
+	lo, hi: int,
+}
+
+// The next line, without its line ending; valid until the next call.
+read_line :: proc(r: ^Line_Reader) -> (string, Read_Error) {
+	for {
+		for i in r.lo..<r.hi {
+			if r.buf[i] == '\n' {
+				line := string(r.buf[r.lo:i])
+				r.lo = i + 1
+				return strings.trim_right(line, "\r"), .None
+			}
+		}
+		if r.lo > 0 {
+			copy(r.buf[:], r.buf[r.lo:r.hi])
+			r.hi -= r.lo
+			r.lo = 0
+		}
+		if r.hi == len(r.buf) do return "", .Too_Long
+		timeout := r.idle if r.idle > 0 else nbio.NO_TIMEOUT
+		n, err := sched.socket_recv(r.sock, r.buf[r.hi:], timeout = timeout)
+		if err == net.TCP_Recv_Error.Timeout do return "", .Timeout
+		if err != nil || n == 0 do return "", .Closed
+		r.hi += n
+	}
+}
+
+status_loop :: proc(s: ^Server, sock: net.UDP_Socket) {
+	buf: [256]byte
+	for {
+		n, from, err := sched.recv_from(sock, buf[:])
+		if err != nil do continue
+		scoped! {
+			switch strings.trim_space(string(buf[:n])) {
+			case "status":
+				msg := fmt.tprintf("%s players=%d tick=%d\n", world.VERSION, len(s.w.players), s.w.tick)
+				sched.send_to(sock, transmute([]byte)msg, from)
+			case "shutdown":
+				sched.send(s.requests, Request{kind = .Shutdown})
+			}
+		}
+	}
+}
+
+heartbeat_loop :: proc(s: ^Server) {
+	ep4, _, err := sched.resolve(s.cfg.master)
+	if err != nil {
+		log!(fmt.tprintf("master %s: %v", s.cfg.master, err))
+		return
+	}
+	if ep4.address == nil do todo!("IPv6-only master servers")
+	for {
+		scoped! {
+			if conn, derr := sched.dial(ep4); derr == nil {
+				msg := fmt.tprintf("heartbeat %s players=%d\n", world.VERSION, len(s.w.players))
+				sched.send(conn, transmute([]byte)msg)
+				sched.close(conn)
+			}
+		}
+		sched.sleep(HEARTBEAT_EVERY)
+	}
+}
+
+shutdown :: proc(s: ^Server) {
+	log!(fmt.tprintf("shutting down, saving %d players", len(s.w.players)))
+	for p in s.w.players {
+		p.out("* The server is shutting down.\n")
+		save_async(s, p)
+	}
+	done := sched.make_chan(bool, 1)
+	sched.go(proc[s, done]() {
+		sched.wait(&s.pending_saves)
+		sched.send(done, true)
+	})
+	switch sched.select(sched.on_recv(done), sched.on_recv(sched.after(2 * time.Second))) {
+	case 0:
+		locked!(&s.stats.mu) { log!(fmt.tprintf("saves written: %d (%d bytes)", s.stats.saves, s.stats.bytes)) }
+	case 1:
+		log!("gave up waiting for saves")
+	}
+	os.exit(0)
+}

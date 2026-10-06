@@ -1,0 +1,196 @@
+package world
+
+import "core:fmt"
+import "core:strconv"
+import "core:strings"
+import "../entity"
+
+Command_Error :: enum { None, Unknown, Missing_Arg, Bad_Number, Bad_Direction, Blocked, No_Target, Not_Enough_Gold }
+
+@(rodata)
+ERROR_TEXT := [Command_Error]string{
+	.None            = "",
+	.Unknown         = "Huh? Type 'help'.",
+	.Missing_Arg     = "That needs an argument.",
+	.Bad_Number      = "That's not a number.",
+	.Bad_Direction   = "Which way is that?",
+	.Blocked         = "You can't go that way.",
+	.No_Target       = "There's nothing like that here.",
+	.Not_Enough_Gold = "You don't have that much gold.",
+}
+
+Ctx :: struct {
+	w:   ^World,
+	p:   ^entity.Player,
+	arg: string,
+	out: ^strings.Builder,
+}
+
+Handler :: closure(c: ^Ctx) -> Command_Error
+
+Command :: struct {
+	name:   string,
+	run:    Handler,
+	listed: bool,
+}
+
+Registry :: struct {
+	list:    [dynamic]Command,
+	by_name: map[string]int,
+}
+
+register :: proc(r: ^Registry, name: string, run: Handler, listed := true) {
+	r.by_name[name] = len(r.list)
+	append(&r.list, Command{name, run, listed})
+}
+
+alias :: proc(r: ^Registry, short, name: string) {
+	r.by_name[short] = r.by_name[name]
+}
+
+// command!(r, "name") { ... } registers the block as a handler; inside it, `c` is the ^Ctx.
+command :: proc!(r: Expr, name: string, body: Stmt) -> Stmt {
+	c := ident("c")
+	return quote {
+		register($r, $name, proc[]($c: ^Ctx) -> Command_Error {
+			$body
+			return .None
+		})
+	}
+}
+
+register_commands :: proc(r: ^Registry) {
+	command!(r, "look") { look(c.w, c.p, c.out) }
+
+	command!(r, "go") {
+		if c.arg == "" do return .Missing_Arg
+		d := parse_dir(c.arg) or_return .Bad_Direction
+		return go(c, d)
+	}
+	for d in Dir {
+		register(r, DIR_SHORT[d], proc[d](c: ^Ctx) -> Command_Error { return go(c, d) }, listed = false)
+	}
+
+	command!(r, "attack") {
+		if c.arg == "" do return .Missing_Arg
+		room := room_at(c.w, {c.p.x, c.p.y})
+		target := do!(Monster) {
+			for m in room.monsters {
+				if alive(m) && matches(name(m), c.arg) do take m
+			}
+			return .No_Target
+		}
+		strike(c, target)
+	}
+
+	command!(r, "say") {
+		if c.arg == "" do return .Missing_Arg
+		fmt.sbprintf(c.out, "You say: %s\n", c.arg)
+		announce(c.w, c.p, fmt.tprintf("* %s says: %s\n", c.p.name, c.arg))
+	}
+
+	command!(r, "stats") {
+		p := c.p
+		fmt.sbprintf(c.out, "%s | level %d | hp %d/%d | xp %d/%d | gold %d | kills %d | deaths %d\n",
+			p.name, p.level, p.hp, p.max_hp, p.xp, XP_TABLE[p.level - 1], p.gold, p.kills, p.deaths)
+	}
+
+	command!(r, "who") {
+		fmt.sbprintf(c.out, "%d online:", len(c.w.players))
+		for p, i in c.w.players do fmt.sbprintf(c.out, "%s%s", " " if i == 0 else ", ", p.name)
+		strings.write_byte(c.out, '\n')
+	}
+
+	command!(r, "bet") {
+		if c.arg == "" do return .Missing_Arg
+		amount := strconv.parse_int(c.arg) or_return .Bad_Number
+		if amount <= 0 do return .Bad_Number
+		if amount > c.p.gold do return .Not_Enough_Gold
+		if roll(&c.w.rng, 2) == 0 {
+			c.p.gold += amount
+			fmt.sbprintf(c.out, "You win %d gold!\n", amount)
+		} else {
+			c.p.gold -= amount
+			fmt.sbprintf(c.out, "You lose %d gold.\n", amount)
+		}
+	}
+
+	command!(r, "save") {
+		strings.write_string(c.out, "Saved.\n" if c.w.saver(c.p) else "Saving is off.\n")
+	}
+
+	command!(r, "quit") { fmt.sbprintf(c.out, "Bye, %s!\n", c.p.name) }
+
+	command!(r, "help") {
+		strings.write_string(c.out, "Commands:")
+		for cmd in c.w.commands.list {
+			if cmd.listed do fmt.sbprintf(c.out, " %s", cmd.name)
+		}
+		strings.write_string(c.out, "\nDirections: n s e w\n")
+	}
+
+	alias(r, "l", "look")
+	alias(r, "a", "attack")
+	alias(r, "?", "help")
+}
+
+parse_dir :: proc(s: string) -> (Dir, bool) {
+	for d in Dir {
+		if s == DIR_NAME[d] || s == DIR_SHORT[d] do return d, true
+	}
+	return .North, false
+}
+
+// Case-insensitive substring match, without allocating.
+matches :: proc(name, query: string) -> bool {
+	lower :: proc(c: byte) -> byte { return c + 32 if c >= 'A' && c <= 'Z' else c }
+	outer: for i in 0..=len(name) - len(query) {
+		for j in 0..<len(query) {
+			if lower(name[i + j]) != lower(query[j]) do continue outer
+		}
+		return true
+	}
+	return false
+}
+
+go :: proc(c: ^Ctx, d: Dir) -> Command_Error {
+	p := c.p
+	to := Pos{p.x, p.y} + DIR_DELTA[d]
+	if !in_bounds(to) do return .Blocked
+	announce(c.w, p, fmt.tprintf("* %s leaves %s.\n", p.name, DIR_NAME[d]))
+	move_player(c.w, p, to)
+	announce(c.w, p, fmt.tprintf("* %s arrives.\n", p.name))
+	look(c.w, p, c.out)
+	if boss := c.w.boss; alive(boss) && pos(boss) == to do fmt.sbprintln(c.out, roar(boss))
+	return .None
+}
+
+strike :: proc(c: ^Ctx, m: Monster) {
+	dmg := 1 + roll(&c.w.rng, c.p.level + 3)
+	hit := { dmg = dmg, killed = hurt(m, c.w, dmg, c.p.name) }
+	fmt.sbprintf(c.out, "You hit the %s for %d.\n", name(m), hit.dmg)
+	if !hit.killed do return
+	l := loot(m, c.w)
+	c.p.gold += l.gold
+	c.p.kills += 1
+	fmt.sbprintf(c.out, "You slay the %s! (+%d xp, +%d gold)\n", name(m), l.xp, l.gold)
+	gain_xp(c.p, l.xp, c.out)
+}
+
+run_command :: proc(w: ^World, p: ^entity.Player, line: string, out: ^strings.Builder) -> Command_Error {
+	line := strings.trim_space(line)
+	if line == "" do return .None
+	verb, _, arg := strings.partition(line, " ")
+	index, found := w.commands.by_name[verb]
+	if !found do return .Unknown
+	c := Ctx{w, p, strings.trim_space(arg), out}
+	return w.commands.list[index].run(&c)
+}
+
+// Runs one line of input and returns the reply, prompt included, on the temp allocator.
+handle_line :: proc(w: ^World, p: ^entity.Player, line: string) -> string {
+	b := strings.builder_make(context.temp_allocator)
+	run_command(w, p, line, &b) catch err { fmt.sbprintln(&b, ERROR_TEXT[err]) }
+	strings.write_string(&b, "> ")
+	return strings.to_string(b)
+}

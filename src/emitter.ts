@@ -323,8 +323,11 @@ export class Emitter {
       case "Block":
         if (n.inline) return this.inline(n);
         if (this.pretty && this.tok(n.toks[n.start]) === "{") return this.compact ? `{ ${n.stmts.map((s) => this.withPre(s)).join("; ")} }` : this.prettyBlock(n);
+        if (this.tok(n.toks[n.start]) !== "do") return this.block(n);
+        // statements hoisted before the body must stay under the `do`
+        if (n.stmts.some((s) => A(s)._pre?.length)) return `{ ${n.stmts.map((s) => this.withPre(s)).join("; ")} }`;
         // Odin rejects `do { ... }`, which a statement macro that expands to several statements gives
-        return this.tok(n.toks[n.start]) === "do" ? this.block(n).replace(/^do\s+(?=\{)/, "") : this.block(n);
+        return this.block(n).replace(/^do\s+(?=\{)/, "");
       case "Switch":
         return this.pretty ? this.prettySwitch(n) : this.generic(n);
       case "ValueDecl": {

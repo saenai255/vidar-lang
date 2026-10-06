@@ -1,0 +1,292 @@
+package world
+
+import "core:fmt"
+import "core:strings"
+import "../entity"
+import "../save"
+
+// world and entity import each other: the world spawns and moves entities,
+// and entities act on the world. vidar merges the two into one Odin package.
+
+MAJOR :: 1
+MINOR :: 0
+VERSION :: fmt.tprintf!("SlimeMUD v%d.%d", MAJOR, MINOR)
+
+WORLD_W :: 32
+WORLD_H :: 32
+MAX_LEVEL :: 40
+START_HP :: 30
+SLIME_RESPAWN :: 30
+KING_RESPAWN :: 120
+PLAYER_REGEN_EVERY :: 10
+SLIME_REGEN_EVERY :: 5
+RUMBLE_EVERY :: 250
+
+static_assert :: proc!(ok: bool, msg: string) {
+	if !ok do compile_error(msg)
+}
+
+static_assert!(WORLD_W * WORLD_H <= 4096, "the world is too big for one rooms table")
+static_assert!(WORLD_W >= 2 && WORLD_H >= 2, "the king needs a room away from the spawn pool")
+
+room_names :: proc!(w, h: int) -> [dynamic]string {
+	adjectives := [8]string{"Damp", "Mossy", "Glowing", "Sticky", "Echoing", "Quiet", "Bubbling", "Sunken"}
+	places := [6]string{"Cave", "Grotto", "Bog", "Tunnel", "Hollow", "Pool"}
+	out: [dynamic]string
+	for y in 0..<h {
+		for x in 0..<w {
+			if x == 0 && y == 0 {
+				append(&out, "Spawn Pool")
+			} else {
+				append(&out, adjectives[(x * 7 + y * 3) % 8] + " " + places[(x * 5 + y * 11) % 6])
+			}
+		}
+	}
+	return out
+}
+
+// xp_table[l - 1] is the total xp needed to leave level l.
+xp_curve :: proc!(n: int) -> [dynamic]int {
+	out: [dynamic]int
+	total := 0
+	for l in 1..=n {
+		total += 10 * l * l + 15 * l
+		append(&out, total)
+	}
+	return out
+}
+
+@(rodata)
+ROOM_NAMES: [WORLD_W * WORLD_H]string = room_names!(WORLD_W, WORLD_H)
+
+@(rodata)
+XP_TABLE: [MAX_LEVEL]int = xp_curve!(MAX_LEVEL)
+
+Pos :: [2]int
+
+Dir :: enum { North, South, East, West }
+
+@(rodata)
+DIR_NAME := [Dir]string{.North = "north", .South = "south", .East = "east", .West = "west"}
+@(rodata)
+DIR_SHORT := [Dir]string{.North = "n", .South = "s", .East = "e", .West = "w"}
+@(rodata)
+DIR_DELTA := [Dir]Pos{.North = {0, -1}, .South = {0, 1}, .East = {1, 0}, .West = {-1, 0}}
+
+Loot :: struct { gold, xp: int }
+
+Entity :: interface { name, describe }
+name     :: proc(e: Entity) -> string ---
+describe :: proc(e: Entity, b: ^strings.Builder) ---
+
+Actor :: interface { using Entity, act, hurt, alive, pos }
+act   :: proc(a: Actor, w: ^World) ---
+hurt  :: proc(a: Actor, w: ^World, dmg: int, by: string) -> (killed: bool) ---
+alive :: proc(a: Actor) -> bool ---
+pos   :: proc(a: Actor) -> Pos ---
+
+Lootable :: interface { using Entity, loot }
+loot :: proc(l: Lootable, w: ^World) -> Loot ---
+
+// Diamond: Actor and Lootable both extend Entity.
+Monster :: interface { using Actor, using Lootable }
+
+Boss :: interface { using Monster, roar }
+roar :: proc(b: Boss) -> string ---
+
+Persistent :: interface { save_to, load_from }
+save_to   :: proc(p: Persistent, b: ^strings.Builder) ---
+load_from :: proc(p: Persistent, text: string) -> save.Error ---
+
+Hero :: interface { using Actor, using Persistent }
+
+Room :: struct {
+	players:  [dynamic]^entity.Player,
+	monsters: [dynamic]Monster,
+}
+
+World :: struct {
+	tick:     int,
+	rng:      Rng,
+	rooms:    []Room,
+	monsters: [dynamic]Monster,
+	players:  [dynamic]^entity.Player,
+	boss:     Boss,
+	commands: Registry,
+	hooks:    [dynamic]closure(w: ^World),
+	saver:    closure(p: ^entity.Player) -> bool,
+}
+
+// xorshift64*: the same sequence on every platform, so runs are reproducible.
+Rng :: struct { s: u64 }
+
+make_rng :: proc(seed: u64) -> Rng {
+	s := seed ~ 0x9E3779B97F4A7C15
+	return {s if s != 0 else 1}
+}
+
+roll :: proc(r: ^Rng, n: int) -> int {
+	x := r.s
+	x ~= x >> 12
+	x ~= x << 25
+	x ~= x >> 27
+	r.s = x
+	return int((x * 0x2545F4914F6CDD1D) % u64(n))
+}
+
+in_range :: proc!(v: Expr, r: Expr) -> Expr(bool) {
+	parts := split_range(r)
+	if len(parts) == 0 do compile_error("in_range!: expected lo..<hi or lo..=hi, got " + stringify(r))
+	x := once(v)
+	lo := parts[0]
+	hi := parts[2]
+	if parts[1] == "..<" do return quote($x >= $lo && $x < $hi)
+	return quote($x >= $lo && $x <= $hi)
+}
+
+in_bounds :: proc(p: Pos) -> bool {
+	return in_range!(p.x, 0..<WORLD_W) && in_range!(p.y, 0..<WORLD_H)
+}
+
+every :: proc(n: int, f: closure(w: ^World)) -> closure(w: ^World) {
+	return proc[n, f](w: ^World) { if w.tick % n == 0 do f(w) }
+}
+
+make_world :: proc(seed: u64, slimes: int) -> ^World {
+	w := new(World)
+	w.rng = make_rng(seed)
+	w.rooms = make([]Room, WORLD_W * WORLD_H)
+	w.saver = proc[](p: ^entity.Player) -> bool { return false }
+	register_commands(&w.commands)
+	for _ in 0..<slimes {
+		r := roll(&w.rng, 100)
+		kind := entity.Slime_Kind.Green if r < 50 else .Blue if r < 85 else .Red
+		at := Pos{roll(&w.rng, WORLD_W), roll(&w.rng, WORLD_H)}
+		add_monster(w, entity.new_slime(kind, at))
+	}
+	king := entity.new_king({WORLD_W - 1, WORLD_H - 1})
+	w.boss = king
+	add_monster(w, king)
+	append(&w.hooks, every(RUMBLE_EVERY, proc[](w: ^World) {
+		for p in w.players do tell(p, "* A distant BLORP echoes through the caves.\n")
+	}))
+	when ODIN_DEBUG do dbg!(len(w.monsters))
+	return w
+}
+
+room_at :: proc(w: ^World, p: Pos) -> ^Room {
+	return &w.rooms[p.y * WORLD_W + p.x]
+}
+
+add_monster :: proc(w: ^World, m: Monster) {
+	append(&w.monsters, m)
+	append(&room_at(w, pos(m)).monsters, m)
+}
+
+// Moves m's room entry; the monster updates its own position.
+relocate :: proc(w: ^World, m: Monster, from, to: Pos) {
+	list := &room_at(w, from).monsters
+	for other, i in list {
+		if other == m {
+			ordered_remove(list, i)
+			break
+		}
+	}
+	append(&room_at(w, to).monsters, m)
+}
+
+move_player :: proc(w: ^World, p: ^entity.Player, to: Pos) {
+	list := &room_at(w, {p.x, p.y}).players
+	for other, i in list {
+		if other == p {
+			ordered_remove(list, i)
+			break
+		}
+	}
+	p.x, p.y = to.x, to.y
+	append(&room_at(w, to).players, p)
+}
+
+tell :: proc(p: ^entity.Player, msg: string) {
+	p.out(msg)
+}
+
+// Tells everyone else in p's room.
+announce :: proc(w: ^World, p: ^entity.Player, msg: string) {
+	for other in room_at(w, {p.x, p.y}).players {
+		if other != p do tell(other, msg)
+	}
+}
+
+join :: proc(w: ^World, rec: entity.Player_Record, out: closure(msg: string)) -> (^entity.Player, bool) {
+	for other in w.players {
+		if other.name == rec.name do return nil, false
+	}
+	p := entity.new_player(rec, out)
+	if !in_bounds({p.x, p.y}) do p.x, p.y = 0, 0
+	append(&w.players, p)
+	append(&room_at(w, {p.x, p.y}).players, p)
+	announce(w, p, fmt.tprintf("* %s arrives.\n", p.name))
+	return p, true
+}
+
+leave :: proc(w: ^World, p: ^entity.Player) {
+	announce(w, p, fmt.tprintf("* %s leaves the game.\n", p.name))
+	list := &room_at(w, {p.x, p.y}).players
+	for other, i in list {
+		if other == p {
+			ordered_remove(list, i)
+			break
+		}
+	}
+	for other, i in w.players {
+		if other == p {
+			ordered_remove(&w.players, i)
+			break
+		}
+	}
+}
+
+tick :: proc(w: ^World) {
+	w.tick += 1
+	for m in w.monsters do act(m, w)
+	for p in w.players do act(p, w)
+	for h in w.hooks do h(w)
+}
+
+gain_xp :: proc(p: ^entity.Player, xp: int, out: ^strings.Builder) {
+	p.xp += xp
+	for p.level < MAX_LEVEL && p.xp >= XP_TABLE[p.level - 1] {
+		p.level += 1
+		p.max_hp += 5
+		p.hp = p.max_hp
+		fmt.sbprintf(out, "You reach level %d!\n", p.level)
+	}
+	check!(p.hp <= p.max_hp)
+}
+
+look :: proc(w: ^World, p: ^entity.Player, b: ^strings.Builder) {
+	here := Pos{p.x, p.y}
+	room := room_at(w, here)
+	fmt.sbprintf(b, "== %s (%d,%d) ==\nExits:", ROOM_NAMES[here.y * WORLD_W + here.x], here.x, here.y)
+	for d in Dir {
+		if in_bounds(here + DIR_DELTA[d]) do fmt.sbprintf(b, " %s", DIR_NAME[d])
+	}
+	strings.write_byte(b, '\n')
+	n := 0
+	for m in room.monsters {
+		if !alive(m) do continue
+		strings.write_string(b, "Here: " if n == 0 else ", ")
+		describe(m, b)
+		n += 1
+	}
+	if n > 0 do strings.write_byte(b, '\n')
+	n = 0
+	for other in room.players {
+		if other == p do continue
+		strings.write_string(b, "Players: " if n == 0 else ", ")
+		strings.write_string(b, other.name)
+		n += 1
+	}
+	if n > 0 do strings.write_byte(b, '\n')
+}

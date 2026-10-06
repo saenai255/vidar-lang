@@ -6,9 +6,13 @@ import "../c"
 // a different `Node` than a.Node
 Node :: struct { id: int }
 
+// a closure type whose result is a cycle member's type
+Maker :: closure(id: int) -> Node
+
 helper :: proc() -> string { return "b.helper" }
 
 describe :: proc(id: int) -> string {
-	n := Node{id}
+	make_node: Maker = proc[](id: int) -> Node { return Node{id} }
+	n := make_node(id)
 	return fmt.tprintf("b(%d) -> %s", n.id, c.describe())
 }

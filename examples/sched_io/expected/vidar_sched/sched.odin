@@ -98,6 +98,9 @@ pick :: proc() -> ^G {
 		if g := pop_ready(); g != nil do return g
 		if sched.io_waiting == 0 do panic("all goroutines are asleep - deadlock!")
 		sched.since_poll = 0
+		// ops done without the kernel complete at tick start, then the tick blocks anyway
+		nbio.tick(0)
+		if g := pop_ready(); g != nil do return g
 		nbio.tick()
 	}
 }
@@ -255,7 +258,8 @@ worker_loop :: proc() -> ^nbio.Event_Loop {
 worker_done :: proc(op: ^nbio.Operation) {
 	w := (^Io_Wait)(op.user_data[0])
 	w.result = op^
-	back := nbio.prep_timeout(0, resume_from_worker, sched_loop_of(op))
+	// not 0: a zero timeout arriving between pick's poll and wait wouldn't end the wait
+	back := nbio.prep_timeout(time.Nanosecond, resume_from_worker, sched_loop_of(op))
 	back.user_data[0] = w
 	nbio.exec(back)
 }
