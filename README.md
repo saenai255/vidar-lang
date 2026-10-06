@@ -30,12 +30,12 @@ A directory is a package: all its `.vidar` (and plain `.odin`) files are transpi
 
 ## Closures
 
-A proc literal with a capture list is a closure. `[x]` copies `x` into the closure; `[&x]` captures it by reference, and `x` is then moved to the heap so the closure can safely outlive the frame. `proc[]` is a closure with no captures. A plain `proc(...)` with no brackets is an ordinary Odin proc.
+A proc literal with a capture list is a closure. `[x]` copies `x` into the closure; `[&x]` captures it by reference: the closure holds `&x` and nothing is moved, so keeping `x` alive while the closure runs is up to you. For state that outlives the frame, capture a heap pointer by value: `count := new(int)` with `proc[count]`. `proc[]` is a closure with no captures. A plain `proc(...)` with no brackets is an ordinary Odin proc.
 
 ```odin
 make_counter :: proc(start: int) -> closure() -> int {
-	count := start
-	return proc[&count]() -> int { count += 1; return count }
+	count := new_clone(start)
+	return proc[count]() -> int { count^ += 1; return count^ }
 }
 
 main :: proc() {
@@ -84,7 +84,7 @@ There is one way to declare, implement, convert to and call an interface, and ev
 
 - **Methods are top-level procs without a body.** `area :: proc(s: Shape) -> f64 ---` declares the method `area`. Its first parameter is the interface. The interface lists its methods by name, `Shape :: interface { area, scale }`, in vtable order. vidar checks both directions: every listed name must be such a proc in the interface's package, and every bodiless proc that takes an interface first must be listed by it. Outside `foreign` blocks, `---` procs are only for interface methods.
 - **Implementations are ordinary procs.** `impl I for T { m = t_m, ... }` binds each method to a proc declared with a body that takes `^T` first, followed by the method's other parameters. vidar checks for missing, extra or duplicate bindings, the receiver type and the parameter counts. Odin checks the parameter and result types. The implementing procs stay callable by their own names.
-- **Calls are proc calls.** Each method becomes an Odin proc group: `area :: proc{__Shape_area, circle_area, rect_area, ...}`. Called with `^T`, Odin picks `T`'s proc, a static call with no vtable. Called with an interface value, it picks the dispatcher, which goes through the vtable. So a call reads the same whether it is static or dynamic, and generic code (`$T`) can call methods on any implementer. `x->m()` on an interface value is an error.
+- **Calls are proc calls.** Each method becomes an Odin proc group: `area :: proc{__Shape_area, circle_area, rect_area, ...}`. Called with `^T`, Odin picks `T`'s proc, a static call with no vtable. Called with an interface value, it picks the dispatcher. Since every impl lives in the interface's package (or its cycle), the dispatcher knows them all: it compares the value's vtable pointer with each impl's and calls the bound proc directly, which Odin can inline. Only vtables it can't name (a base interface reached from another package) or more than 8 candidates fall back to the indirect call. So a call reads the same whether it is static or dynamic, and generic code (`$T`) can call methods on any implementer. `x->m()` on an interface value is an error.
 - **Interface values hold a pointer.** The value is `struct { data: rawptr, __vtable: ^VTable }`. `Shape(x)` converts explicitly from `^T` (or another `Shape`). Conversions are also inserted automatically where the expected type is known to be an interface: typed declarations, assignments, call arguments, `return`, named struct-literal fields, and `append` to a `[dynamic]Interface`. Converting a plain value is an error. Write `&x`, or `new_clone(x)` for a heap copy you own.
 - **Packages.** Callers in other packages qualify methods like any other proc: `shapes.area(&c)`. An impl can implement another package's interface (`impl game.Entity for Button`) only when it's in the interface's package or in an import cycle with it, and the bound procs must be declared in that package or cycle. That is because Odin needs the proc groups and all impls in one package.
 - **Extending.** `Item :: interface { using Named, using Sized, describe }` extends any number of interfaces, from this package or an imported one. An `Item` value converts implicitly to `Named` or `Sized` (no allocation; the child vtable embeds its bases' vtables), and inherited methods work on it: `name(item)`. `impl Item for T` binds the inherited methods too, and also implements every base declared in the same package (or import cycle), so `&t` converts to those as well. Diamonds are fine; two different methods with the same name are an error.

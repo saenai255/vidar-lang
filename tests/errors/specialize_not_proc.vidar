@@ -1,0 +1,5 @@
+// error: @(specialize) goes on a proc declaration with a body: name :: proc(...) { ... }
+package main
+@(specialize)
+N :: 5
+main :: proc() {}

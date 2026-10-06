@@ -54,6 +54,26 @@ export interface ImplInfo {
   implied?: boolean;
 }
 
+/** A @(specialize) proc. */
+export interface SpecInfo {
+  lit: ProcLit;
+  /** where its parameter types are resolved */
+  scope: Scope;
+  /** clone key -> the parameters that are compile-time in that clone */
+  clones: Map<string, string[]>;
+  eligible?: Set<string>;
+}
+
+/** A @(table) proc: `values` holds the table when it was computed at compile time. */
+export interface TableInfo {
+  lit: ProcLit;
+  domain: "bool" | "u8" | "i8" | "enum";
+  param: string;
+  type: Expr;
+  result: Expr;
+  values?: string[];
+}
+
 /** `name :: proc(x: I, ...) ---` listed in `I :: interface { name, ... }`. */
 export interface IfaceMethod {
   name: string;
@@ -68,6 +88,9 @@ const INT_TYPES = new Set(["int", "uint", "i8", "i16", "i32", "i64", "i128", "u8
   "i16le", "i32le", "i64le", "u16le", "u32le", "u64le", "i16be", "i32be", "i64be", "u16be", "u32be", "u64be"]);
 const FLOAT_TYPES = new Set(["f16", "f32", "f64", "f16le", "f32le", "f64le", "f16be", "f32be", "f64be"]);
 const MAX_EXPANSION_DEPTH = 64;
+/** builtin procs with one result */
+const SINGLE_BUILTINS = new Set(["len", "cap", "min", "max", "abs", "clamp", "size_of", "align_of", "offset_of", "type_of", "typeid_of", "type_info_of",
+  "new", "new_clone", "make", "raw_data", "string", "cstring", "rune", "bool", "b8", "b16", "b32", "b64", "complex", "real", "imag", "swizzle", "transmute", "auto_cast", "cast"]);
 
 export function posOf(n: Node): Pos {
   return n.toks[n.start]?.pos ?? n.toks[0].pos;
@@ -102,6 +125,10 @@ export class Analyzer {
   private anonCounter = 0;
   /** method declaration -> its interface method */
   readonly ifaceMethods = new Map<GlobalSym, IfaceMethod>();
+  readonly ifaceSyms: GlobalSym[] = [];
+
+  /** `-opt`: the emitter also rewrites plain Odin where the result is provably the same */
+  optimize = false;
 
   /** set when analyzing for tooling: errors are collected per statement instead of thrown */
   errors: CompileError[] | null = null;
@@ -180,9 +207,19 @@ export class Analyzer {
           return sym;
         });
         A(s)._syms = syms;
+        const attrs = this.takeAttrs(s, ["specialize", "table"]);
+        if (attrs.size) {
+          const lit = s.values.length === 1 && s.isConst ? unwrapProc(s.values[0]) : undefined;
+          const which = [...attrs].map((a) => `@(${a})`).join(" and ");
+          if (attrs.size > 1) throw new CompileError("a proc is either @(specialize) or @(table), not both", posOf(s));
+          if (!lit || !lit.body || lit.comptime || lit.captures) throw new CompileError(`${which} goes on a proc declaration with a body: name :: proc(...) { ... }`, posOf(s));
+          if (attrs.has("specialize")) this.specialized.set(syms[0], { lit, scope: fileScope, clones: new Map() });
+          else this.tables.set(syms[0], { lit } as TableInfo);
+        }
         s.values.forEach((v, i) => {
           if (v.k === "InterfaceType") {
             A(v)._ifaceSym = syms[i];
+            this.ifaceSyms.push(syms[i]);
             this.pendingIfaces.push({ node: v, sym: syms[i] });
           }
           if (v.k === "ProcLit" && !v.body && !v.comptime && s.isConst) this.bodiless.push({ sym: syms[i], lit: v });
@@ -212,6 +249,8 @@ export class Analyzer {
       if (anon && !s.type && !s.isConst) throw new CompileError("anonymous struct literals can only be declared inside a procedure", posOf(anon));
       if (s.type) this.expr(s.type, scope);
       this.withStmt(s, () => s.values.forEach((v) => this.expr(v, scope)));
+      const table = this.tables.get((A(s)._syms as GlobalSym[])[0]);
+      if (table) this.guard(() => this.resolveTable((A(s)._syms as GlobalSym[])[0], table));
       if (s.type) s.values.forEach((v) => this.convertTo(v, { t: "node", node: s.type!, scope }));
       return;
     }
@@ -338,6 +377,18 @@ export class Analyzer {
         const isRange = s.x.k === "Binary" && (s.x.op === "..<" || s.x.op === "..=");
         const iterTy = isRange ? undefined : this.typeOf(s.x, scope);
         const rangeTy = isRange ? this.rangeElemTy(s.x as Extract<Expr, { k: "Binary" }>, scope) : undefined;
+        const pool = isRange ? undefined : this.poolOf(iterTy);
+        if (pool) {
+          if (s.vals.length !== 1) throw new CompileError("a loop over a Pool takes one value: for x in pool (there is no index)", posOf(s));
+          if (s.vals[0].byRef) throw new CompileError(`'${s.vals[0].name}' is already a pointer into the pool; write for ${s.vals[0].name} in ...`, posOf(s));
+          A(s)._pool = pool;
+          const ty: Ty = { t: "node", node: synthIdent(pool.name, posOf(s)), scope: pool.scope };
+          const v = this.declareLocal(s.vals[0].name, inner, { declKind: "range", ty, declTok: s.toks[s.vals[0].tok] });
+          this.poolVars.set(v, pool);
+          A(s)._syms = [v];
+          this.stmt(s.body, inner);
+          return;
+        }
         A(s)._syms = s.vals.map((v, i) =>
           this.declareLocal(v.name, inner, {
             declKind: "range",
@@ -389,7 +440,7 @@ export class Analyzer {
   }
 
   private declareLocal(name: string, scope: Scope, init: Partial<LocalSym>): LocalSym {
-    const sym: LocalSym = { kind: "local", name, ctx: scope.ctx ?? { closure: false }, isConst: false, scope, boxed: false, declKind: "decl", ...init };
+    const sym: LocalSym = { kind: "local", name, ctx: scope.ctx ?? { closure: false }, isConst: false, scope, refCaptured: false, declKind: "decl", ...init };
     if (name !== "_") scope.syms.set(name, sym);
     return sym;
   }
@@ -478,6 +529,7 @@ export class Analyzer {
           if (e.args.length === 1 && !this.upcast(e.args[0], fnSym)) this.requirePointer(e.args[0], fnSym);
           return;
         }
+        if (e.fn.k === "Ident" && !fnSym && this.poolCall(e, scope)) return;
         if (e.fn.k === "Ident" && e.fn.name === "append" && !fnSym && e.args.length > 1) {
           const target = this.typeOf(e.args[0], scope);
           const elem = target && this.elemOf(target);
@@ -489,8 +541,14 @@ export class Analyzer {
           if (e.args.some((a) => a.k === "FieldValue")) throw new CompileError("named arguments are not supported when calling closures", posOf(e));
           A(e)._closure = ft;
         }
+        const spec = fnSym?.kind === "global" ? this.specialized.get(fnSym) : undefined;
+        if (spec) this.specializeCall(e, fnSym as GlobalSym, spec, scope);
         const method = fnSym?.kind === "global" ? this.ifaceMethods.get(fnSym) : undefined;
-        if (method && e.args[0]) this.upcast(e.args[0], method.iface);
+        if (method && e.args[0] && this.poolVar(e.args[0]) && this.upcast(e.args[0], method.iface)) A(e.args[0])._wrapIface = this.poolVar(e.args[0]);
+        else if (method && e.args[0] && this.upcast(e.args[0], method.iface)) {
+          // the method's proc group has a dispatcher for each interface in its unit that inherits it
+          if (A(e.args[0])._upcast.from.pkg.unit === method.iface.pkg.unit) delete A(e.args[0])._upcast;
+        }
         if (ft?.t === "sig") this.convertArgs(e.args, ft, method ? 1 : 0);
         return;
       }
@@ -517,6 +575,15 @@ export class Analyzer {
       case "InterfaceType":
         if (!A(e)._ifaceSym) throw new CompileError("interfaces must be declared as named constants: Name :: interface { ... }", posOf(e));
         return;
+      case "Binary": {
+        this.expr(e.x, scope);
+        this.expr(e.y, scope);
+        const isNil = (x: Expr) => x.k === "Ident" && x.name === "nil";
+        const value = isNil(e.y) ? e.x : isNil(e.x) ? e.y : undefined;
+        const iface = (e.op === "==" || e.op === "!=") && value ? this.ifaceOf(this.typeOf(value, scope)) : undefined;
+        if (iface) A(e)._ifaceNil = { iface, value };
+        return;
+      }
       case "Quote":
         throw new CompileError("'quote' is only allowed inside comptime procs", posOf(e));
       default:
@@ -539,7 +606,7 @@ export class Analyzer {
           throw new CompileError(`'${c.name}' belongs to an outer procedure; capture it there first`, p.toks[c.tok].pos);
         if (c.byRef && target.kind === "local") {
           if (target.declKind === "other") throw new CompileError(`'${c.name}' cannot be captured by reference`, p.toks[c.tok].pos);
-          target.boxed = true;
+          target.refCaptured = true;
         }
         const sym: CaptureSym = { kind: "capture", name: c.name, byRef: c.byRef, target, ctx, declTok: p.toks[c.tok] };
         root.syms.set(c.name, sym);
@@ -634,6 +701,22 @@ export class Analyzer {
     if (e.k !== "Call") return undefined;
     const t = this.normalize(this.typeOf(e.fn, scope));
     return t?.t === "sig" ? t : undefined;
+  }
+
+  /** Whether `e` is one value: a call to a proc with several results spreads into variadic arguments. */
+  isSingleValue(e: Expr, scope: Scope): boolean {
+    if (e.k === "MacroCall") return !!A(e)._expansion && this.isSingleValue(A(e)._expansion, scope);
+    if (e.k === "Paren") return this.isSingleValue(e.x, scope);
+    if (e.k === "Postfix" && e.op === "or_return") return false;
+    if (e.k !== "Call") return true;
+    const fn = e.fn;
+    if (fn.k === "Ident") {
+      const sym = A(fn)._sym ?? this.lookup(fn.name, scope, null);
+      if (!sym) return SINGLE_BUILTINS.has(fn.name) || INT_TYPES.has(fn.name) || FLOAT_TYPES.has(fn.name);
+      if (this.typeDeclOf(sym)) return true;
+    }
+    const sig = this.callSig(e, scope);
+    return !!sig && sig.sig.results.reduce((n, r) => n + Math.max(1, r.names.length), 0) === 1;
   }
 
   resultTy(sigTy: Extract<Ty, { t: "sig" }>, index: number): Ty | undefined {
@@ -876,6 +959,11 @@ export class Analyzer {
   convertTo(e: Expr, ty: Ty | undefined): void {
     const iface = this.ifaceOf(ty);
     if (!iface) return;
+    if (this.poolVar(e)) {
+      A(e)._wrapIface = this.poolVar(e);
+      this.upcast(e, iface);
+      return;
+    }
     if (e.k === "Ident" && e.name === "nil") return;
     if (e.k === "Lit" && e.kind === "undef") return;
     if (e.k === "CompoundLit" && !e.type) return;
@@ -886,6 +974,10 @@ export class Analyzer {
     if (from) throw new CompileError(`'${from.name}' does not extend '${iface.name}'`, posOf(e));
     this.requirePointer(e, iface);
     A(e)._wrapIface = iface;
+  }
+
+  private poolVar(e: Expr): GlobalSym | undefined {
+    return e.k === "Ident" && A(e)._sym?.kind === "local" ? this.poolVars.get(A(e)._sym) : undefined;
   }
 
   /** Marks `e` for conversion to `iface` when it holds an interface extending it. */
@@ -923,6 +1015,253 @@ export class Analyzer {
       if (rest) return [b, ...rest];
     }
     return undefined;
+  }
+
+  private closed = new Map<GlobalSym, boolean>();
+
+  /**
+   * No interface in another unit extends `sym`. Impls live in their interface's unit, so then
+   * every type an `sym` value can hold is known here.
+   */
+  isClosed(sym: GlobalSym): boolean {
+    let v = this.closed.get(sym);
+    if (v === undefined) {
+      v = !this.ifaceSyms.some((d) => d.pkg.unit !== sym.pkg.unit && this.ancestorsOf(d).includes(sym));
+      this.closed.set(sym, v);
+    }
+    return v;
+  }
+
+  // ---- @(specialize) and @(table) ----
+
+  /** @(specialize) procs: a copy is emitted for each set of parameters that call sites pass constants to */
+  readonly specialized = new Map<GlobalSym, SpecInfo>();
+  /** @(table) procs: a lookup table over every value of the parameter */
+  readonly tables = new Map<GlobalSym, TableInfo>();
+
+  /** Removes vidar's own attributes from a declaration (Odin rejects unknown ones) and returns those found. */
+  private takeAttrs(s: ValueDecl, names: string[]): Set<string> {
+    const found = new Set<string>();
+    const end = s.names[0] ? s.names[0].tok : s.start;
+    const blank = (i: number) => this.tokText.set(s.toks[i], "");
+    for (let i = s.start; i < end; i++) {
+      if (!(s.toks[i].kind === "op" && s.toks[i].text === "@")) continue;
+      const next = s.toks[i + 1];
+      if (next?.kind === "ident") {
+        if (names.includes(next.text)) found.add(next.text), blank(i), blank(i + 1);
+        continue;
+      }
+      if (next?.text !== "(") continue;
+      // the items of @(a, b = c, ...) at depth one
+      const items: [number, number][] = [];
+      let depth = 0;
+      let from = i + 2;
+      let close = i + 1;
+      for (let j = i + 1; j < end; j++) {
+        const t = s.toks[j].text;
+        if (t === "(") depth++;
+        else if (t === ")" && --depth === 0) {
+          items.push([from, j]);
+          close = j;
+          break;
+        } else if (t === "," && depth === 1) items.push([from, j]), (from = j + 1);
+      }
+      const ours = items.filter(([a, b]) => b - a === 1 && names.includes(s.toks[a].text));
+      for (const [a] of ours) found.add(s.toks[a].text);
+      if (ours.length) {
+        // the attributes Odin knows stay, as `@(a, b)`
+        const rest = items.filter((it) => !ours.includes(it) && it[1] > it[0]).map(([a, b]) => joinTokens(s.toks.slice(a, b)));
+        for (let j = i + 1; j <= close; j++) blank(j);
+        this.tokText.set(s.toks[i], rest.length ? `@(${rest.join(", ")})` : "");
+      }
+      i = close;
+    }
+    return found;
+  }
+
+  /** Parameters a constant can be passed to as a compile-time parameter: basic types and enums. */
+  specParams(info: SpecInfo): Set<string> {
+    if (info.eligible) return info.eligible;
+    const out = new Set<string>();
+    for (const p of info.lit.sig.params) {
+      if (!p.type || p.type.k === "Spread") continue;
+      const ty: Ty = { t: "node", node: p.type, scope: info.scope };
+      const n = this.normalize(ty);
+      const basic = this.isBasic(ty) && nodeText(p.type) !== "cstring";
+      const isEnum = n?.t === "node" && n.node.k === "EnumType";
+      if (basic || isEnum) for (const name of p.names) if (!name.prefix && name.name !== "_") out.add(name.name);
+    }
+    return (info.eligible = out);
+  }
+
+  /** A call passing constants to some of a @(specialize) proc's parameters calls the copy where they are compile-time. */
+  private specializeCall(e: Extract<Expr, { k: "Call" }>, sym: GlobalSym, info: SpecInfo, scope: Scope): void {
+    if (e.args.some((a) => a.k === "FieldValue" || a.k === "Spread")) return;
+    const eligible = this.specParams(info);
+    const names = info.lit.sig.params.flatMap((p) => p.names.map((n) => n.name));
+    const consts = names.filter((n, i) => i < e.args.length && eligible.has(n) && this.isConstant(e.args[i], scope));
+    if (!consts.length) return;
+    const key = consts.join("_");
+    info.clones.set(key, consts);
+    A(e)._spec = { sym, key };
+  }
+
+  /** Known at compile time: literals, constants, enum values, and arithmetic on them. */
+  isConstant(e: Expr, scope: Scope): boolean {
+    switch (e.k) {
+      case "Lit":
+        return e.kind !== "undef";
+      case "ImplicitSelector":
+        return true;
+      case "Paren":
+        return this.isConstant(e.x, scope);
+      case "Unary":
+        return ["-", "+", "!", "~"].includes(e.op) && this.isConstant(e.x, scope);
+      case "Binary":
+        return !["in", "not_in", "or_else", "or_return"].includes(e.op) && this.isConstant(e.x, scope) && this.isConstant(e.y, scope);
+      case "MacroCall":
+        return !!A(e)._expansion && this.isConstant(A(e)._expansion, scope);
+      case "Call":
+        return e.fn.k === "Ident" && !this.lookup(e.fn.name, scope, null) && (INT_TYPES.has(e.fn.name) || FLOAT_TYPES.has(e.fn.name) || ["bool", "rune", "string"].includes(e.fn.name))
+          && e.args.length === 1 && this.isConstant(e.args[0], scope);
+      case "Ident":
+      case "Selector": {
+        if (e.k === "Ident" && (e.name === "true" || e.name === "false")) return true;
+        const sym = A(e)._sym ?? A(e)._pkgMember ?? this.resolveName(e, scope, null);
+        if (sym?.kind === "local") return sym.isConst && (!sym.value || !isTypeExpr(sym.value));
+        if (sym?.kind === "global") {
+          const v = sym.decl.values[sym.index];
+          return sym.isConst && !!v && !isTypeExpr(v) && v.k !== "ProcLit" && v.k !== "Directive" && v.k !== "ProcGroup";
+        }
+        // Enum.Member
+        if (e.k === "Selector") {
+          const t = this.normalize({ t: "node", node: e.x, scope });
+          return t?.t === "node" && t.node.k === "EnumType" && t.node.members.some((m) => m.name === e.name);
+        }
+        return false;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * @(table) proc(x: T) -> R: one result per value of T (bool, u8, i8 or an enum). Computed here
+   * when the body can run at compile time, else once at startup.
+   */
+  private resolveTable(sym: GlobalSym, info: TableInfo): void {
+    const lit = info.lit;
+    const pos = posOf(sym.decl);
+    const params = lit.sig.params.flatMap((p) => p.names.map((n) => ({ name: n, type: p.type })));
+    const res = lit.sig.results;
+    if (params.length !== 1 || !params[0].type || params[0].name.prefix || res.length !== 1 || res[0].names.length > 1 || !res[0].type)
+      throw new CompileError("@(table) needs a proc with one parameter and one result: name :: proc(x: T) -> R { ... }", pos);
+    const type = params[0].type;
+    const scope: Scope = A(type)._scope ?? sym.scope;
+    const t = this.normalize({ t: "node", node: type, scope });
+    const name = nodeText(type);
+    let domain: TableInfo["domain"];
+    if (t?.t === "node" && t.node.k === "EnumType") {
+      if (t.node.members.some((m) => m.value)) throw new CompileError("@(table) over an enum needs one whose members have no explicit values", posOf(type));
+      domain = "enum";
+    } else if (["bool", "u8", "byte", "i8"].includes(this.typeName({ t: "node", node: type, scope }) ?? "")) domain = this.typeName({ t: "node", node: type, scope }) === "bool" ? "bool" : name === "i8" ? "i8" : "u8";
+    else throw new CompileError(`@(table) needs a parameter of type bool, u8, i8 or an enum, not ${name}`, posOf(type));
+    Object.assign(info, { domain, param: params[0].name.name, type, result: res[0].type });
+    if (domain === "enum") return;
+    const inputs = domain === "bool" ? ["false", "true"] : Array.from({ length: 256 }, (_, i) => (domain === "i8" ? `i8(${i - 128})` : `u8(${i})`));
+    try {
+      info.values = inputs.map((x) => {
+        const call = this.parseTokens([...tokensOf(`${sym.name}(${x})`, pos).filter((k) => k.kind !== "semi"), eofTok(pos)], (p) => p.parseExpr());
+        this.expr(call, sym.scope);
+        return joinTokens(this.comptimeTokens(this.interp.evalAt(call, sym.scope, pos), pos));
+      });
+    } catch (err) {
+      if (!(err instanceof CompileError)) throw err;
+      // filled in at startup instead
+    }
+  }
+
+  // ---- pools: Pool(I) keeps each implementation of I in an array of its own ----
+
+  /** The interface of a `Pool(I)` type (through pointers), if `ty` is one. */
+  poolOf(ty: Ty | undefined): GlobalSym | undefined {
+    let n = this.normalize(ty);
+    if (n?.t === "ptr") n = this.normalize(n.elem);
+    if (n?.t !== "node" || n.node.k !== "Call") return undefined;
+    return this.poolType(n.node, n.scope);
+  }
+
+  /** `Pool(I)`, unless the program declares its own `Pool`. */
+  private poolType(e: Extract<Expr, { k: "Call" }>, scope: Scope): GlobalSym | undefined {
+    if (A(e)._pool) return A(e)._pool;
+    if (e.fn.k !== "Ident" || e.fn.name !== "Pool" || e.args.length !== 1 || this.lookup("Pool", scope, null)) return undefined;
+    const iface = this.resolveName(e.args[0], scope, null);
+    if (iface?.kind !== "global" || this.ifaceNode(iface)?.k !== "InterfaceType") throw new CompileError(`Pool takes an interface: '${nodeText(e.args[0])}' is not one`, posOf(e));
+    if (!this.isClosed(iface) || !this.variants(iface).length) {
+      const ext = this.ifaceSyms.find((d) => d.pkg.unit !== iface.pkg.unit && this.ancestorsOf(d).includes(iface));
+      throw new CompileError(
+        ext ? `Pool(${iface.name}) needs every implementation of '${iface.name}' to be known, but '${ext.name}' in package '${ext.pkg.name}' extends it`
+          : `Pool(${iface.name}): '${iface.name}' has no implementations`,
+        posOf(e),
+      );
+    }
+    A(e)._pool = iface;
+    this.pooled.add(iface);
+    return iface;
+  }
+
+  /** `x` of `for x in pool`: a pointer to one implementation per copy of the body, so it converts to the interface */
+  readonly poolVars = new Map<LocalSym, GlobalSym>();
+
+  /** interfaces used as `Pool(I)`: they get the pool type */
+  readonly pooled = new Set<GlobalSym>();
+
+  /** `append`, `len`, `clear` and `delete` on a pool. */
+  private poolCall(e: Extract<Expr, { k: "Call" }>, scope: Scope): boolean {
+    const name = (e.fn as Extract<Expr, { k: "Ident" }>).name;
+    if (name === "Pool") return !!this.poolType(e, scope);
+    if (!["append", "len", "clear", "delete"].includes(name) || !e.args.length) return false;
+    const iface = this.poolOf(this.typeOf(e.args[0], scope));
+    if (!iface) return false;
+    if (name !== "append") {
+      if (e.args.length !== 1) throw new CompileError(`${name} on a Pool takes just the pool`, posOf(e));
+      A(e)._poolOp = { op: name, iface };
+      return true;
+    }
+    const owner = this.stmtStack[this.stmtStack.length - 1];
+    if (owner?.k !== "ExprStmt" || owner.x !== e) throw new CompileError("appending to a Pool is a statement of its own; it has no result", posOf(e));
+    const ptr = this.normalize(this.typeOf(e.args[0], scope));
+    if (ptr?.t !== "ptr") throw new CompileError(`append takes a pointer to the pool: append(&${nodeText(e.args[0])}, ...)`, posOf(e.args[0]));
+    const bins = e.args.slice(1).map((a) => {
+      const info = this.poolBin(iface, this.typeOf(a, scope));
+      if (info) return info;
+      const ty = this.normalize(this.typeOf(a, scope));
+      const types = this.variants(iface).map((i) => nodeText(i.node.target)).join(", ");
+      if (ty?.t === "ptr" && this.poolBin(iface, ty.elem))
+        throw new CompileError(`a Pool stores values: append ${nodeText(a)}^ to copy it in`, posOf(a));
+      throw new CompileError(`cannot tell which type '${nodeText(a)}' is; Pool(${iface.name}) holds ${types}`, posOf(a));
+    });
+    if (new Set(bins).size > 1 && !repeatable(e.args[0])) throw new CompileError("appending values of several types evaluates the pool once per type; use a variable for it", posOf(e.args[0]));
+    A(e)._poolOp = { op: "append", iface, bins };
+    return true;
+  }
+
+  /** The impl whose array in a pool of `iface` holds values of type `ty`. */
+  private poolBin(iface: GlobalSym, ty: Ty | undefined): ImplInfo | undefined {
+    if (ty?.t !== "node" || (ty.node.k !== "Ident" && ty.node.k !== "Selector")) return undefined;
+    const sym = this.resolveName(ty.node, ty.scope, null);
+    return sym && this.variants(iface).find((i) => (A(i.node.target)._sym ?? A(i.node.target)._pkgMember) === sym);
+  }
+
+  /** One impl per type a union interface can hold, in declaration order. */
+  variants(sym: GlobalSym): ImplInfo[] {
+    const seen = new Set<string>();
+    return this.impls.filter((i) => i.iface === sym && !seen.has(i.key) && seen.add(i.key));
+  }
+
+  /** every chain of bases from `from` to `to` ([] when they're the same interface) */
+  basePaths(from: GlobalSym, to: GlobalSym): GlobalSym[][] {
+    if (from === to) return [[]];
+    return this.basesOf(from).flatMap((b) => this.basePaths(b, to).map((rest) => [b, ...rest]));
   }
 
   /** inherited methods (in base order) followed by the interface's own */
@@ -1583,6 +1922,12 @@ export function eofTok(pos: Pos): Token {
 function isConstVal(v: Val): boolean {
   if (v.k === "array") return v.items.every(isConstVal);
   return ["int", "float", "bool", "string", "struct", "nil"].includes(v.k);
+}
+
+/** The proc a declaration's value is, under any directives (`#force_inline proc ...`). */
+export function unwrapProc(e: Expr): ProcLit | undefined {
+  while (e.k === "Directive" && e.x) e = e.x;
+  return e.k === "ProcLit" ? e : undefined;
 }
 
 function identVal(name: string, pos: Pos): Val {

@@ -23,7 +23,7 @@ main :: proc() {
 	touch()
 	fmt.println(a, b, c[:], p, d, e)
 
-	// a parameter captured by reference is copied into a box at proc entry
+	// a parameter captured by reference is copied into a stack local at proc entry
 	acc := proc(start: int) -> int {
 		add := proc[&start](k: int) { start += k }
 		add(5)
@@ -32,10 +32,10 @@ main :: proc() {
 	}
 	fmt.println("acc:", acc(100))
 
-	// the box is shared, so a closure returned out of a scope keeps the value alive
+	// a closure that outlives its frame needs state the coder puts on the heap
 	make := proc() -> closure() -> int {
-		total := 0
-		return proc[&total]() -> int { total += 1; return total }
+		total := new(int)
+		return proc[total]() -> int { total^ += 1; return total^ }
 	}
 	counter := make()
 	counter()

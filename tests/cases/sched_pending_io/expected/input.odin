@@ -16,9 +16,9 @@ main :: proc() {
 	fmt.println("open:", err)
 	sched.close(f)
 
-	ran := new_clone(false)
-	sched.blocking(__closure_1(ran))
-	fmt.println("blocking:", ran^)
+	ran := false
+	sched.blocking(__closure_1(&ran))
+	fmt.println("blocking:", ran)
 
 	udp, _ := sched.udp_socket()
 	sched.bind(udp, {net.IP4_Loopback, 0})

@@ -29,12 +29,12 @@ echo_server :: proc(listener: net.TCP_Socket) {
 main :: proc() {
 	// workers finish in reverse order of their sleeps
 	results := sched.make_chan(string, 3)
-	wg := new(sched.Wait_Group)
+	wg: sched.Wait_Group
 	for i in 0..<3 {
-		sched.add(&wg^)
-		sched.go(__closure_1(i, results, wg))
+		sched.add(&wg)
+		sched.go(__closure_1(i, results, &wg))
 	}
-	sched.wait(&wg^)
+	sched.wait(&wg)
 	for _ in 0..<3 do fmt.println(sched.recv(results))
 
 	// receive until the channel is closed

@@ -53,7 +53,7 @@ export interface LocalSym {
   ty?: Ty;
   value?: Expr;
   scope: Scope;
-  boxed: boolean;
+  refCaptured: boolean;
   declKind: "decl" | "param" | "range" | "other";
   declTok?: Token;
 }

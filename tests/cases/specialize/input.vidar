@@ -1,0 +1,51 @@
+package main
+
+import "core:fmt"
+
+Kind :: enum { Small, Big }
+
+LIMIT :: 100
+
+// constants passed to it make a copy where they are compile-time parameters
+@(specialize)
+scale :: proc(x: int, factor: int, kind: Kind, clamp := true) -> int {
+	r := x * factor
+	if kind == .Big do r *= 10
+	if clamp && r > LIMIT do r = LIMIT
+	return r
+}
+
+@(specialize, private)
+repeat :: #force_inline proc(s: string, n: int) -> (out: string) {
+	for _ in 0..<n do out = fmt.tprintf("%s%s", out, s)
+	return
+}
+
+// a table of all 256 results, computed by vidar
+@(table)
+popcount :: proc(b: u8) -> int {
+	n := 0
+	for i in 0..<8 do n += int((b >> uint(i)) & 1)
+	return n
+}
+
+@(table)
+yes_no :: proc(b: bool) -> string { return "yes" if b else "no" }
+
+// enums are filled in once at startup
+@(table)
+kind_name :: proc(k: Kind) -> string {
+	switch k {
+	case .Small: return "small"
+	case .Big: return "big"
+	}
+	return "?"
+}
+
+main :: proc() {
+	f := 3
+	fmt.println(scale(4, 2, .Small), scale(4, 2, Kind.Big), scale(f, f, .Small, false), scale(f, 7, .Big, false))
+	fmt.println(repeat("ab", 3), repeat("-", f))
+	fmt.println(popcount(0), popcount(7), popcount(255), popcount(u8(f)))
+	fmt.println(yes_no(true), yes_no(f > 5), kind_name(.Big), kind_name(Kind.Small))
+}

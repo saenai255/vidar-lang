@@ -1,9 +1,23 @@
 package shapes
 
+// Extended from another package, so a Shape can hold types this package doesn't know: a vtable.
 Shape :: interface { area }
 area :: proc(s: Shape) -> f64 ---
+
+// Only extended here: a union over its implementations.
+Polygon :: interface { using Shape, sides }
+sides :: proc(p: Polygon) -> int ---
+
+Square :: struct { side: f64 }
+
+square_area  :: proc(s: ^Square) -> f64 { return s.side * s.side }
+square_sides :: proc(s: ^Square) -> int { return 4 }
+
+impl Polygon for Square { area = square_area, sides = square_sides }
 
 total :: proc(list: []Shape) -> (sum: f64) {
 	for s in list do sum += area(s)
 	return
 }
+
+as_shape :: proc(p: Polygon) -> Shape { return p }

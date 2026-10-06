@@ -3,11 +3,11 @@ package main; import __vidar "vidar_runtime"
 import "core:fmt"
 
 main :: proc() {
-	total := new_clone(0)
-	outer := __closure_1(total)
+	total := 0
+	outer := __closure_1(&total)
 	outer.call(outer.env, 1)
 	outer.call(outer.env, 2)
-	fmt.println("total:", total^)
+	fmt.println("total:", total)
 
 	base := 100
 	make := __closure_3(base)

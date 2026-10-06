@@ -75,7 +75,8 @@ register_commands :: proc(r: ^Registry) {
 		if c.arg == "" do return .Missing_Arg
 		room := room_at(c.w, {c.p.x, c.p.y})
 		target := do!(Monster) {
-			for m in room.monsters {
+			for id in room.monsters {
+				m := c.w.monsters[id]
 				if alive(m) && matches(name(m), c.arg) do take m
 			}
 			return .No_Target

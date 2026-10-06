@@ -1,2 +1,3 @@
 24 8
-total: 24
+total: 42 4
+nil: true true true false

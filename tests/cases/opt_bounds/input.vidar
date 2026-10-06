@@ -1,0 +1,86 @@
+package main
+
+import "core:fmt"
+
+Grid :: struct { cells: []int }
+
+sum :: proc(a: []int) -> (total: int) {
+	// proven: a is a parameter, i stays below len(a)
+	for i in 0..<len(a) do total += a[i]
+	for x, i in a {
+		if a[i] != x do panic("mismatch")
+	}
+	for i := 0; i < len(a); i += 1 {
+		total += a[i] * 2
+	}
+	return
+}
+
+dot :: proc(a, b: []int) -> (d: int) {
+	// b[i] is not proven: only len(a) bounds i
+	for i in 0..<len(a) {
+		d += a[i] * b[i]
+	}
+	return
+}
+
+nested :: proc(rows: [][]int) -> (n: int) {
+	for row, r in rows {
+		for j in 0..<len(row) {
+			n += row[j] + rows[r][0]
+		}
+	}
+	return
+}
+
+grows :: proc() -> int {
+	// not proven: the array is appended to, through &list
+	list: [dynamic]int
+	append(&list, 1, 2, 3)
+	t := 0
+	for i in 0..<len(list) do t += list[i]
+	return t
+}
+
+reassigned :: proc(a: []int) -> int {
+	// not proven: s changes inside the loop
+	s := a
+	t := 0
+	for i in 0..<len(s) {
+		t += s[i]
+		s = a[:1]
+	}
+	return t
+}
+
+scratch :: proc(n: int) -> int {
+	// three allocations freed together: one block
+	xs := make([]int, n)
+	ys := make([]f32, n * 2)
+	p := new(Grid)
+	defer delete(xs)
+	defer delete(ys)
+	defer free(p)
+	for i in 0..<len(xs) do xs[i] = i
+	for i in 0..<len(ys) do ys[i] = f32(i) / 2
+	p.cells = xs
+	return sum(p.cells) + int(ys[len(ys) - 1])
+}
+
+kept_apart :: proc(n: int) -> int {
+	// a is freed by a delete of its own, not a defer: not grouped
+	a := make([]int, n)
+	b := make([]int, n)
+	defer delete(b)
+	a[0] = 1
+	b[0] = 2
+	t := a[0] + b[0]
+	delete(a)
+	return t
+}
+
+main :: proc() {
+	nums := []int{3, 1, 4, 1, 5}
+	fmt.println(sum(nums), dot(nums, nums), nested({{1, 2}, {3, 4}}), grows(), reassigned(nums))
+	fmt.println(scratch(4), kept_apart(3))
+}

@@ -167,49 +167,81 @@ async function main() {
 
   // ---- report ----
   const pick = (k, f) => median(load[k].map(f));
-  const kb = (f) => (statSync(f).size / 1024).toFixed(0);
   const odinVersion = spawnSync("odin", ["version"], { encoding: "utf8" }).stdout.trim().replace(/^.*odin version /, "");
   const lines = [];
   const row = (...cells) => lines.push(`| ${cells.join(" | ")} |`);
   lines.push(`Measured on ${cpus()[0].model}, ${cpus().length} cores, ${(totalmem() / 2 ** 30).toFixed(0)} GB, ${process.platform} ${release()}; Odin ${odinVersion}, Node ${process.version}.`);
   lines.push(`Each number is the median of the runs listed. Both versions agree: simulation ${simSame && bigSimSame ? "identical" : "DIFFERENT"}, transcript ${transcriptSame ? "identical" : "DIFFERENT"}.`);
   lines.push("");
+  const signedPct = (d) => (Math.abs(d) < 0.05 ? "0%" : `${d > 0 ? "+" : "−"}${fmt(Math.abs(d))}%`);
+  // seeded so the report doesn't change between reruns of the same numbers
+  let seed = 0x2545f491;
+  const rand = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32);
+  const resample = (xs) => xs.map(() => xs[Math.floor(rand() * xs.length)]);
+  /** 95% bootstrap interval of (stat(vidar) − stat(odin)) / stat(odin), in percent */
+  const interval = (vidar, odin, stat) => {
+    const ds = [];
+    for (let i = 0; i < 4000; i++) {
+      const o = stat(resample(odin));
+      ds.push(((stat(resample(vidar)) - o) / o) * 100);
+    }
+    ds.sort((a, b) => a - b);
+    return [ds[Math.floor(ds.length * 0.025)], ds[Math.floor(ds.length * 0.975)]];
+  };
+  // vidar, odin: samples (one per run); stat reduces them; show formats a cell
+  const cmp = (label, vidar, odin, show, stat = median) => {
+    const v = stat(vidar);
+    const o = stat(odin);
+    const diff = signedPct(((v - o) / o) * 100);
+    if (vidar.length < 2) return row(label, show(v), show(o), diff, "–", "exact");
+    const [lo, hi] = interval(vidar, odin, stat);
+    row(label, show(v), show(o), diff, `${signedPct(lo)} to ${signedPct(hi)}`, lo <= 0 && hi >= 0 ? "no, within noise" : "yes");
+  };
+  const header = () => {
+    row("", "Vidar", "Odin", "Vidar vs Odin", "95% interval", "Real difference?");
+    row("---", "---:", "---:", "---:", "---:", "---");
+  };
+  const msOf = (d) => (x) => `${fmt(x, d)} ms`;
+  const both = (f) => ["vidar", "odin"].map(f);
+  const loadRuns = (f) => both((k) => load[k].map(f));
+  const p90 = (xs) => pct(xs, 0.9);
+
   lines.push("**Build** (" + RUNS.build + " runs)");
   lines.push("");
-  row("", "Vidar", "Odin");
-  row("---", "---:", "---:");
-  row("transpile (`vidar build`, Node)", `${fmt(median(builds.transpile), 0)} ms`, "–");
-  row("`odin build` default (`-o:minimal`)", `${fmt(median(builds.vidar_minimal), 0)} ms`, `${fmt(median(builds.odin_minimal), 0)} ms`);
-  row("`odin build -o:speed`", `${fmt(median(builds.vidar_speed), 0)} ms`, `${fmt(median(builds.odin_speed), 0)} ms`);
-  row("total, default", `${fmt(median(builds.transpile) + median(builds.vidar_minimal), 0)} ms`, `${fmt(median(builds.odin_minimal), 0)} ms`);
-  row("binary size (`-o:speed`)", `${kb(BIN.vidar)} KB`, `${kb(BIN.odin)} KB`);
-  row("source lines (non-blank, non-comment)", `${sourceLines(join(EX, "vidar"), ".vidar")}`, `${sourceLines(join(EX, "odin"), ".odin")}`);
-  row("generated Odin lines (without runtime and sched)", `${generatedLines(out("vidar_src"))}`, "–");
+  header();
+  row("transpile (`vidar build`, Node)", `${fmt(median(builds.transpile), 0)} ms`, "–", "–", "–", "–");
+  cmp("`odin build` default (`-o:minimal`)", builds.vidar_minimal, builds.odin_minimal, msOf(0));
+  cmp("`odin build -o:speed`", builds.vidar_speed, builds.odin_speed, msOf(0));
+  cmp("total, default", builds.vidar_minimal.map((x, i) => x + builds.transpile[i]), builds.odin_minimal, msOf(0));
+  cmp("binary size (`-o:speed`)", [statSync(BIN.vidar).size / 1024], [statSync(BIN.odin).size / 1024], (x) => `${fmt(x, 0)} KB`);
+  cmp("source lines (non-blank, non-comment)", [sourceLines(join(EX, "vidar"), ".vidar")], [sourceLines(join(EX, "odin"), ".odin")], String);
+  row("generated Odin lines (without runtime and sched)", `${generatedLines(out("vidar_src"))}`, "–", "–", "–", "–");
   lines.push("");
   lines.push(`**Startup**: process start to ports bound, \`--ready-exit\` (${RUNS.startup} runs)`);
   lines.push("");
-  row("", "Vidar", "Odin");
-  row("---", "---:", "---:");
-  row("median", `${fmt(median(startup.vidar))} ms`, `${fmt(median(startup.odin))} ms`);
-  row("p90", `${fmt(pct(startup.vidar, 0.9))} ms`, `${fmt(pct(startup.odin, 0.9))} ms`);
+  header();
+  cmp("median", startup.vidar, startup.odin, msOf(1));
+  cmp("p90", startup.vidar, startup.odin, msOf(1), p90);
   lines.push("");
   lines.push(`**Simulation**: \`${SIM_ARGS.join(" ")}\`, one thread, no I/O (${RUNS.sim} runs)`);
   lines.push("");
-  row("", "Vidar", "Odin");
-  row("---", "---:", "---:");
-  row("time", `${fmt(median(sim.vidar), 0)} ms`, `${fmt(median(sim.odin), 0)} ms`);
-  row("bot commands per second", ...["vidar", "odin"].map((k) => `${fmt(2000 * 500 / (median(sim[k]) / 1000), 0)}`));
+  header();
+  cmp("time", sim.vidar, sim.odin, msOf(0));
+  cmp("bot commands per second", ...both((k) => sim[k].map((t) => (2000 * 500) / (t / 1000))), (x) => fmt(x, 0));
   lines.push("");
   lines.push(`**Server under load**: ${LOAD.clients} clients × ${LOAD.commands} commands over loopback, 50 ms ticks (${RUNS.load} runs)`);
   lines.push("");
-  row("", "Vidar", "Odin");
-  row("---", "---:", "---:");
-  row("throughput", ...["vidar", "odin"].map((k) => `${fmt(pick(k, (x) => x.throughput), 0)} cmd/s`));
-  row("latency p50", ...["vidar", "odin"].map((k) => `${fmt(pick(k, (x) => x.p50_ms), 3)} ms`));
-  row("latency p99", ...["vidar", "odin"].map((k) => `${fmt(pick(k, (x) => x.p99_ms), 3)} ms`));
-  row("latency max", ...["vidar", "odin"].map((k) => `${fmt(pick(k, (x) => x.max_ms), 1)} ms`));
-  row("failed clients", ...["vidar", "odin"].map((k) => `${Math.max(...load[k].map((x) => x.failed))}`));
-  row("RSS idle → after load", ...["vidar", "odin"].map((k) => `${fmt(pick(k, (x) => x.idle))} → ${fmt(pick(k, (x) => x.peak))} MB`));
+  header();
+  cmp("throughput", ...loadRuns((x) => x.throughput), (x) => `${fmt(x, 0)} cmd/s`);
+  cmp("latency p50", ...loadRuns((x) => x.p50_ms), msOf(3));
+  cmp("latency p99", ...loadRuns((x) => x.p99_ms), msOf(3));
+  cmp("latency max", ...loadRuns((x) => x.max_ms), msOf(1));
+  row("failed clients", ...both((k) => `${Math.max(...load[k].map((x) => x.failed))}`), "–", "–", "–");
+  cmp("RSS idle", ...loadRuns((x) => x.idle), (x) => `${fmt(x)} MB`);
+  cmp("RSS after load", ...loadRuns((x) => x.peak), (x) => `${fmt(x)} MB`);
+  lines.push("");
+  lines.push("Vidar vs Odin is (Vidar − Odin) / Odin: negative means Vidar is smaller, which is better for times, sizes and latency and worse for throughput.");
+  lines.push("The 95% interval comes from resampling the runs (bootstrap). When it includes 0%, the difference is within run-to-run noise. With only 3 to 5 runs, an interval is roughly the spread between runs; size and line counts are exact.");
 
   const report = lines.join("\n") + "\n";
   writeFileSync(join(EX, "bench/results.md"), report);

@@ -11,24 +11,25 @@ main :: proc() {
 	for f in values do fmt.print(f.call(f.env), "")
 	fmt.println()
 
-	// by-reference capture of a range variable boxes it per iteration
-	refs: [dynamic]__vidar.Closure(proc(rawptr) -> int)
-	for x in ([]int{10, 20, 30}) { x := new_clone(x);
-		append(&refs, __closure_1(x))
+	// by-reference capture of a range variable refers to that iteration's copy
+	for x in ([]int{10, 20, 30}) { x := x;
+		inc := __closure_1(&x)
+		inc.call(inc.env)
+		inc.call(inc.env)
+		fmt.print(x, "")
 	}
-	for f in refs do fmt.print(f.call(f.env), f.call(f.env), "")
 	fmt.println()
 
 	// one shared counter captured by reference from inside a while-style loop
-	n := new_clone(0)
-	bump := __closure_2(n)
-	for n^ < 7 do bump.call(bump.env)
-	fmt.println("n:", n^)
+	n := 0
+	bump := __closure_2(&n)
+	for n < 7 do bump.call(bump.env)
+	fmt.println("n:", n)
 
 	// C-style loop variable captured by reference is shared by all closures
 	shared: [dynamic]__vidar.Closure(proc(rawptr) -> int)
-	for j := new_clone(0); j^ < 3; j^ += 1 {
-		append(&shared, __closure_3(j))
+	for j := 0; j < 3; j += 1 {
+		append(&shared, __closure_3(&j))
 	}
 	for f in shared do fmt.print(f.call(f.env), "")
 	fmt.println()
@@ -46,12 +47,12 @@ __closure_0 :: proc(__c0: $T0) -> __vidar.Closure(proc(rawptr) -> int) {
 	}
 }
 
-__closure_1 :: proc(__c0: $T0) -> __vidar.Closure(proc(rawptr) -> int) {
+__closure_1 :: proc(__c0: $T0) -> __vidar.Closure(proc(rawptr)) {
 	__Env :: struct {
 		x: T0,
 	}
-	return __vidar.Closure(proc(rawptr) -> int){
-		call = proc(__env_raw: rawptr) -> int { __env := cast(^__Env)__env_raw; __env.x^ += 1; return __env.x^ },
+	return __vidar.Closure(proc(rawptr)){
+		call = proc(__env_raw: rawptr) { __env := cast(^__Env)__env_raw; __env.x^ += 1 },
 		env = new_clone(__Env{__c0}),
 	}
 }

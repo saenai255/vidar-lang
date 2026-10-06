@@ -1,0 +1,5 @@
+// error: @(table) needs a parameter of type bool, u8, i8 or an enum, not int
+package main
+@(table)
+sq :: proc(a: int) -> int { return a * a }
+main :: proc() {}

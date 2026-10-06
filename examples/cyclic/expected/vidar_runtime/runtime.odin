@@ -3,10 +3,14 @@ package vidar_runtime
 
 import "base:intrinsics"
 import "base:runtime"
+import "core:bufio"
 import "core:fmt"
+import "core:io"
 import "core:mem"
+import "core:os"
 import "core:path/filepath"
 import "core:slice"
+import "core:strings"
 import "core:sync"
 import "core:time"
 
@@ -137,4 +141,285 @@ unexpected :: proc(e: $T, loc := #caller_location) -> ! {
 	} else {
 		panic(fmt.tprintf("unexpected error: %v", e), loc)
 	}
+}
+
+// @(table) fills its table at startup, before any context exists
+default_context :: proc "contextless" () -> runtime.Context { return runtime.default_context() }
+
+// -opt: fmt calls specialized to their format
+Builder :: strings.Builder
+Writer :: io.Writer
+File_Writer :: bufio.Writer
+
+builder :: #force_inline proc(allocator: runtime.Allocator) -> (b: strings.Builder) {
+	strings.builder_init(&b, allocator)
+	return
+}
+
+sb_to_string :: #force_inline proc(b: ^strings.Builder) -> string { return strings.to_string(b^) }
+
+sb_str :: #force_inline proc(b: ^strings.Builder, s: string) { strings.write_string(b, s) }
+
+sb_spec :: proc(b: ^strings.Builder, x: $T, spec: string) { fmt.sbprintf(b, spec, x) }
+
+// what fmt.printf and fmt.eprintf write through
+std_writer :: proc(b: ^bufio.Writer, buf: []byte, to_stderr: bool) -> io.Writer {
+	bufio.writer_init_with_buf(b, os.to_stream(os.stderr if to_stderr else os.stdout), buf)
+	return bufio.writer_to_writer(b)
+}
+
+w_str :: #force_inline proc(w: io.Writer, s: string) -> (n: int) {
+	n, _ = io.write_string(w, s)
+	return
+}
+
+w_spec :: proc(w: io.Writer, x: $T, spec: string) -> int { return fmt.wprintf(w, spec, x, flush = false) }
+
+w_flush :: #force_inline proc(w: io.Writer) { io.flush(w) }
+
+sb_v :: #force_inline proc(b: ^strings.Builder, x: $T) {
+	when T == string {
+		strings.write_string(b, x)
+	} else when T == bool {
+		strings.write_string(b, "true" if x else "false")
+	} else when T == rune {
+		strings.write_rune(b, x)
+	} else when T == int || T == i8 || T == i16 || T == i32 || T == i64 {
+		strings.write_i64(b, i64(x), 10)
+	} else when T == uint || T == u8 || T == u16 || T == u32 || T == u64 {
+		strings.write_u64(b, u64(x), 10)
+	} else {
+		fmt.sbprintf(b, "%v", x)
+	}
+}
+
+w_v :: #force_inline proc(w: io.Writer, x: $T) -> (n: int) {
+	when T == string {
+		n, _ = io.write_string(w, x)
+	} else when T == bool {
+		n, _ = io.write_string(w, "true" if x else "false")
+	} else when T == rune {
+		n, _ = io.write_rune(w, x)
+	} else when T == int || T == i8 || T == i16 || T == i32 || T == i64 {
+		n, _ = io.write_i64(w, i64(x), 10)
+	} else when T == uint || T == u8 || T == u16 || T == u32 || T == u64 {
+		n, _ = io.write_u64(w, u64(x), 10)
+	} else {
+		n = fmt.wprintf(w, "%v", x, flush = false)
+	}
+	return
+}
+
+sb_d :: #force_inline proc(b: ^strings.Builder, x: $T) {
+	when T == int || T == i8 || T == i16 || T == i32 || T == i64 {
+		strings.write_i64(b, i64(x), 10)
+	} else when T == uint || T == u8 || T == u16 || T == u32 || T == u64 {
+		strings.write_u64(b, u64(x), 10)
+	} else {
+		fmt.sbprintf(b, "%d", x)
+	}
+}
+
+w_d :: #force_inline proc(w: io.Writer, x: $T) -> (n: int) {
+	when T == int || T == i8 || T == i16 || T == i32 || T == i64 {
+		n, _ = io.write_i64(w, i64(x), 10)
+	} else when T == uint || T == u8 || T == u16 || T == u32 || T == u64 {
+		n, _ = io.write_u64(w, u64(x), 10)
+	} else {
+		n = fmt.wprintf(w, "%d", x, flush = false)
+	}
+	return
+}
+
+sb_s :: #force_inline proc(b: ^strings.Builder, x: $T) {
+	when T == string {
+		strings.write_string(b, x)
+	} else {
+		fmt.sbprintf(b, "%s", x)
+	}
+}
+
+w_s :: #force_inline proc(w: io.Writer, x: $T) -> (n: int) {
+	when T == string {
+		n, _ = io.write_string(w, x)
+	} else {
+		n = fmt.wprintf(w, "%s", x, flush = false)
+	}
+	return
+}
+
+sb_x :: #force_inline proc(b: ^strings.Builder, x: $T) {
+	when T == int || T == i8 || T == i16 || T == i32 || T == i64 {
+		strings.write_i64(b, i64(x), 16)
+	} else when T == uint || T == u8 || T == u16 || T == u32 || T == u64 {
+		strings.write_u64(b, u64(x), 16)
+	} else {
+		fmt.sbprintf(b, "%x", x)
+	}
+}
+
+w_x :: #force_inline proc(w: io.Writer, x: $T) -> (n: int) {
+	when T == int || T == i8 || T == i16 || T == i32 || T == i64 {
+		n, _ = io.write_i64(w, i64(x), 16)
+	} else when T == uint || T == u8 || T == u16 || T == u32 || T == u64 {
+		n, _ = io.write_u64(w, u64(x), 16)
+	} else {
+		n = fmt.wprintf(w, "%x", x, flush = false)
+	}
+	return
+}
+
+sb_t :: #force_inline proc(b: ^strings.Builder, x: $T) {
+	when T == bool {
+		strings.write_string(b, "true" if x else "false")
+	} else {
+		fmt.sbprintf(b, "%t", x)
+	}
+}
+
+w_t :: #force_inline proc(w: io.Writer, x: $T) -> (n: int) {
+	when T == bool {
+		n, _ = io.write_string(w, "true" if x else "false")
+	} else {
+		n = fmt.wprintf(w, "%t", x, flush = false)
+	}
+	return
+}
+
+sb_c :: #force_inline proc(b: ^strings.Builder, x: $T) {
+	when T == rune {
+		strings.write_rune(b, x)
+	} else {
+		fmt.sbprintf(b, "%c", x)
+	}
+}
+
+w_c :: #force_inline proc(w: io.Writer, x: $T) -> (n: int) {
+	when T == rune {
+		n, _ = io.write_rune(w, x)
+	} else {
+		n = fmt.wprintf(w, "%c", x, flush = false)
+	}
+	return
+}
+
+
+// -opt: allocations freed together, made together
+make_group2 :: proc($E1, $E2: typeid, n1, n2: int, allocator := context.allocator, loc := #caller_location) -> (s1: []E1, s2: []E2) {
+	if n1 < 0 || n2 < 0 do panic("make: negative length", loc)
+	o1 := 0
+	o2 := mem.align_forward_int(o1 + size_of(E1) * n1, align_of(E2))
+	base, err := mem.alloc(o2 + size_of(E2) * n2, max(align_of(E1), align_of(E2), mem.DEFAULT_ALIGNMENT), allocator, loc)
+	if err != nil do return
+	s1 = ([^]E1)(uintptr(base) + uintptr(o1))[:n1]
+	s2 = ([^]E2)(uintptr(base) + uintptr(o2))[:n2]
+	return
+}
+
+make_group3 :: proc($E1, $E2, $E3: typeid, n1, n2, n3: int, allocator := context.allocator, loc := #caller_location) -> (s1: []E1, s2: []E2, s3: []E3) {
+	if n1 < 0 || n2 < 0 || n3 < 0 do panic("make: negative length", loc)
+	o1 := 0
+	o2 := mem.align_forward_int(o1 + size_of(E1) * n1, align_of(E2))
+	o3 := mem.align_forward_int(o2 + size_of(E2) * n2, align_of(E3))
+	base, err := mem.alloc(o3 + size_of(E3) * n3, max(align_of(E1), align_of(E2), align_of(E3), mem.DEFAULT_ALIGNMENT), allocator, loc)
+	if err != nil do return
+	s1 = ([^]E1)(uintptr(base) + uintptr(o1))[:n1]
+	s2 = ([^]E2)(uintptr(base) + uintptr(o2))[:n2]
+	s3 = ([^]E3)(uintptr(base) + uintptr(o3))[:n3]
+	return
+}
+
+make_group4 :: proc($E1, $E2, $E3, $E4: typeid, n1, n2, n3, n4: int, allocator := context.allocator, loc := #caller_location) -> (s1: []E1, s2: []E2, s3: []E3, s4: []E4) {
+	if n1 < 0 || n2 < 0 || n3 < 0 || n4 < 0 do panic("make: negative length", loc)
+	o1 := 0
+	o2 := mem.align_forward_int(o1 + size_of(E1) * n1, align_of(E2))
+	o3 := mem.align_forward_int(o2 + size_of(E2) * n2, align_of(E3))
+	o4 := mem.align_forward_int(o3 + size_of(E3) * n3, align_of(E4))
+	base, err := mem.alloc(o4 + size_of(E4) * n4, max(align_of(E1), align_of(E2), align_of(E3), align_of(E4), mem.DEFAULT_ALIGNMENT), allocator, loc)
+	if err != nil do return
+	s1 = ([^]E1)(uintptr(base) + uintptr(o1))[:n1]
+	s2 = ([^]E2)(uintptr(base) + uintptr(o2))[:n2]
+	s3 = ([^]E3)(uintptr(base) + uintptr(o3))[:n3]
+	s4 = ([^]E4)(uintptr(base) + uintptr(o4))[:n4]
+	return
+}
+
+make_group5 :: proc($E1, $E2, $E3, $E4, $E5: typeid, n1, n2, n3, n4, n5: int, allocator := context.allocator, loc := #caller_location) -> (s1: []E1, s2: []E2, s3: []E3, s4: []E4, s5: []E5) {
+	if n1 < 0 || n2 < 0 || n3 < 0 || n4 < 0 || n5 < 0 do panic("make: negative length", loc)
+	o1 := 0
+	o2 := mem.align_forward_int(o1 + size_of(E1) * n1, align_of(E2))
+	o3 := mem.align_forward_int(o2 + size_of(E2) * n2, align_of(E3))
+	o4 := mem.align_forward_int(o3 + size_of(E3) * n3, align_of(E4))
+	o5 := mem.align_forward_int(o4 + size_of(E4) * n4, align_of(E5))
+	base, err := mem.alloc(o5 + size_of(E5) * n5, max(align_of(E1), align_of(E2), align_of(E3), align_of(E4), align_of(E5), mem.DEFAULT_ALIGNMENT), allocator, loc)
+	if err != nil do return
+	s1 = ([^]E1)(uintptr(base) + uintptr(o1))[:n1]
+	s2 = ([^]E2)(uintptr(base) + uintptr(o2))[:n2]
+	s3 = ([^]E3)(uintptr(base) + uintptr(o3))[:n3]
+	s4 = ([^]E4)(uintptr(base) + uintptr(o4))[:n4]
+	s5 = ([^]E5)(uintptr(base) + uintptr(o5))[:n5]
+	return
+}
+
+make_group6 :: proc($E1, $E2, $E3, $E4, $E5, $E6: typeid, n1, n2, n3, n4, n5, n6: int, allocator := context.allocator, loc := #caller_location) -> (s1: []E1, s2: []E2, s3: []E3, s4: []E4, s5: []E5, s6: []E6) {
+	if n1 < 0 || n2 < 0 || n3 < 0 || n4 < 0 || n5 < 0 || n6 < 0 do panic("make: negative length", loc)
+	o1 := 0
+	o2 := mem.align_forward_int(o1 + size_of(E1) * n1, align_of(E2))
+	o3 := mem.align_forward_int(o2 + size_of(E2) * n2, align_of(E3))
+	o4 := mem.align_forward_int(o3 + size_of(E3) * n3, align_of(E4))
+	o5 := mem.align_forward_int(o4 + size_of(E4) * n4, align_of(E5))
+	o6 := mem.align_forward_int(o5 + size_of(E5) * n5, align_of(E6))
+	base, err := mem.alloc(o6 + size_of(E6) * n6, max(align_of(E1), align_of(E2), align_of(E3), align_of(E4), align_of(E5), align_of(E6), mem.DEFAULT_ALIGNMENT), allocator, loc)
+	if err != nil do return
+	s1 = ([^]E1)(uintptr(base) + uintptr(o1))[:n1]
+	s2 = ([^]E2)(uintptr(base) + uintptr(o2))[:n2]
+	s3 = ([^]E3)(uintptr(base) + uintptr(o3))[:n3]
+	s4 = ([^]E4)(uintptr(base) + uintptr(o4))[:n4]
+	s5 = ([^]E5)(uintptr(base) + uintptr(o5))[:n5]
+	s6 = ([^]E6)(uintptr(base) + uintptr(o6))[:n6]
+	return
+}
+
+make_group7 :: proc($E1, $E2, $E3, $E4, $E5, $E6, $E7: typeid, n1, n2, n3, n4, n5, n6, n7: int, allocator := context.allocator, loc := #caller_location) -> (s1: []E1, s2: []E2, s3: []E3, s4: []E4, s5: []E5, s6: []E6, s7: []E7) {
+	if n1 < 0 || n2 < 0 || n3 < 0 || n4 < 0 || n5 < 0 || n6 < 0 || n7 < 0 do panic("make: negative length", loc)
+	o1 := 0
+	o2 := mem.align_forward_int(o1 + size_of(E1) * n1, align_of(E2))
+	o3 := mem.align_forward_int(o2 + size_of(E2) * n2, align_of(E3))
+	o4 := mem.align_forward_int(o3 + size_of(E3) * n3, align_of(E4))
+	o5 := mem.align_forward_int(o4 + size_of(E4) * n4, align_of(E5))
+	o6 := mem.align_forward_int(o5 + size_of(E5) * n5, align_of(E6))
+	o7 := mem.align_forward_int(o6 + size_of(E6) * n6, align_of(E7))
+	base, err := mem.alloc(o7 + size_of(E7) * n7, max(align_of(E1), align_of(E2), align_of(E3), align_of(E4), align_of(E5), align_of(E6), align_of(E7), mem.DEFAULT_ALIGNMENT), allocator, loc)
+	if err != nil do return
+	s1 = ([^]E1)(uintptr(base) + uintptr(o1))[:n1]
+	s2 = ([^]E2)(uintptr(base) + uintptr(o2))[:n2]
+	s3 = ([^]E3)(uintptr(base) + uintptr(o3))[:n3]
+	s4 = ([^]E4)(uintptr(base) + uintptr(o4))[:n4]
+	s5 = ([^]E5)(uintptr(base) + uintptr(o5))[:n5]
+	s6 = ([^]E6)(uintptr(base) + uintptr(o6))[:n6]
+	s7 = ([^]E7)(uintptr(base) + uintptr(o7))[:n7]
+	return
+}
+
+make_group8 :: proc($E1, $E2, $E3, $E4, $E5, $E6, $E7, $E8: typeid, n1, n2, n3, n4, n5, n6, n7, n8: int, allocator := context.allocator, loc := #caller_location) -> (s1: []E1, s2: []E2, s3: []E3, s4: []E4, s5: []E5, s6: []E6, s7: []E7, s8: []E8) {
+	if n1 < 0 || n2 < 0 || n3 < 0 || n4 < 0 || n5 < 0 || n6 < 0 || n7 < 0 || n8 < 0 do panic("make: negative length", loc)
+	o1 := 0
+	o2 := mem.align_forward_int(o1 + size_of(E1) * n1, align_of(E2))
+	o3 := mem.align_forward_int(o2 + size_of(E2) * n2, align_of(E3))
+	o4 := mem.align_forward_int(o3 + size_of(E3) * n3, align_of(E4))
+	o5 := mem.align_forward_int(o4 + size_of(E4) * n4, align_of(E5))
+	o6 := mem.align_forward_int(o5 + size_of(E5) * n5, align_of(E6))
+	o7 := mem.align_forward_int(o6 + size_of(E6) * n6, align_of(E7))
+	o8 := mem.align_forward_int(o7 + size_of(E7) * n7, align_of(E8))
+	base, err := mem.alloc(o8 + size_of(E8) * n8, max(align_of(E1), align_of(E2), align_of(E3), align_of(E4), align_of(E5), align_of(E6), align_of(E7), align_of(E8), mem.DEFAULT_ALIGNMENT), allocator, loc)
+	if err != nil do return
+	s1 = ([^]E1)(uintptr(base) + uintptr(o1))[:n1]
+	s2 = ([^]E2)(uintptr(base) + uintptr(o2))[:n2]
+	s3 = ([^]E3)(uintptr(base) + uintptr(o3))[:n3]
+	s4 = ([^]E4)(uintptr(base) + uintptr(o4))[:n4]
+	s5 = ([^]E5)(uintptr(base) + uintptr(o5))[:n5]
+	s6 = ([^]E6)(uintptr(base) + uintptr(o6))[:n6]
+	s7 = ([^]E7)(uintptr(base) + uintptr(o7))[:n7]
+	s8 = ([^]E8)(uintptr(base) + uintptr(o8))[:n8]
+	return
 }

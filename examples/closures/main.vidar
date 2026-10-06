@@ -9,11 +9,11 @@ Counter :: struct {
 }
 
 make_counter :: proc(start: int) -> Counter {
-	count := start
-	// [&count] captures by reference: both closures share one heap-boxed `count`.
+	// State that outlives this frame goes on the heap explicitly; both closures share the pointer.
+	count := new_clone(start)
 	return Counter{
-		inc = proc[&count]() -> int { count += 1; return count },
-		get = proc[&count]() -> int { return count },
+		inc = proc[count]() -> int { count^ += 1; return count^ },
+		get = proc[count]() -> int { return count^ },
 	}
 }
 

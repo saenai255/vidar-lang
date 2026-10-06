@@ -50,9 +50,15 @@ __Counter_VTable :: struct {
 	get: proc(self: Counter) -> int,
 }
 
-__Counter_bump :: proc(c: Counter, by: int) -> int { return c.__vtable.bump(c, by) }
+__Counter_bump :: proc(c: Counter, by: int) -> int {
+	if c.__vtable == &__Counter_vtable_Foo { return foo_bump(auto_cast c.data, by) }
+	return c.__vtable.bump(c, by)
+}
 
-__Counter_get :: proc(c: Counter) -> int { return c.__vtable.get(c) }
+__Counter_get :: proc(c: Counter) -> int {
+	if c.__vtable == &__Counter_vtable_Foo { return foo_get(auto_cast c.data) }
+	return c.__vtable.get(c)
+}
 
 __Counter_identity :: #force_inline proc(v: Counter) -> Counter { return v }
 

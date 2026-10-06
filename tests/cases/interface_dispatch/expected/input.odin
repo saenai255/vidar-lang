@@ -66,11 +66,23 @@ __Animal_VTable :: struct {
 	legs: proc(self: Animal) -> int,
 }
 
-__Animal_speak :: proc(a: Animal) -> string { return a.__vtable.speak(a) }
+__Animal_speak :: proc(a: Animal) -> string {
+	if a.__vtable == &__Animal_vtable_Dog { return dog_speak(auto_cast a.data) }
+	if a.__vtable == &__Animal_vtable_Bird { return bird_speak(auto_cast a.data) }
+	return a.__vtable.speak(a)
+}
 
-__Animal_rename :: proc(a: Animal, name: string) { a.__vtable.rename(a, name) }
+__Animal_rename :: proc(a: Animal, name: string) {
+	if a.__vtable == &__Animal_vtable_Dog { dog_rename(auto_cast a.data, name); return }
+	if a.__vtable == &__Animal_vtable_Bird { bird_rename(auto_cast a.data, name); return }
+	a.__vtable.rename(a, name)
+}
 
-__Animal_legs :: proc(a: Animal) -> int { return a.__vtable.legs(a) }
+__Animal_legs :: proc(a: Animal) -> int {
+	if a.__vtable == &__Animal_vtable_Dog { return dog_legs(auto_cast a.data) }
+	if a.__vtable == &__Animal_vtable_Bird { return bird_legs(auto_cast a.data) }
+	return a.__vtable.legs(a)
+}
 
 __Animal_identity :: #force_inline proc(v: Animal) -> Animal { return v }
 

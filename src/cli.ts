@@ -19,15 +19,18 @@ function formatError(err: CompileError, program: Program | undefined): string {
 
 function usage(): never {
   console.error(`usage:
-  vidar build <dir|file${EXT}> [-o <out-dir>]    transpile the program (default out dir: ./out/<name>)
-  vidar run   <dir|file${EXT}> [-- args...]      transpile and 'odin run'
-  vidar check <dir|file${EXT}>                   transpile and 'odin check'
-  vidar emit  <dir|file${EXT}>                   print the generated Odin to stdout
+  vidar build <dir|file${EXT}> [-opt] [-o <out-dir>]    transpile the program (default out dir: ./out/<name>)
+  vidar run   <dir|file${EXT}> [-opt] [-- args...]      transpile and 'odin run'
+  vidar check <dir|file${EXT}> [-opt]                   transpile and 'odin check'
+  vidar emit  <dir|file${EXT}> [-opt]                   print the generated Odin to stdout
   vidar lsp                                     run the language server on stdio (same as vidar-lsp)
   vidar --version
 
 A directory is a package. Packages it imports by relative path are transpiled too;
-packages that import each other in a cycle are merged into one Odin package.`);
+packages that import each other in a cycle are merged into one Odin package.
+-opt also rewrites plain Odin where that is provably the same program, only faster:
+fmt calls with a literal format, bounds checks a loop already guarantees, and
+allocations freed together.`);
   process.exit(2);
 }
 
@@ -54,7 +57,10 @@ export function main(argv: string[]): number {
     console.log(`vidar ${version()}`);
     return 0;
   }
-  const [cmd, input, ...rest] = argv;
+  const [cmd, input, ...args] = argv;
+  const end = args.indexOf("--");
+  const optimize = args.slice(0, end < 0 ? args.length : end).includes("-opt");
+  const rest = args.filter((a, i) => a !== "-opt" || (end >= 0 && i > end));
   if (!cmd || !input || !["build", "run", "check", "emit"].includes(cmd)) usage();
   if (!existsSync(input)) {
     console.error(`error: ${input} does not exist`);
@@ -63,7 +69,7 @@ export function main(argv: string[]): number {
   let program: Program | undefined;
   let out: Output;
   try {
-    program = loadProgram(input);
+    program = loadProgram(input, { optimize });
     out = emitProgram(program);
   } catch (err) {
     if (err instanceof CompileError) {

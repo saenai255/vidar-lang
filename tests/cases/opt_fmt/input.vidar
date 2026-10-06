@@ -1,0 +1,77 @@
+package main
+
+import "core:fmt"
+import "core:io"
+import "core:strings"
+
+Color :: enum { Red, Green }
+Meters :: distinct int
+Point :: struct { x, y: int }
+
+main :: proc() {
+	hp, max_hp := 7, 10
+	name := "slime"
+	big: u64 = 18446744073709551615
+	small: i8 = -128
+	b: u8 = 200
+	r: rune = 'é'
+	ok := true
+	f := 2.5
+	m: Meters = 42
+	huge: i128 = -170141183460469231731687303715884105728
+
+	// written directly: strings, bools, runes and integers
+	fmt.printf("%s [%d/%d]\n", name, hp, max_hp)
+	fmt.printf("%v %v %v %v %v %v\n", big, small, b, r, ok, -hp)
+	fmt.printf("%x %x %x %t %c\n", 255, small, big, ok, r)
+	fmt.printfln("literals: %s %d %v %v", "inline", 12, "too", 0)
+	fmt.println("println:", name, hp, ok, r)
+	fmt.print("print:", hp, "\n")
+	fmt.println()
+
+	// through fmt for the one value: widths, floats, enums, structs, distinct and big types
+	fmt.printf("[%5d] [%-6s] [%.2f] [%v] [%v] [%v] [%v] [%08.3f]\n", hp, name, f, Color.Green, Point{1, 2}, m, huge, f)
+	fmt.printf("%q %w %e %X %o %b %d\n", name, name, f, 255, 8, 5, Color.Red)
+
+	// escapes and braces
+	fmt.printf("tab\there \"quoted\" 100%% {{x}} }} } ünï\n")
+	fmt.printf(`raw %s\n`, "string")
+	fmt.println()
+
+	sb := strings.builder_make()
+	fmt.sbprintf(&sb, "%s:%d", name, hp)
+	fmt.sbprintfln(&sb, " +%v", max_hp)
+	fmt.sbprint(&sb, "a", 1, true)
+	s := fmt.sbprintln(&sb, " end")
+	fmt.print(s)
+	fmt.print(fmt.tprintf("tprintf %d|", hp), fmt.tprintfln("tprintfln %s", name))
+	fmt.print(fmt.tprint("tprint", hp), fmt.tprintln("", "tprintln"))
+	a := fmt.aprintf("aprintf %v/%v", hp, max_hp)
+	fmt.println(a, fmt.aprintln("aprintln", ok), fmt.aprint("aprint"))
+	delete(a)
+
+	wb := strings.builder_make()
+	w := strings.to_writer(&wb)
+	n := fmt.wprintf(w, "wprintf %d %s", hp, name)
+	fmt.wprintln(w, " wprintln", n)
+	fmt.wprintfln(w, "wprintfln %x", 4096)
+	fmt.wprint(w, "wprint")
+	fmt.println(strings.to_string(wb))
+	count := fmt.printf("%d bytes\n", 12345)
+	fmt.println("printf returned", count)
+	fmt.eprintf("to stderr %d\n", hp)
+
+	// left alone: fmt does something a fixed proc doesn't
+	format := "%d dynamic\n"
+	fmt.printf(format, hp)
+	fmt.printf("%[1]d %[1]d indexed\n", hp)
+	fmt.printf("%*d star\n", 5, hp)
+	fmt.printf("{} {0} braces\n", hp)
+	fmt.printf("%d %d missing\n", hp)
+	fmt.printf("%d extra\n", hp, hp)
+	fmt.println("nil:", nil)
+	fmt.println("sep", hp, sep = "-")
+	args := []any{1, "two"}
+	fmt.println(..args)
+	_ = io.Error.None
+}

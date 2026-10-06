@@ -9,12 +9,12 @@ main :: proc() {
 	start := time.tick_now()
 
 	// a goroutine ticking while another blocks a worker thread for 100ms
-	ticks := new_clone(0)
-	stop := new_clone(false)
-	sched.go(__closure_0(ticks, stop))
+	ticks := 0
+	stop := false
+	sched.go(__closure_0(&ticks, &stop))
 	sched.blocking(__vidar.Closure(proc(rawptr)){call = proc(__env_raw: rawptr) { time.sleep(100 * time.Millisecond) }, env = nil})
-	stop^ = true
-	fmt.println("ticked while blocked:", ticks^ >= 10)
+	stop = true
+	fmt.println("ticked while blocked:", ticks >= 10)
 
 	// files
 	path := "/tmp/vidar-sched-test.txt"
@@ -52,9 +52,9 @@ main :: proc() {
 	fmt.println("udp:", string(b[:m]))
 
 	// mutex held across a sleep: goroutines take turns without blocking the thread
-	mu := new(sched.Mutex)
+	mu: sched.Mutex
 	order := sched.make_chan(int, 3)
-	for i in 0..<3 do sched.go(__closure_3(i, mu, order))
+	for i in 0..<3 do sched.go(__closure_3(i, &mu, order))
 	fmt.println("mutex order:", sched.recv(order), sched.recv(order), sched.recv(order))
 
 	// after() as a select timeout

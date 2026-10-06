@@ -110,11 +110,23 @@ __Shape_VTable :: struct {
 	scale: proc(self: Shape, k: f64),
 }
 
-__Shape_area :: proc(s: Shape) -> f64 { return s.__vtable.area(s) }
+__Shape_area :: proc(s: Shape) -> f64 {
+	if s.__vtable == &__Shape_vtable_Circle { return circle_area(auto_cast s.data) }
+	if s.__vtable == &__Shape_vtable_Rect { return rect_area(auto_cast s.data) }
+	return s.__vtable.area(s)
+}
 
-__Shape_name :: proc(s: Shape) -> string { return s.__vtable.name(s) }
+__Shape_name :: proc(s: Shape) -> string {
+	if s.__vtable == &__Shape_vtable_Circle { return circle_name(auto_cast s.data) }
+	if s.__vtable == &__Shape_vtable_Rect { return rect_name(auto_cast s.data) }
+	return s.__vtable.name(s)
+}
 
-__Shape_scale :: proc(s: Shape, k: f64) { s.__vtable.scale(s, k) }
+__Shape_scale :: proc(s: Shape, k: f64) {
+	if s.__vtable == &__Shape_vtable_Circle { circle_scale(auto_cast s.data, k); return }
+	if s.__vtable == &__Shape_vtable_Rect { rect_scale(auto_cast s.data, k); return }
+	s.__vtable.scale(s, k)
+}
 
 __Shape_identity :: #force_inline proc(v: Shape) -> Shape { return v }
 
@@ -142,7 +154,10 @@ __Writer_VTable :: struct {
 	write: proc(self: Writer, s: string) -> int,
 }
 
-__Writer_write :: proc(w: Writer, s: string) -> int { return w.__vtable.write(w, s) }
+__Writer_write :: proc(w: Writer, s: string) -> int {
+	if w.__vtable == &__Writer_vtable_Log { return log_write(auto_cast w.data, s) }
+	return w.__vtable.write(w, s)
+}
 
 __Writer_identity :: #force_inline proc(v: Writer) -> Writer { return v }
 

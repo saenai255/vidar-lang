@@ -1,8 +1,10 @@
 import { CompileError, Token } from "./lexer";
 import { Block, Expr, File, Node, ProcSig, Stmt, children } from "./ast";
 import { posix } from "node:path";
-import { A, AnonField, AnonTemp, Analyzer, IfaceMethod, ImplInfo, isStmt, posOf } from "./analyzer";
-import { joinTokens } from "./comptime";
+import { A, AnonField, AnonTemp, Analyzer, IfaceMethod, ImplInfo, SpecInfo, TableInfo, isStmt, nodeText, posOf } from "./analyzer";
+import { joinTokens, repeatable } from "./comptime";
+import { FmtPiece, decodeString, encodeString, parseFormat } from "./fmtspec";
+import { AllocGroup, optimizeProc } from "./optimize";
 import type { CaptureSym, GlobalSym, LocalSym, PackageInfo, PkgSym, Sym, Ty, Unit } from "./scope";
 
 type ProcLit = Extract<Expr, { k: "ProcLit" }>;
@@ -15,10 +17,14 @@ package vidar_runtime
 
 import "base:intrinsics"
 import "base:runtime"
+import "core:bufio"
 import "core:fmt"
+import "core:io"
 import "core:mem"
+import "core:os"
 import "core:path/filepath"
 import "core:slice"
+import "core:strings"
 import "core:sync"
 import "core:time"
 
@@ -150,10 +156,93 @@ unexpected :: proc(e: $T, loc := #caller_location) -> ! {
 		panic(fmt.tprintf("unexpected error: %v", e), loc)
 	}
 }
-`;
+${fmtRuntime()}
+${groupRuntime()}`;
+
+/** -opt: `make_groupN` allocates N zeroed slices in one block, each aligned for its element type. */
+function groupRuntime(): string {
+  const procs: string[] = [];
+  for (let n = 2; n <= 8; n++) {
+    const ix = Array.from({ length: n }, (_, i) => i + 1);
+    const lines = [
+      `\tif ${ix.map((i) => `n${i} < 0`).join(" || ")} do panic("make: negative length", loc)`,
+      `\to1 := 0`,
+      ...ix.slice(1).map((i) => `\to${i} := mem.align_forward_int(o${i - 1} + size_of(E${i - 1}) * n${i - 1}, align_of(E${i}))`),
+      `\tbase, err := mem.alloc(o${n} + size_of(E${n}) * n${n}, max(${ix.map((i) => `align_of(E${i})`).join(", ")}, mem.DEFAULT_ALIGNMENT), allocator, loc)`,
+      `\tif err != nil do return`,
+      ...ix.map((i) => `\ts${i} = ([^]E${i})(uintptr(base) + uintptr(o${i}))[:n${i}]`),
+      `\treturn`,
+    ];
+    procs.push(
+      `make_group${n} :: proc(${ix.map((i) => `$E${i}`).join(", ")}: typeid, ${ix.map((i) => `n${i}`).join(", ")}: int, allocator := context.allocator, loc := #caller_location) -> (${ix.map((i) => `s${i}: []E${i}`).join(", ")}) {\n${lines.join("\n")}\n}`,
+    );
+  }
+  return `\n// -opt: allocations freed together, made together\n${procs.join("\n\n")}\n`;
+}
+
+/**
+ * -opt: fmt calls with a literal format become a proc per format, writing each piece with these.
+ * Common verbs on basic types are written directly; anything else goes through fmt for that one value.
+ */
+function fmtRuntime(): string {
+  const ints = "T == int || T == i8 || T == i16 || T == i32 || T == i64";
+  const uints = "T == uint || T == u8 || T == u16 || T == u32 || T == u64";
+  type Fast = [cond: string, sb: string, w: string];
+  const str: Fast = ["T == string", "strings.write_string(b, x)", "n, _ = io.write_string(w, x)"];
+  const bool: Fast = ["T == bool", `strings.write_string(b, "true" if x else "false")`, `n, _ = io.write_string(w, "true" if x else "false")`];
+  const rune: Fast = ["T == rune", "strings.write_rune(b, x)", "n, _ = io.write_rune(w, x)"];
+  const num = (base: number): Fast[] => [
+    [ints, `strings.write_i64(b, i64(x), ${base})`, `n, _ = io.write_i64(w, i64(x), ${base})`],
+    [uints, `strings.write_u64(b, u64(x), ${base})`, `n, _ = io.write_u64(w, u64(x), ${base})`],
+  ];
+  const verbs: Record<string, Fast[]> = { v: [str, bool, rune, ...num(10)], d: num(10), s: [str], x: num(16), t: [bool], c: [rune] };
+  const chain = (fast: Fast[], pick: 1 | 2, slow: string) =>
+    fast.map(([cond, ...code], i) => `${i ? " else " : "\t"}when ${cond} {\n\t\t${code[pick - 1]}\n\t}`).join("") + ` else {\n\t\t${slow}\n\t}`;
+  const procs = Object.entries(verbs).map(([verb, fast]) =>
+    `sb_${verb} :: #force_inline proc(b: ^strings.Builder, x: $T) {\n${chain(fast, 1, `fmt.sbprintf(b, "%${verb}", x)`)}\n}\n\n` +
+    `w_${verb} :: #force_inline proc(w: io.Writer, x: $T) -> (n: int) {\n${chain(fast, 2, `n = fmt.wprintf(w, "%${verb}", x, flush = false)`)}\n\treturn\n}\n`);
+  return `
+// @(table) fills its table at startup, before any context exists
+default_context :: proc "contextless" () -> runtime.Context { return runtime.default_context() }
+
+// -opt: fmt calls specialized to their format
+Builder :: strings.Builder
+Writer :: io.Writer
+File_Writer :: bufio.Writer
+
+builder :: #force_inline proc(allocator: runtime.Allocator) -> (b: strings.Builder) {
+	strings.builder_init(&b, allocator)
+	return
+}
+
+sb_to_string :: #force_inline proc(b: ^strings.Builder) -> string { return strings.to_string(b^) }
+
+sb_str :: #force_inline proc(b: ^strings.Builder, s: string) { strings.write_string(b, s) }
+
+sb_spec :: proc(b: ^strings.Builder, x: $T, spec: string) { fmt.sbprintf(b, spec, x) }
+
+// what fmt.printf and fmt.eprintf write through
+std_writer :: proc(b: ^bufio.Writer, buf: []byte, to_stderr: bool) -> io.Writer {
+	bufio.writer_init_with_buf(b, os.to_stream(os.stderr if to_stderr else os.stdout), buf)
+	return bufio.writer_to_writer(b)
+}
+
+w_str :: #force_inline proc(w: io.Writer, s: string) -> (n: int) {
+	n, _ = io.write_string(w, s)
+	return
+}
+
+w_spec :: proc(w: io.Writer, x: $T, spec: string) -> int { return fmt.wprintf(w, spec, x, flush = false) }
+
+w_flush :: #force_inline proc(w: io.Writer) { io.flush(w) }
+
+${procs.join("\n")}`;
+}
 
 const RUNTIME_ALIAS = "__vidar";
 const RUNTIME_MARK = "\u0000vidar-runtime\u0000";
+/** past this many vtables to test, a dispatcher keeps the plain indirect call */
+const MAX_DEVIRTUAL = 8;
 
 // Generated line breaks are written as markers and resolved into a line map once the file is done.
 // A real "\n" always comes from the source, so it advances the source line.
@@ -204,6 +293,11 @@ export class Emitter {
   private indents = new Map<number, string>();
   /** indentation added to source lines, inside a block vidar wrapped them in */
   private deeper = "";
+  /** `break`/`continue` statements retargeted while a pool loop's body is emitted once per type */
+  private branchText = new Map<Node, string>();
+  private poolLoops = 0;
+  /** -opt: specialized fmt procs of this unit, by what they write */
+  private fmtProcs = new Map<string, string>();
 
   constructor(private an: Analyzer, private unit: Unit) {}
 
@@ -281,7 +375,9 @@ export class Emitter {
     const up: { from: GlobalSym; to: GlobalSym } | undefined = A(n)._upcast;
     if (up) text = `${this.qualify(up.from, upcastName(up.from, up.to), `convert '${up.from.name}' to '${up.to.name}'`)}(${text})`;
     const fix: { prefix: string; suffix: string } | undefined = A(n)._fix;
-    return fix ? fix.prefix + text + fix.suffix : text;
+    if (fix) text = fix.prefix + text + fix.suffix;
+    // -opt: every index in the statement is proven in bounds
+    return A(n)._noBounds ? `#no_bounds_check ${text}` : text;
   }
 
   private emitNode(n: Node): string {
@@ -324,8 +420,12 @@ export class Emitter {
         if (n.inline) return this.inline(n);
         if (this.pretty && this.tok(n.toks[n.start]) === "{") return this.compact ? `{ ${n.stmts.map((s) => this.withPre(s)).join("; ")} }` : this.prettyBlock(n);
         if (this.tok(n.toks[n.start]) !== "do") return this.block(n);
-        // statements hoisted before the body must stay under the `do`
-        if (n.stmts.some((s) => A(s)._pre?.length)) return `{ ${n.stmts.map((s) => this.withPre(s)).join("; ")} }`;
+        // statements hoisted before the body, or a prologue, must stay under the `do`
+        if (n.stmts.some((s) => A(s)._pre?.length) || this.prologue.has(n)) {
+          const lines = this.prologue.get(n) ?? [];
+          this.prologue.delete(n);
+          return `{ ${[...lines, ...n.stmts.map((s) => this.withPre(s))].join("; ")} }`;
+        }
         // Odin rejects `do { ... }`, which a statement macro that expands to several statements gives
         return this.block(n).replace(/^do\s+(?=\{)/, "");
       case "Switch":
@@ -333,6 +433,13 @@ export class Emitter {
       case "ValueDecl": {
         const temps: AnonTemp[] | undefined = A(n)._anonTemps;
         const hoisted = temps?.map((t, i) => `${t.pre.includes("\n") ? t.pre : i ? " " : ""}${t.name} := ${this.emit(t.value)};`).join("").concat(" ") ?? "";
+        if (A(n)._allocGroup) return keepLines(n, this.allocGroup(A(n)._allocGroup));
+        const declared: GlobalSym | undefined = A(n)._syms?.[0];
+        const table = declared?.kind === "global" ? this.an.tables.get(declared) : undefined;
+        if (table) return this.tableDecl(n, declared!, table);
+        const spec = declared?.kind === "global" ? this.an.specialized.get(declared) : undefined;
+        if (spec) for (const [key, consts] of spec.clones) this.helpers.push(this.specClone(declared!, spec, key, consts));
+        if (A(n)._allocGrouped) return `/* ${n.names[0].name}: allocated together with ${A(n)._allocGrouped} */` + this.skipLines(n);
         const text = hoisted + (A(n)._orReturn ? this.orReturn(n) : this.valueDecl(n));
         return hoisted ? keepLines(n, text) : text;
       }
@@ -343,25 +450,49 @@ export class Emitter {
         return A(n)._orReturn ? this.orReturn(n) : this.generic(n);
       case "Catch":
         return this.catchStmt(n);
+      case "Defer": {
+        const free: { group: AllocGroup; keep: boolean } | undefined = A(n)._groupFree;
+        if (!free) return this.generic(n);
+        const first = free.group.members[0];
+        const alloc = free.group.allocator ? `, ${this.emit(free.group.allocator)}` : "";
+        if (free.keep) return `defer free(${first.count ? `raw_data(${first.name})` : first.name}${alloc})` + this.skipLines(n);
+        return `/* ${joinTokens(n.toks.slice(n.stmt.start, n.stmt.end))}: freed together with ${first.name} */` + this.skipLines(n);
+      }
       case "ErrDefer":
         this.fileUsesRuntime = this.usesRuntime = true;
         return `defer if ${RUNTIME_ALIAS}.failed(${A(n)._errName}) { ${this.emit(n.stmt)} }`;
       case "ProcLit":
         return A(n)._ifaceMethod ? this.methodGroup(n, A(n)._ifaceMethod) : this.procLit(n);
+      case "Labeled":
+        return n.stmt.k === "RangeFor" && A(n.stmt)._pool ? this.poolFor(n.stmt, n.label) : this.generic(n);
+      case "Branch":
+        return this.branchText.get(n) ?? this.generic(n);
       case "RangeFor": {
+        if (A(n)._pool) return this.poolFor(n, null);
         const syms: LocalSym[] = A(n)._syms ?? [];
-        const boxed = syms.filter((s) => s.boxed);
-        if (boxed.length) this.prologue.set(n.body, boxed.map((s) => `${s.name} := new_clone(${s.name})`));
+        const shadowed = syms.filter((s) => s.refCaptured);
+        if (shadowed.length) this.prologue.set(n.body, shadowed.map(addressable));
         return this.generic(n);
       }
       case "Call": {
+        const spec: { sym: GlobalSym; key: string } | undefined = A(n)._spec;
+        if (spec) return this.qualify(spec.sym, `${spec.sym.odinName}__${spec.key}`, `call '${spec.sym.name}'`) + this.generic(n, n.fn.end);
+        if (A(n)._pool) return this.qualify(A(n)._pool, poolName(A(n)._pool));
+        if (A(n)._poolOp) return this.poolOp(n);
         const conv: GlobalSym | undefined = A(n)._ifaceConv;
         if (conv && n.args.length === 1 && A(n.args[0])._upcast) return this.emit(n.args[0]);
         if (conv) return `${this.qualify(conv, fromName(conv))}(${n.args.map((a) => this.emit(a)).join(", ")})`;
-        return A(n)._closure ? this.closureCall(n) : this.generic(n);
+        if (A(n)._closure) return this.closureCall(n);
+        return (this.an.optimize && this.fmtCall(n)) || this.generic(n);
       }
       case "InterfaceType":
         return this.interfaceType(n);
+      case "Binary": {
+        const cmp: { iface: GlobalSym; value: Expr } | undefined = A(n)._ifaceNil;
+        // an interface value is nil when it has no vtable
+        if (cmp) return `${this.emit(cmp.value)}.__vtable ${n.op} nil`;
+        return this.generic(n);
+      }
       case "ImplBlock":
         for (const info of (A(n)._impls as ImplInfo[] | undefined) ?? []) this.implHelpers(info);
         return this.generic(n, n.start, n.end, []);
@@ -533,7 +664,7 @@ export class Emitter {
   private symRef(sym: Sym): string {
     switch (sym.kind) {
       case "global": return sym.odinName;
-      case "local": return sym.boxed ? `${sym.name}^` : sym.name;
+      case "local": return sym.name;
       case "capture": return sym.byRef ? `__env.${sym.name}^` : `__env.${sym.name}`;
       case "pkg": return sym.name;
     }
@@ -626,21 +757,7 @@ export class Emitter {
       const head = joinTokens(s.toks.slice(s.start, lit.body!.start));
       return `// ${head} — comptime, ${posix.basename(pos.file)}:${pos.line}` + this.skipLines(s);
     }
-    const syms: Sym[] = A(s)._syms ?? [];
-    if (!syms.some((x) => x.kind === "local" && x.boxed)) return this.generic(s);
-    const boxed = (i: number) => (syms[i] as LocalSym).boxed;
-    const names = s.names.map((n) => n.name);
-    if (!s.type && s.values.length === names.length) {
-      return `${names.join(", ")} := ${s.values.map((v, i) => (boxed(i) ? `new_clone(${this.emit(v)})` : this.emit(v))).join(", ")}`;
-    }
-    if (s.type && s.values.length === 0) {
-      const t = this.emit(s.type);
-      return names.map((n, i) => (boxed(i) ? `${n} := new(${t})` : `${n}: ${t}`)).join("; ");
-    }
-    if (s.type && names.length === 1 && s.values.length === 1) {
-      return `${names[0]} := new(${this.emit(s.type)}); ${names[0]}^ = ${this.emit(s.values[0])}`;
-    }
-    throw new CompileError("cannot capture by reference a variable declared from a multi-value expression; declare it separately", posOf(s));
+    return this.generic(s);
   }
 
   // ---- anonymous struct literals ----
@@ -696,23 +813,133 @@ export class Emitter {
     const dispatchers = methods.map((m) => {
       const { decl, forward } = this.paramList(m.lit.sig);
       const res = this.results(m.lit.sig);
-      return `${dispatcherName(m)} :: proc(${decl})${res} { ${res ? "return " : ""}${forward[0]}.__vtable.${m.name}(${forward.join(", ")}) }`;
+      const indirect = `${res ? "return " : ""}${forward[0]}.__vtable.${m.name}(${forward.join(", ")})`;
+      return this.dispatcher(dispatcherName(m), decl, res, forward[0], forward.slice(1), sym, m, indirect);
+    });
+    const inherited = this.an.allMethods(sym).filter((m) => this.inheritors(m).includes(sym)).map((m) => {
+      const { decl, forward } = this.paramList(m.rest);
+      const res = this.results(m.rest);
+      const path = [sym, ...this.an.basePath(sym, m.iface)!];
+      const fields = path.slice(1).map((b, i) => "." + baseField(path[i], b)).join("");
+      const indirect = `${res ? "return " : ""}self.__vtable${fields}.${m.name}(${[`${upcastName(sym, m.iface)}(self)`, ...forward].join(", ")})`;
+      return this.dispatcher(derivedDispatcherName(sym, m), `self: ${name}${decl ? ", " + decl : ""}`, res, "self", forward, sym, m, indirect);
     });
     const impls = this.an.impls.filter((i) => i.iface === sym);
     const overloads = [...impls.map((i) => `__${name}_from_${i.key}`), `__${name}_identity`];
     this.helpers.push(
       `__${name}_VTable :: struct {\n${bases.join("")}${vtable.join("")}}\n\n` +
-        [...dispatchers, ...upcasts].map((x) => x + "\n\n").join("") +
+        [...dispatchers, ...inherited, ...upcasts].map((x) => x + "\n\n").join("") +
         `__${name}_identity :: #force_inline proc(v: ${name}) -> ${name} { return v }\n\n` +
-        `${fromName(sym)} :: proc{${overloads.join(", ")}}`,
+        `${fromName(sym)} :: proc{${overloads.join(", ")}}` +
+        (this.an.pooled.has(sym) ? "\n\n" + this.poolHelpers(sym).trimEnd() : ""),
     );
     return keepLines(t, `struct { data: rawptr, __vtable: ^__${name}_VTable }`);
+  }
+
+  /** `Pool(I)`: a dynamic array per implementation, so a loop over it runs over each type's values in turn. */
+  private poolHelpers(sym: GlobalSym): string {
+    const name = poolName(sym);
+    const bins = this.an.variants(sym).map((i) => i.key);
+    return (
+      `${name} :: struct {\n${this.an.variants(sym).map((i) => `\t${i.key}: [dynamic]${this.implTarget(i)},\n`).join("")}}\n\n` +
+      `${name}_len :: #force_inline proc(p: ${name}) -> int { return ${bins.map((b) => `len(p.${b})`).join(" + ")} }\n\n` +
+      `${name}_clear :: proc(p: ^${name}) { ${bins.map((b) => `clear(&p.${b})`).join("; ")} }\n\n` +
+      `${name}_delete :: proc(p: ${name}) { ${bins.map((b) => `delete(p.${b})`).join("; ")} }\n\n`
+    );
+  }
+
+  private poolOp(c: Call): string {
+    const { op, iface, bins }: { op: string; iface: GlobalSym; bins?: ImplInfo[] } = A(c)._poolOp;
+    const pool = c.args[0];
+    if (op !== "append") {
+      const ptr = this.an.normalize(this.an.typeOf(pool, A(pool)._scope ?? this.an.global))?.t === "ptr";
+      const arg = this.emit(pool);
+      const fn = this.qualify(iface, `${poolName(iface)}_${op}`);
+      if (op === "clear") return `${fn}(${ptr ? arg : `&${arg}`})`;
+      return `${fn}(${ptr ? `${arg}^` : arg})`;
+    }
+    const base = pool.k === "Unary" && pool.op === "&" ? this.emit(pool.x) : this.emit(pool);
+    const groups: { key: string; args: string[] }[] = [];
+    bins!.forEach((info, i) => {
+      const value = this.emit(c.args[i + 1]);
+      const last = groups[groups.length - 1];
+      if (last?.key === info.key) last.args.push(value);
+      else groups.push({ key: info.key, args: [value] });
+    });
+    return groups.map((g) => `append(&${base}.${g.key}, ${g.args.join(", ")})`).join("; ");
+  }
+
+  /**
+   * `for x in pool { body }`: the body once per type, `x` a pointer to the element, so method calls
+   * resolve statically. A `break` leaves every copy through a labeled block around them.
+   */
+  private poolFor(s: Extract<Stmt, { k: "RangeFor" }>, label: string | null): string {
+    const iface: GlobalSym = A(s)._pool;
+    const variants = this.an.variants(iface);
+    const v = s.vals[0].name;
+    const { breaks, continues } = loopExits(s.body, label);
+    const many = variants.length > 1;
+    const id = this.poolLoops++;
+    const hoist = many && !repeatable(s.x);
+    const pool = hoist ? `__pool${id}` : this.emit(s.x);
+    const blockLabel = many && breaks.length ? (label ?? `__pool${id}`) : null;
+    const line = s.toks[s.start].pos.line;
+    const copies = variants.map((info, k) => {
+      if (many) for (const b of breaks) this.branchText.set(b, `break ${blockLabel}`);
+      if (many) for (const c of continues) this.branchText.set(c, `continue ${label}__${info.key}`);
+      const loopLabel = !label ? "" : !many ? `${label}: ` : continues.length ? `${label}__${info.key}: ` : "";
+      this.prologue.set(s.body, [`${v} := &__${v}`]);
+      const text = `${loopLabel}for &__${v} in ${pool}.${info.key} ${this.emit(s.body)}`;
+      return k ? nl(-line) + (this.indents.get(line) ?? "") + this.deeper + relocate(text, line) : text;
+    });
+    for (const b of [...breaks, ...continues]) this.branchText.delete(b);
+    const open = `${blockLabel ? `${blockLabel}: ` : ""}{ ${hoist ? `${pool} := ${this.emit(s.x)}; ` : ""}`;
+    return hoist || blockLabel ? `${open}${copies.join("")} }` : copies.join("");
+  }
+
+  /** The type an impl is for, as spelled from the file being emitted. */
+  private implTarget(info: ImplInfo): string {
+    const sym: Sym | undefined = A(info.node.target)._sym ?? A(info.node.target)._pkgMember;
+    return sym?.kind === "global" ? this.qualify(sym, sym.odinName, `name '${sym.name}'`) : nodeText(info.node.target);
+  }
+
+  /** Interfaces in `m`'s unit that inherit it; each gets its own dispatcher in `m`'s proc group. */
+  private inheritors(m: IfaceMethod): GlobalSym[] {
+    return this.an.ifaceSyms.filter((d) => d !== m.iface && d.pkg.unit === m.iface.pkg.unit && this.an.basePath(d, m.iface));
+  }
+
+  /** Calls the bound proc directly for each known vtable, else `indirect`. */
+  private dispatcher(name: string, params: string, res: string, self: string, rest: string[], iface: GlobalSym, m: IfaceMethod, indirect: string): string {
+    const call = (f: string, args: string[]) => (res ? `return ${f}(${args.join(", ")})` : `${f}(${args.join(", ")}); return`);
+    const guards = [...this.devirtualTargets(iface, m)].map(
+      ([proc, vtables]) => `\tif ${vtables.map((v) => `${self}.__vtable == ${v}`).join(" || ")} { ${call(proc, [`auto_cast ${self}.data`, ...rest])} }\n`,
+    );
+    if (!guards.length) return `${name} :: proc(${params})${res} { ${indirect} }`;
+    return `${name} :: proc(${params})${res} {\n${guards.join("")}\t${indirect}\n}`;
+  }
+
+  /**
+   * Impls must live in the interface's unit, so its dispatchers can test for each of their vtables
+   * (and the copies nested in extending interfaces' vtables) and call the bound proc directly.
+   */
+  private devirtualTargets(iface: GlobalSym, m: IfaceMethod): Map<string, string[]> {
+    const targets = new Map<string, string[]>();
+    for (const info of this.an.impls) {
+      if (info.iface.pkg.unit !== iface.pkg.unit) continue;
+      for (const path of this.an.basePaths(info.iface, iface)) {
+        const fields = path.map((b, i) => "." + baseField(i ? path[i - 1] : info.iface, b)).join("");
+        const proc = info.methods.get(m.name)!.odinName;
+        targets.set(proc, [...(targets.get(proc) ?? []), `&__${info.iface.odinName}_vtable_${info.key}${fields}`]);
+      }
+    }
+    const tests = [...targets.values()].reduce((n, v) => n + v.length, 0);
+    return tests > MAX_DEVIRTUAL ? new Map() : targets;
   }
 
   /** `m :: proc(x: I, ...) ---` -> `m :: proc{dispatcher, every bound impl proc}` */
   private methodGroup(lit: ProcLit, m: IfaceMethod): string {
     const procs = this.an.impls.filter((i) => i.iface === m.iface).map((i) => i.methods.get(m.name)!.odinName);
-    return keepLines(lit, `proc{${[dispatcherName(m), ...procs].join(", ")}}`);
+    return keepLines(lit, `proc{${[dispatcherName(m), ...this.inheritors(m).map((d) => derivedDispatcherName(d, m)), ...procs].join(", ")}}`);
   }
 
   private implHelpers(info: ImplInfo): void {
@@ -734,6 +961,159 @@ export class Emitter {
       `@(rodata)\n${vt} := __${name}_VTable{\n${vtable(info.iface, "")}}\n\n` +
         `__${name}_from_${info.key} :: proc(p: ^${T}) -> ${name} { return {data = p, __vtable = &${vt}} }`,
     );
+  }
+
+  // ---- @(specialize) and @(table) ----
+
+  /** A copy of a @(specialize) proc where the parameters calls pass constants to are compile-time (`$x`). */
+  private specClone(sym: GlobalSym, info: SpecInfo, key: string, consts: string[]): string {
+    const value = sym.decl.values[sym.index];
+    const p = info.lit;
+    let open = p.start;
+    while (!(p.toks[open].kind === "op" && p.toks[open].text === "(")) open++;
+    let close = open;
+    for (let depth = 0; close < p.end; close++) {
+      const t = p.toks[close].text;
+      if (t === "(") depth++;
+      else if (t === ")" && --depth === 0) break;
+    }
+    const params = p.sig.params.flatMap((g) =>
+      g.names.map((n) => `${n.prefix ?? ""}${consts.includes(n.name) ? "$" : ""}${n.name}${g.type ? `: ${this.emit(g.type)}` : " :"}${g.value ? `${g.type ? " " : ""}= ${this.emit(g.value)}` : ""}`),
+    );
+    const ps: LocalSym[] = A(p)._params ?? [];
+    const shadowed = ps.filter((x) => x.refCaptured).map(addressable);
+    if (shadowed.length) this.prologue.set(p.body!, shadowed);
+    const before = value !== p ? this.generic(value, value.start, p.start) + " " : "";
+    const after = this.generic(p, close + 1, p.body!.start);
+    const head = `${before}${this.generic(p, p.start, open)}(${params.join(", ")})${after ? " " + after : ""}`;
+    return `// ${sym.name} with ${consts.join(", ")} known at compile time\n${sym.odinName}__${key} :: ${head.trimEnd()} ${this.emit(p.body!)}`;
+  }
+
+  /** @(table): the proc becomes a lookup; the table is a literal, or filled at startup from the original body. */
+  private tableDecl(s: Extract<Stmt, { k: "ValueDecl" }>, sym: GlobalSym, t: TableInfo): string {
+    this.fileUsesRuntime = this.usesRuntime = true;
+    const name = sym.odinName;
+    const T = this.emit(t.type);
+    const R = this.emit(t.result);
+    const table = `__${name}_table`;
+    const index = { enum: t.param, u8: t.param, bool: `1 if ${t.param} else 0`, i8: `int(${t.param}) + 128` }[t.domain];
+    const size = t.domain === "enum" ? `[${T}]` : t.domain === "bool" ? "[2]" : "[256]";
+    if (t.values) {
+      const rows = t.values.map((v, i) => `${i % 8 ? " " : "\n\t"}${v},`).join("");
+      this.helpers.push(`// ${sym.name}(x) for every x, computed by vidar\n@(rodata)\n${table} := ${size}${R}{${rows}\n}`);
+    } else {
+      const compute = `__${name}_compute`;
+      const fill = {
+        enum: `for x in ${T} do ${table}[x] = ${compute}(x)`,
+        bool: `${table}[0] = ${compute}(false); ${table}[1] = ${compute}(true)`,
+        u8: `for i in 0..<256 do ${table}[i] = ${compute}(${T}(i))`,
+        i8: `for i in 0..<256 do ${table}[i] = ${compute}(${T}(i - 128))`,
+      }[t.domain];
+      this.helpers.push(
+        `${table}: ${size}${R}\n\n${compute} :: ${this.emit(t.lit)}\n\n` +
+          `// ${sym.name}(x) for every x, computed once at startup\n@(init)\n__${name}_fill :: proc "contextless" () {\n\tcontext = ${RUNTIME_ALIAS}.default_context()\n\t${fill}\n}`,
+      );
+    }
+    const head = this.generic(s, s.start, s.values[0].start).trimEnd() + " ";
+    return keepLines(s, `${head}#force_inline proc(${t.param}: ${T}) -> ${R} { return ${table}[${index}] }`);
+  }
+
+  // ---- -opt: allocations freed together ----
+
+  /** `xs := make([]int, n); ys := make([]f32, n)` -> `xs, ys := make_group2(int, f32, n, n)`: one block, sliced up. */
+  private allocGroup(g: AllocGroup): string {
+    this.fileUsesRuntime = this.usesRuntime = true;
+    const names = g.members.map((m) => (m.count ? m.name : `__${m.name}`));
+    const args = [...g.members.map((m) => this.emit(m.elem)), ...g.members.map((m) => (m.count ? this.emit(m.count) : "1")), ...(g.allocator ? [this.emit(g.allocator)] : [])];
+    const ptrs = g.members.filter((m) => !m.count).map((m) => `; ${m.name} := &__${m.name}[0]`);
+    return `${names.join(", ")} := ${RUNTIME_ALIAS}.make_group${g.members.length}(${args.join(", ")})${ptrs.join("")}`;
+  }
+
+  // ---- -opt: fmt calls with a literal format ----
+
+  /**
+   * `fmt.sbprintf(b, "hp %d/%d", hp, max)` -> `__fmt_0(b, hp, max)`, a proc that writes "hp ", hp,
+   * "/" and max directly: no format parsing at run time, no `any` boxing, no type switch.
+   */
+  private fmtCall(c: Call): string | undefined {
+    const entry = fmtEntry(c);
+    if (!entry) return undefined;
+    const fn = c.fn as Extract<Expr, { k: "Selector" }>;
+    if (c.args.some((a) => a.k === "FieldValue" || a.k === "Spread")) return undefined;
+    const lead = c.args.slice(0, entry.lead);
+    const values = c.args.slice(entry.lead + (entry.format ? 1 : 0));
+    const scope = A(c)._scope ?? this.an.global;
+    const single = (v: Expr) => this.an.isSingleValue(v, scope) || (v.k === "Call" && !!fmtEntry(v));
+    if (lead.length < entry.lead || values.some((v) => (v.k === "Ident" && v.name === "nil") || !single(v))) return undefined;
+    let pieces: FmtPiece[] | undefined;
+    if (entry.format) {
+      const f = c.args[entry.lead];
+      const text = f?.k === "Lit" && f.kind === "string" ? decodeString(this.tok(f.toks[f.start])) : undefined;
+      pieces = text === undefined ? undefined : parseFormat(text);
+      if (!pieces || pieces.filter((p) => p.k === "arg").length !== values.length) return undefined;
+    } else pieces = values.flatMap((_, i): FmtPiece[] => [...(i ? [{ k: "text" as const, text: " " }] : []), { k: "arg", verb: "v", spec: "%v" }]);
+    if (entry.newline) pieces.push({ k: "text", text: "\n" });
+
+    const kept: Expr[] = [];
+    const writes: string[] = [];
+    let pending = "";
+    const sink = entry.kind === "sb" ? "b" : entry.kind === "t" || entry.kind === "a" ? "&b" : "w";
+    const write = (what: string, x: string, extra = "") =>
+      writes.push(`\t${sink === "w" ? "n += __vidar.w_" : "__vidar.sb_"}${what}(${sink}, ${x}${extra})\n`);
+    const flush = () => pending && (write("str", encodeString(pending)), (pending = ""));
+    let vi = 0;
+    for (const p of pieces) {
+      if (p.k === "text") {
+        pending += p.text;
+        continue;
+      }
+      const v = values[vi++];
+      const inline = literalText(v, p.spec, (t) => this.tok(t));
+      if (inline !== undefined) {
+        pending += inline;
+        continue;
+      }
+      flush();
+      const arg = `a${kept.length}`;
+      kept.push(v);
+      if (FAST_VERBS.has(p.verb) && p.spec === "%" + p.verb) write(p.verb, arg);
+      else write("spec", arg, `, ${encodeString(p.spec)}`);
+    }
+    flush();
+
+    const params = kept.map((_, i) => `a${i}: $T${i}`);
+    const key = `${entry.kind}\0${writes.join("")}`;
+    let name = this.fmtProcs.get(key);
+    if (!name) {
+      name = `__fmt_${this.fmtProcs.size}`;
+      this.fmtProcs.set(key, name);
+      const origin = `// fmt.${fn.name}${entry.format ? " " + this.tok(c.args[entry.lead].toks[c.args[entry.lead].start]) : ""}\n`;
+      const body = writes.join("");
+      const head = (extra: string[], res: string) => `${origin}${name} :: proc(${[...extra, ...params].join(", ")})${res} {\n`;
+      switch (entry.kind) {
+        case "sb":
+          this.helpers.push(`${head(["b: ^__vidar.Builder"], " -> string")}${body}\treturn __vidar.sb_to_string(b)\n}`);
+          break;
+        case "t":
+        case "a":
+          this.helpers.push(`${head([], " -> string")}\tb := __vidar.builder(context.${entry.kind === "t" ? "temp_allocator" : "allocator"})\n${body}\treturn __vidar.sb_to_string(&b)\n}`);
+          break;
+        case "w":
+          this.helpers.push(`${head(["w: __vidar.Writer"], " -> (n: int)")}${body}\t__vidar.w_flush(w)\n\treturn\n}`);
+          break;
+        default:
+          this.helpers.push(
+            `${head([], " -> (n: int)")}\tbuf: [1024]byte\n\tbw: __vidar.File_Writer\n\tw := __vidar.std_writer(&bw, buf[:], ${entry.kind === "err"})\n${body}\t__vidar.w_flush(w)\n\treturn\n}`,
+          );
+      }
+      this.fileUsesRuntime = this.usesRuntime = true;
+    }
+    const args = [...lead, ...kept];
+    let lines = 0;
+    if (c.toks === this.file.toks) {
+      for (let i = c.start + 1; i < c.end; i++) if (!args.some((a) => i > a.start && i < a.end)) lines += c.toks[i].pre.split("\n").length - 1;
+    }
+    return `${name}(${args.map((a) => this.emit(a)).join(", ")})` + SKIP_LINE.repeat(lines);
   }
 
   // ---- closures ----
@@ -771,10 +1151,14 @@ export class Emitter {
 
   private procLit(p: ProcLit): string {
     if (A(p)._nameResults) this.nameResults(p);
+    if (this.an.optimize && p.body && !A(p)._optimized) {
+      A(p)._optimized = true;
+      optimizeProc(p.body);
+    }
     const params: LocalSym[] = A(p)._params ?? [];
-    const boxedParams = params.filter((s) => s.boxed).map((s) => `${s.name} := new_clone(${s.name})`);
+    const shadowedParams = params.filter((s) => s.refCaptured).map(addressable);
     if (!p.captures) {
-      if (p.body && boxedParams.length) this.prologue.set(p.body, boxedParams);
+      if (p.body && shadowedParams.length) this.prologue.set(p.body, shadowedParams);
       return this.generic(p);
     }
     if (!p.body) throw new CompileError("closure literal needs a body", posOf(p));
@@ -787,7 +1171,7 @@ export class Emitter {
     const withEnv = /^\(\s*\)/.test(signature)
       ? signature.replace(/^\(\s*\)/, "(__env_raw: rawptr)")
       : signature.replace(/^\(/, "(__env_raw: rawptr, ");
-    this.prologue.set(p.body, [...(caps.length ? ["__env := cast(^__Env)__env_raw"] : []), ...boxedParams]);
+    this.prologue.set(p.body, [...(caps.length ? ["__env := cast(^__Env)__env_raw"] : []), ...shadowedParams]);
     const body = this.emit(p.body);
     const procText = `proc${withEnv} ${body}`;
     if (!caps.length) return `${sigText}{call = ${procText}, env = nil}`;
@@ -806,10 +1190,7 @@ export class Emitter {
   /** The value handed to a closure constructor for one capture, as seen at the creation site. */
   private captureArg(c: CaptureSym): string {
     const t = c.target;
-    if (t.kind === "local") {
-      if (c.byRef) return t.name;
-      return t.boxed ? `${t.name}^` : t.name;
-    }
+    if (t.kind === "local") return c.byRef ? `&${t.name}` : t.name;
     if (c.byRef) return t.byRef ? `__env.${t.name}` : `&__env.${t.name}`;
     return t.byRef ? `__env.${t.name}^` : `__env.${t.name}`;
   }
@@ -842,6 +1223,88 @@ export class Emitter {
   }
 }
 
+/** fmt procs -opt specializes: where they write, and how many arguments come before the format */
+const FMT_ENTRIES = new Map<string, { kind: "out" | "err" | "t" | "a" | "sb" | "w"; lead: number; format: boolean; newline: boolean }>(
+  (
+    [["", "out", 0], ["e", "err", 0], ["t", "t", 0], ["a", "a", 0], ["sb", "sb", 1], ["w", "w", 1]] as const
+  ).flatMap(([prefix, kind, lead]) => [
+    [`${prefix}printf`, { kind, lead, format: true, newline: false }],
+    [`${prefix}printfln`, { kind, lead, format: true, newline: true }],
+    [`${prefix}print`, { kind, lead, format: false, newline: false }],
+    [`${prefix}println`, { kind, lead, format: false, newline: true }],
+  ]),
+);
+
+/** `fmt.<name>(...)` for one of the procs -opt specializes */
+function fmtEntry(c: Call) {
+  const fn = c.fn;
+  if (fn.k !== "Selector" || fn.x.k !== "Ident") return undefined;
+  const pkg: Sym | undefined = A(fn.x)._sym;
+  return pkg?.kind === "pkg" && pkg.path === "core:fmt" ? FMT_ENTRIES.get(fn.name) : undefined;
+}
+
+/** verbs the runtime writes directly for basic types (see fmtRuntime) */
+const FAST_VERBS = new Set(["v", "d", "s", "x", "t", "c"]);
+
+/** A literal argument printed as `spec` gives fixed text, which goes into the format proc. */
+function literalText(v: Expr, spec: string, text: (t: Token) => string): string | undefined {
+  if (v.k !== "Lit") return undefined;
+  const t = text(v.toks[v.start]);
+  if (v.kind === "string" && (spec === "%v" || spec === "%s")) return decodeString(t);
+  if (v.kind === "int" && (spec === "%v" || spec === "%d") && /^\d+$/.test(t)) return BigInt(t).toString();
+  return undefined;
+}
+
+// Odin params and loop values are not addressable
+function addressable(sym: LocalSym): string {
+  return `${sym.name} := ${sym.name}`;
+}
+
+function poolName(iface: GlobalSym): string {
+  return `__${iface.odinName}_Pool`;
+}
+
+/**
+ * The `break`s and `continue`s in a loop body that leave or restart that loop: unlabeled breaks
+ * outside nested loops and switches, and branches naming the loop's label.
+ */
+function loopExits(body: Block, label: string | null): { breaks: Node[]; continues: Node[] } {
+  const breaks: Node[] = [];
+  const continues: Node[] = [];
+  const visit = (n: Node, nested: boolean) => {
+    if (n.k === "ProcLit") return;
+    if (n.k === "Branch") {
+      const named = n.end - n.start > 1 ? n.toks[n.start + 1].text : null;
+      if (n.op === "break" && (named ? named === label : !nested)) breaks.push(n);
+      if (n.op === "continue" && named && named === label) continues.push(n);
+      return;
+    }
+    const inner = nested || n.k === "For" || n.k === "RangeFor" || n.k === "Switch";
+    const kids = [...children(n), ...((A(n)._pre as Node[] | undefined) ?? [])];
+    const exp: Node | undefined = A(n)._expansion;
+    if (exp) kids.push(exp);
+    for (const c of kids) visit(c, inner);
+  };
+  for (const s of body.stmts) visit(s, false);
+  return { breaks, continues };
+}
+
+/** Generated code repeating source lines: its line breaks map back to those lines instead of advancing past them. */
+function relocate(text: string, line: number): string {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "\n") out += nl(++line);
+    else if (c === SKIP_LINE) line++;
+    else if (c === GEN_NL) {
+      const end = text.indexOf(GEN_NL_END, i);
+      out += text.slice(i, end + 1);
+      i = end;
+    } else out += c;
+  }
+  return out;
+}
+
 function fromName(iface: GlobalSym): string {
   return `__${iface.odinName}_from`;
 }
@@ -861,6 +1324,11 @@ function upcastName(from: GlobalSym, to: GlobalSym): string {
 
 function dispatcherName(m: IfaceMethod): string {
   return `__${m.iface.odinName}_${m.name}`;
+}
+
+/** `m` inherited by `iface`, dispatched on an `iface` value */
+function derivedDispatcherName(iface: GlobalSym, m: IfaceMethod): string {
+  return `__${iface.odinName}_${m.name}`;
 }
 
 const BARE_PARENTS = new Set(["Call", "ValueDecl", "Assign", "Return", "CompoundLit", "FieldValue", "Paren"]);

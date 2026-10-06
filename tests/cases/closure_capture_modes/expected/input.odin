@@ -3,21 +3,21 @@ package main; import __vidar "vidar_runtime"
 import "core:fmt"
 
 main :: proc() {
-	n := new_clone(1)
-	by_value := __closure_0(n^)
-	by_ref := __closure_1(n)
-	n^ = 2
+	n := 1
+	by_value := __closure_0(n)
+	by_ref := __closure_1(&n)
+	n = 2
 	fmt.println(by_value.call(by_value.env), by_ref.call(by_ref.env))
 
 	// mutating a by-value capture changes only the closure's own copy
-	counter := __closure_2(n^)
-	fmt.println(counter.call(counter.env), counter.call(counter.env), n^)
+	counter := __closure_2(n)
+	fmt.println(counter.call(counter.env), counter.call(counter.env), n)
 
 	// params can be captured by reference too
-	bump := proc(x: int) -> int { x := new_clone(x);
-		inc := __closure_3(x)
+	bump := proc(x: int) -> int { x := x;
+		inc := __closure_3(&x)
 		inc.call(inc.env)
-		return x^
+		return x
 	}
 	fmt.println(bump(5))
 }

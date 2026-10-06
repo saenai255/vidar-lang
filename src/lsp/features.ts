@@ -255,7 +255,7 @@ export class Index {
   }
 
   private declare(t: Token, scope: Scope, init: Partial<LocalSym>): LocalSym {
-    const sym: LocalSym = { kind: "local", name: t.text, ctx: scope.ctx ?? { closure: false }, isConst: false, scope, boxed: false, declKind: "decl", declTok: t, ...init };
+    const sym: LocalSym = { kind: "local", name: t.text, ctx: scope.ctx ?? { closure: false }, isConst: false, scope, refCaptured: false, declKind: "decl", declTok: t, ...init };
     if (sym.name !== "_") scope.syms.set(sym.name, sym);
     this.add(t, sym, true);
     return sym;
@@ -409,7 +409,7 @@ export class Index {
       const next = toks[i + 1]?.text;
       const loopVar = (prev?.text === "for" || (prev?.text === "," && toks[i - 3]?.text === "for")) && (next === "in" || next === ",");
       if (((next === ":=" || next === ":" || next === "::") && prev?.text !== "case") || loopVar) {
-        const sym: LocalSym = { kind: "local", name: t.text, ctx: { closure: false }, isConst: next === "::", scope: quoteScope, boxed: false, declKind: loopVar ? "range" : "decl", declTok: t };
+        const sym: LocalSym = { kind: "local", name: t.text, ctx: { closure: false }, isConst: next === "::", scope: quoteScope, refCaptured: false, declKind: loopVar ? "range" : "decl", declTok: t };
         declared.set(t.text, sym);
         quoteLocals.add(sym);
         this.add(t, sym, true);
@@ -644,7 +644,7 @@ export function describe(a: Analysis, sym: Sym): string {
       const notes = [`*${localKind(sym)}*`];
       if (quoteLocals.has(sym)) notes.push("declared in quoted code: each expansion renames it, so it never clashes with the caller's names");
       if (switchVars.has(sym)) notes.push("in each `case`, it has that case's type");
-      if (sym.boxed) notes.push("captured by reference, so it lives on the heap");
+      if (sym.refCaptured) notes.push("captured by reference");
       if (!sym.ty && !switchVars.has(sym) && !sym.isConst) notes.push("type not known to vidar");
       return code(localDecl(a, sym)) + "\n\n" + notes.join(" · ");
     }

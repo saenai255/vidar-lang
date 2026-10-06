@@ -68,9 +68,15 @@ __Container_VTable :: struct {
 	size: proc(self: Container) -> int,
 }
 
-__Container_push :: proc(c: Container, x: int) { c.__vtable.push(c, x) }
+__Container_push :: proc(c: Container, x: int) {
+	if c.__vtable == &__Container_vtable_Stack { stack_push(auto_cast c.data, x); return }
+	c.__vtable.push(c, x)
+}
 
-__Container_size :: proc(c: Container) -> int { return c.__vtable.size(c) }
+__Container_size :: proc(c: Container) -> int {
+	if c.__vtable == &__Container_vtable_Stack { return stack_size(auto_cast c.data) }
+	return c.__vtable.size(c)
+}
 
 __Container_identity :: #force_inline proc(v: Container) -> Container { return v }
 
@@ -80,7 +86,10 @@ __Destroy_VTable :: struct {
 	destroy: proc(self: Destroy),
 }
 
-__Destroy_destroy :: proc(d: Destroy) { d.__vtable.destroy(d) }
+__Destroy_destroy :: proc(d: Destroy) {
+	if d.__vtable == &__Destroy_vtable_Stack { stack_destroy(auto_cast d.data); return }
+	d.__vtable.destroy(d)
+}
 
 __Destroy_identity :: #force_inline proc(v: Destroy) -> Destroy { return v }
 

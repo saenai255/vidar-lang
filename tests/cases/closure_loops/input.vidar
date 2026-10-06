@@ -11,12 +11,13 @@ main :: proc() {
 	for f in values do fmt.print(f(), "")
 	fmt.println()
 
-	// by-reference capture of a range variable boxes it per iteration
-	refs: [dynamic]closure() -> int
+	// by-reference capture of a range variable refers to that iteration's copy
 	for x in ([]int{10, 20, 30}) {
-		append(&refs, proc[&x]() -> int { x += 1; return x })
+		inc := proc[&x]() { x += 1 }
+		inc()
+		inc()
+		fmt.print(x, "")
 	}
-	for f in refs do fmt.print(f(), f(), "")
 	fmt.println()
 
 	// one shared counter captured by reference from inside a while-style loop

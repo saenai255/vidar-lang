@@ -19,9 +19,15 @@ __Shape_VTable :: struct {
 	scale: proc(self: Shape, k: f64),
 }
 
-__Shape_length :: proc(s: Shape) -> f64 { return s.__vtable.length(s) }
+__Shape_length :: proc(s: Shape) -> f64 {
+	if s.__vtable == &__Shape_vtable_Vec { return vec_length(auto_cast s.data) }
+	return s.__vtable.length(s)
+}
 
-__Shape_scale :: proc(s: Shape, k: f64) { s.__vtable.scale(s, k) }
+__Shape_scale :: proc(s: Shape, k: f64) {
+	if s.__vtable == &__Shape_vtable_Vec { vec_scale(auto_cast s.data, k); return }
+	s.__vtable.scale(s, k)
+}
 
 __Shape_identity :: #force_inline proc(v: Shape) -> Shape { return v }
 

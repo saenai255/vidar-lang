@@ -102,7 +102,8 @@ Hero :: interface { using Actor, using Persistent }
 
 Room :: struct {
 	players:  [dynamic]^entity.Player,
-	monsters: [dynamic]Monster,
+	// indices into World.monsters: half the size of interface values, scanned on every move
+	monsters: [dynamic]int,
 }
 
 World :: struct {
@@ -162,7 +163,7 @@ make_world :: proc(seed: u64, slimes: int) -> ^World {
 		r := roll(&w.rng, 100)
 		kind := entity.Slime_Kind.Green if r < 50 else .Blue if r < 85 else .Red
 		at := Pos{roll(&w.rng, WORLD_W), roll(&w.rng, WORLD_H)}
-		add_monster(w, entity.new_slime(kind, at))
+		add_monster(w, entity.new_slime(len(w.monsters), kind, at))
 	}
 	king := entity.new_king({WORLD_W - 1, WORLD_H - 1})
 	w.boss = king
@@ -179,20 +180,20 @@ room_at :: proc(w: ^World, p: Pos) -> ^Room {
 }
 
 add_monster :: proc(w: ^World, m: Monster) {
+	append(&room_at(w, pos(m)).monsters, len(w.monsters))
 	append(&w.monsters, m)
-	append(&room_at(w, pos(m)).monsters, m)
 }
 
-// Moves m's room entry; the monster updates its own position.
-relocate :: proc(w: ^World, m: Monster, from, to: Pos) {
+// Moves monster id's room entry; the monster updates its own position.
+relocate :: proc(w: ^World, id: int, from, to: Pos) {
 	list := &room_at(w, from).monsters
 	for other, i in list {
-		if other == m {
+		if other == id {
 			ordered_remove(list, i)
 			break
 		}
 	}
-	append(&room_at(w, to).monsters, m)
+	append(&room_at(w, to).monsters, id)
 }
 
 move_player :: proc(w: ^World, p: ^entity.Player, to: Pos) {
@@ -274,7 +275,8 @@ look :: proc(w: ^World, p: ^entity.Player, b: ^strings.Builder) {
 	}
 	strings.write_byte(b, '\n')
 	n := 0
-	for m in room.monsters {
+	for id in room.monsters {
+		m := w.monsters[id]
 		if !alive(m) do continue
 		strings.write_string(b, "Here: " if n == 0 else ", ")
 		describe(m, b)

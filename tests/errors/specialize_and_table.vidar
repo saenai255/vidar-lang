@@ -1,0 +1,5 @@
+// error: a proc is either @(specialize) or @(table), not both
+package main
+@(specialize, table)
+f :: proc(b: bool) -> int { return 1 }
+main :: proc() {}

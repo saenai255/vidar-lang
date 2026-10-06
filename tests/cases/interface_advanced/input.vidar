@@ -66,5 +66,5 @@ main :: proc() {
 
 	// zero value: no data, no vtable
 	empty: Store
-	fmt.println("empty is nil:", empty.data == nil && empty.__vtable == nil)
+	fmt.println("empty is nil:", empty == nil)
 }

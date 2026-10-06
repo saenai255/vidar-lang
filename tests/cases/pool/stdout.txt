@@ -1,0 +1,13 @@
+len: 5 total: 22
+circle 12.0
+circle 3.0
+rect 6.0
+rect 1.0
+dot 0.0
+scaled total: 88
+first big: circle
+visiting circle
+visiting circle
+visiting rect
+as interfaces: 4 circle 48.0
+cleared: 0

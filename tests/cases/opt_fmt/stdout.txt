@@ -1,0 +1,31 @@
+slime [7/10]
+18446744073709551615 -128 200 é true -7
+ff -80 ffffffffffffffff true é
+literals: inline 12 too 0
+println: slime 7 true é
+print: 7 
+
+[00007] [slime ] [2.50] [Green] [Point{x = 1, y = 2}] [42] [-170141183460469231731687303715884105728] [0002.500]
+"slime" "slime" 2.500000e+00 FF 10 101 0
+tab	here "quoted" 100% {x} } } ünï
+raw string\n
+slime:7 +10
+a 1 true end
+tprintf 7| tprintfln slime
+tprint 7  tprintln
+aprintf 7/10 aprintln true
+ aprint
+wprintf 7 slime wprintln 15
+wprintfln 1000
+wprint
+12345 bytes
+printf returned 12
+7 dynamic
+%!(BAD ARGUMENT NUMBER) %!(BAD ARGUMENT NUMBER) indexed
+%!(EXTRA 7)00007 star
+7 7 braces
+7 %!(MISSING ARGUMENT) missing
+7 extra
+%!(EXTRA 7)nil: <nil>
+sep-7
+1 two

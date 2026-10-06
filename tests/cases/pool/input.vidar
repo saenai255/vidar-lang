@@ -1,0 +1,88 @@
+package main
+
+import "core:fmt"
+
+Shape :: interface { area, scale, name }
+area  :: proc(s: Shape) -> f64 ---
+scale :: proc(s: Shape, k: f64) ---
+name  :: proc(s: Shape) -> string ---
+
+Circle :: struct { r: f64 }
+Rect   :: struct { w, h: f64 }
+Dot    :: struct {}
+
+circle_area  :: proc(c: ^Circle) -> f64 { return 3 * c.r * c.r }
+circle_scale :: proc(c: ^Circle, k: f64) { c.r *= k }
+circle_name  :: proc(c: ^Circle) -> string { return "circle" }
+rect_area    :: proc(r: ^Rect) -> f64 { return r.w * r.h }
+rect_scale   :: proc(r: ^Rect, k: f64) { r.w *= k; r.h *= k }
+rect_name    :: proc(r: ^Rect) -> string { return "rect" }
+dot_area     :: proc(d: ^Dot) -> f64 { return 0 }
+dot_scale    :: proc(d: ^Dot, k: f64) {}
+dot_name     :: proc(d: ^Dot) -> string { return "dot" }
+
+impl Shape for Circle { area = circle_area, scale = circle_scale, name = circle_name }
+impl Shape for Rect   { area = rect_area, scale = rect_scale, name = rect_name }
+impl Shape for Dot    { area = dot_area, scale = dot_scale, name = dot_name }
+
+Scene :: struct {
+	shapes: Pool(Shape),
+}
+
+describe :: proc(s: Shape) -> string { return fmt.tprintf("%s %.1f", name(s), area(s)) }
+
+total :: proc(p: ^Pool(Shape)) -> (sum: f64) {
+	for s in p do sum += area(s)
+	return
+}
+
+make_scene :: proc() -> ^Scene {
+	sc := new(Scene)
+	c := Circle{1}
+	append(&sc.shapes, Rect{2, 3}, Circle{2}, c, Rect{1, 1})
+	append(&sc.shapes, Dot{})
+	return sc
+}
+
+main :: proc() {
+	sc := make_scene()
+	fmt.println("len:", len(sc.shapes), "total:", total(&sc.shapes))
+
+	// each type's values are visited together, in insertion order within a type
+	for s in sc.shapes {
+		fmt.println(describe(s))
+	}
+
+	// a pointer to the element: methods that change it change the pool
+	for s in sc.shapes do scale(s, 2)
+	fmt.println("scaled total:", total(&sc.shapes))
+
+	// break leaves the whole loop, continue goes on with the next value
+	found := ""
+	for s in sc.shapes {
+		if area(s) < 10 do continue
+		found = name(s)
+		break
+	}
+	fmt.println("first big:", found)
+
+	outer: for s in sc.shapes {
+		fmt.println("visiting", name(s))
+		for i in 0..<3 {
+			if i == 1 do continue outer
+			if name(s) == "rect" do break outer
+		}
+		fmt.println("visited", name(s))
+	}
+
+	// stored as the interface, it converts like any pointer to an implementation
+	list: [dynamic]Shape
+	for s in sc.shapes {
+		if name(s) != "dot" do append(&list, s)
+	}
+	fmt.println("as interfaces:", len(list), describe(list[0]))
+
+	clear(&sc.shapes)
+	fmt.println("cleared:", len(sc.shapes))
+	delete(sc.shapes)
+}

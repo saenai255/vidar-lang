@@ -6,29 +6,29 @@ Point :: struct { x, y: int }
 
 // every way a variable can be declared, captured by reference
 main :: proc() {
-	a := new_clone(1)                       // short declaration
-	b := new(int); b^ = 2                   // typed with value
-	c := new([dynamic]int)              // typed without value
-	p := new_clone(Point{1, 2})             // struct value
-	d, e := 4, new_clone(5)                 // multi-declaration, only `e` captured
+	a := 1                       // short declaration
+	b: int = 2                   // typed with value
+	c: [dynamic]int              // typed without value
+	p := Point{1, 2}             // struct value
+	d, e := 4, 5                 // multi-declaration, only `e` captured
 
-	touch := __closure_0(a, b, c, p, e)
+	touch := __closure_0(&a, &b, &c, &p, &e)
 	touch.call(touch.env)
 	touch.call(touch.env)
-	fmt.println(a^, b^, c^[:], p^, d, e^)
+	fmt.println(a, b, c[:], p, d, e)
 
-	// a parameter captured by reference is copied into a box at proc entry
-	acc := proc(start: int) -> int { start := new_clone(start);
-		add := __closure_1(start)
+	// a parameter captured by reference is copied into a stack local at proc entry
+	acc := proc(start: int) -> int { start := start;
+		add := __closure_1(&start)
 		add.call(add.env, 5)
 		add.call(add.env, 6)
-		return start^
+		return start
 	}
 	fmt.println("acc:", acc(100))
 
-	// the box is shared, so a closure returned out of a scope keeps the value alive
+	// a closure that outlives its frame needs state the coder puts on the heap
 	make := proc() -> __vidar.Closure(proc(rawptr) -> int) {
-		total := new_clone(0)
+		total := new(int)
 		return __closure_2(total)
 	}
 	counter := make()

@@ -25,7 +25,10 @@ __model__Observer_VTable :: struct {
 	changed: proc(self: model__Observer, value: int) -> string,
 }
 
-__model__Observer_changed :: proc(o: model__Observer, value: int) -> string { return o.__vtable.changed(o, value) }
+__model__Observer_changed :: proc(o: model__Observer, value: int) -> string {
+	if o.__vtable == &__model__Observer_vtable_view_Label { return view__label_changed(auto_cast o.data, value) }
+	return o.__vtable.changed(o, value)
+}
 
 __model__Observer_identity :: #force_inline proc(v: model__Observer) -> model__Observer { return v }
 

@@ -63,8 +63,8 @@ bot_line :: proc(w: ^world.World, p: ^entity.Player, rng: ^world.Rng, t: int) ->
 	if t % 13 == 0 do return "look"
 	if t % 11 == 0 do return "stats"
 	if t % 29 == 0 && p.gold > 0 do return fmt.tprintf("bet %d", p.gold / 2 + 1)
-	for m in world.room_at(w, {p.x, p.y}).monsters {
-		if world.alive(m) do return "attack slime"
+	for id in world.room_at(w, {p.x, p.y}).monsters {
+		if world.alive(w.monsters[id]) do return "attack slime"
 	}
 	return world.DIR_SHORT[world.Dir(world.roll(rng, 4))]
 }

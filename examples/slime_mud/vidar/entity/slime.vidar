@@ -19,6 +19,7 @@ SLIME_STATS := [Slime_Kind]Slime_Stats{
 }
 
 Slime :: struct {
+	id:         int,
 	kind:       Slime_Kind,
 	at:         world.Pos,
 	hp:         int,
@@ -26,8 +27,8 @@ Slime :: struct {
 	respawn_at: int,
 }
 
-new_slime :: proc(kind: Slime_Kind, at: world.Pos) -> ^Slime {
-	return new_clone(Slime{kind = kind, at = at, hp = SLIME_STATS[kind].hp, alive = true})
+new_slime :: proc(id: int, kind: Slime_Kind, at: world.Pos) -> ^Slime {
+	return new_clone(Slime{id = id, kind = kind, at = at, hp = SLIME_STATS[kind].hp, alive = true})
 }
 
 slime_name :: proc(s: ^Slime) -> string { return SLIME_STATS[s.kind].name }
@@ -76,7 +77,7 @@ slime_act :: proc(s: ^Slime, w: ^world.World) {
 }
 
 move_slime :: proc(s: ^Slime, w: ^world.World, to: world.Pos) {
-	world.relocate(w, s, s.at, to)
+	world.relocate(w, s.id, s.at, to)
 	s.at = to
 }
 

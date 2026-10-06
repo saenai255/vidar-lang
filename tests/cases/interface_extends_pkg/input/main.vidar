@@ -20,5 +20,12 @@ main :: proc() {
 	fmt.println(shapes.area(s), volume(s))
 	list: [dynamic]shapes.Shape
 	append(&list, s)
-	fmt.println("total:", shapes.total(list[:]))
+	sq := shapes.Square{3}
+	p: shapes.Polygon = &sq
+	append(&list, shapes.as_shape(p), p)
+	fmt.println("total:", shapes.total(list[:]), shapes.sides(p))
+
+	none: shapes.Shape
+	no_solid: Solid
+	fmt.println("nil:", none == nil, list[0] != nil, no_solid == nil, s == nil)
 }

@@ -1,0 +1,6 @@
+// error: Pool(Shape) needs every implementation of 'Shape' to be known, but 'Solid' in package 'main' extends it
+package main
+import "shapes"
+Solid :: interface { using shapes.Shape, volume }
+volume :: proc(s: Solid) -> f64 ---
+main :: proc() {}

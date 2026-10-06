@@ -1,0 +1,7 @@
+package shapes
+Shape :: interface { area }
+area :: proc(s: Shape) -> f64 ---
+Sq :: struct { s: f64 }
+sq_area :: proc(q: ^Sq) -> f64 { return 1 }
+impl Shape for Sq { area = sq_area }
+all: Pool(Shape)

@@ -18,11 +18,11 @@ make_filter :: proc(prefix: string) -> Handler {
 }
 
 main :: proc() {
-	clicks := new_clone(0)
-	b := Button{label = "ok", on_click = __closure_1(clicks)}
+	clicks := 0
+	b := Button{label = "ok", on_click = __closure_1(&clicks)}
 	b.on_click.call(b.on_click.env, "a")
 	b.on_click.call(b.on_click.env, "b")
-	fmt.println(b.label, "clicks:", clicks^)
+	fmt.println(b.label, "clicks:", clicks)
 
 	register(make_filter("x"))
 	register(make_filter("y"))

@@ -9,7 +9,7 @@ All new keywords are contextual: `closure`, `quote`, `interface`, `impl`, `catch
 | Syntax | Meaning |
 |---|---|
 | `proc[x](...) -> R { ... }` | closure capturing `x` by value (a copy taken when the closure is created) |
-| `proc[&x](...) -> R { ... }` | closure capturing `x` by reference; `x` is moved to the heap so the closure can outlive the frame |
+| `proc[&x](...) -> R { ... }` | closure capturing `x` by reference: a pointer to `x` where it lives, so the closure must not outlive it |
 | `proc[x, &y, z](...) { ... }` | mixed capture list |
 | `proc[](...) { ... }` | closure with no captures |
 | `proc(...) { ... }` | (no brackets) an ordinary Odin proc, not a closure |
@@ -20,8 +20,8 @@ All new keywords are contextual: `closure`, `quote`, `interface`, `impl`, `catch
 Op :: closure(a, b: int) -> (int, bool)
 
 make_counter :: proc(start: int) -> closure() -> int {
-	count := start
-	return proc[&count]() -> int { count += 1; return count }
+	count := new_clone(start)
+	return proc[count]() -> int { count^ += 1; return count^ }
 }
 
 step := 10
@@ -47,7 +47,7 @@ Example: [examples/closures](examples/closures).
 | `impl I for T { m = t_m, n = t_n }` | implementation: binds every method to a proc declared with a body, taking `^T` first |
 | `impl pkg.I for T { ... }` | implementing another package's interface (only from that package or one in an import cycle with it) |
 | `m(&x, args)` with `x: T` | static call to `T`'s bound proc; works through pointers, fields, indexes and `&p^` |
-| `m(i, args)` with `i: I` | dynamic call through the vtable |
+| `m(i, args)` with `i: I` | dynamic call: tests the vtable against each impl and calls its proc directly, else through the vtable |
 | `pkg.m(...)` | calling another package's method, like any proc |
 | `I(&x)` | explicit conversion from `^T` or an `I` |
 | `I :: interface { using A, using pkg.B, m }` | extending interfaces: `I` has `A`'s and `B`'s methods plus its own |

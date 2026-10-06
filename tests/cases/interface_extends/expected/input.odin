@@ -3,18 +3,18 @@ package main
 import "core:fmt"
 
 Named :: struct { data: rawptr, __vtable: ^__Named_VTable }
-name :: proc{__Named_name, box_name}
+name :: proc{__Named_name, __Item_name, __Labeled_name, __Product_name, box_name}
 
 Sized :: struct { data: rawptr, __vtable: ^__Sized_VTable }
-size :: proc{__Sized_size, box_size}
+size :: proc{__Sized_size, __Item_size, __Product_size, box_size}
 
 // Extends two interfaces and adds a method of its own.
 Item :: struct { data: rawptr, __vtable: ^__Item_VTable }
-describe :: proc{__Item_describe, box_describe}
+describe :: proc{__Item_describe, __Product_describe, box_describe}
 
 // Diamond: both bases extend Named.
 Labeled :: struct { data: rawptr, __vtable: ^__Labeled_VTable }
-label :: proc{__Labeled_label, box_label}
+label :: proc{__Labeled_label, __Product_label, box_label}
 
 Product :: struct { data: rawptr, __vtable: ^__Product_VTable }
 
@@ -40,7 +40,7 @@ main :: proc() {
 	fmt.println("static:", name(&b), size(&b), describe(&b), label(&b))
 
 	p: Product = __Product_from(&b)
-	fmt.println("dynamic:", name(__Product_as_Named(p)), size(__Product_as_Sized(p)), describe(__Product_as_Item(p)), label(__Product_as_Labeled(p)))
+	fmt.println("dynamic:", name(p), size(p), describe(p), label(p))
 
 	i: Item = __Product_as_Item(p)
 	print_named(__Item_as_Named(i))
@@ -49,7 +49,7 @@ main :: proc() {
 	print_named(__Product_as_Named(p))
 
 	l := __Labeled_from(&b)
-	fmt.println("labeled:", label(l), name(__Labeled_as_Named(l)))
+	fmt.println("labeled:", label(l), name(l))
 
 	sized: [dynamic]Sized
 	append(&sized, __Item_as_Sized(i), __Product_as_Sized(p), __Sized_from(&b))
@@ -62,7 +62,10 @@ __Named_VTable :: struct {
 	name: proc(self: Named) -> string,
 }
 
-__Named_name :: proc(n: Named) -> string { return n.__vtable.name(n) }
+__Named_name :: proc(n: Named) -> string {
+	if n.__vtable == &__Product_vtable_Box.__Item.__Named || n.__vtable == &__Product_vtable_Box.__Labeled.__Named || n.__vtable == &__Item_vtable_Box.__Named || n.__vtable == &__Named_vtable_Box || n.__vtable == &__Labeled_vtable_Box.__Named { return box_name(auto_cast n.data) }
+	return n.__vtable.name(n)
+}
 
 __Named_identity :: #force_inline proc(v: Named) -> Named { return v }
 
@@ -72,7 +75,10 @@ __Sized_VTable :: struct {
 	size: proc(self: Sized) -> int,
 }
 
-__Sized_size :: proc(s: Sized) -> int { return s.__vtable.size(s) }
+__Sized_size :: proc(s: Sized) -> int {
+	if s.__vtable == &__Product_vtable_Box.__Item.__Sized || s.__vtable == &__Item_vtable_Box.__Sized || s.__vtable == &__Sized_vtable_Box { return box_size(auto_cast s.data) }
+	return s.__vtable.size(s)
+}
 
 __Sized_identity :: #force_inline proc(v: Sized) -> Sized { return v }
 
@@ -84,7 +90,20 @@ __Item_VTable :: struct {
 	describe: proc(self: Item) -> string,
 }
 
-__Item_describe :: proc(i: Item) -> string { return i.__vtable.describe(i) }
+__Item_describe :: proc(i: Item) -> string {
+	if i.__vtable == &__Product_vtable_Box.__Item || i.__vtable == &__Item_vtable_Box { return box_describe(auto_cast i.data) }
+	return i.__vtable.describe(i)
+}
+
+__Item_name :: proc(self: Item) -> string {
+	if self.__vtable == &__Product_vtable_Box.__Item || self.__vtable == &__Item_vtable_Box { return box_name(auto_cast self.data) }
+	return self.__vtable.__Named.name(__Item_as_Named(self))
+}
+
+__Item_size :: proc(self: Item) -> int {
+	if self.__vtable == &__Product_vtable_Box.__Item || self.__vtable == &__Item_vtable_Box { return box_size(auto_cast self.data) }
+	return self.__vtable.__Sized.size(__Item_as_Sized(self))
+}
 
 __Item_as_Named :: #force_inline proc(v: Item) -> Named { return {data = v.data, __vtable = &v.__vtable.__Named} }
 
@@ -99,7 +118,15 @@ __Labeled_VTable :: struct {
 	label: proc(self: Labeled) -> string,
 }
 
-__Labeled_label :: proc(l: Labeled) -> string { return l.__vtable.label(l) }
+__Labeled_label :: proc(l: Labeled) -> string {
+	if l.__vtable == &__Product_vtable_Box.__Labeled || l.__vtable == &__Labeled_vtable_Box { return box_label(auto_cast l.data) }
+	return l.__vtable.label(l)
+}
+
+__Labeled_name :: proc(self: Labeled) -> string {
+	if self.__vtable == &__Product_vtable_Box.__Labeled || self.__vtable == &__Labeled_vtable_Box { return box_name(auto_cast self.data) }
+	return self.__vtable.__Named.name(__Labeled_as_Named(self))
+}
 
 __Labeled_as_Named :: #force_inline proc(v: Labeled) -> Named { return {data = v.data, __vtable = &v.__vtable.__Named} }
 
@@ -110,6 +137,26 @@ __Labeled_from :: proc{__Labeled_from_Box, __Labeled_identity}
 __Product_VTable :: struct {
 	__Item: __Item_VTable,
 	__Labeled: __Labeled_VTable,
+}
+
+__Product_name :: proc(self: Product) -> string {
+	if self.__vtable == &__Product_vtable_Box { return box_name(auto_cast self.data) }
+	return self.__vtable.__Item.__Named.name(__Product_as_Named(self))
+}
+
+__Product_size :: proc(self: Product) -> int {
+	if self.__vtable == &__Product_vtable_Box { return box_size(auto_cast self.data) }
+	return self.__vtable.__Item.__Sized.size(__Product_as_Sized(self))
+}
+
+__Product_describe :: proc(self: Product) -> string {
+	if self.__vtable == &__Product_vtable_Box { return box_describe(auto_cast self.data) }
+	return self.__vtable.__Item.describe(__Product_as_Item(self))
+}
+
+__Product_label :: proc(self: Product) -> string {
+	if self.__vtable == &__Product_vtable_Box { return box_label(auto_cast self.data) }
+	return self.__vtable.__Labeled.label(__Product_as_Labeled(self))
 }
 
 __Product_as_Item :: #force_inline proc(v: Product) -> Item { return {data = v.data, __vtable = &v.__vtable.__Item} }

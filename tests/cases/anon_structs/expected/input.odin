@@ -30,11 +30,11 @@ main :: proc() {
 	fmt.println(cfg.pos, cfg.at, cfg.tags, cfg.f.call(cfg.f.env, 1), cfg.p^, cfg.big)
 
 	// captured by reference like any other local
-	__anon4_calls := 0; __anon4_last := ""; stats := new_clone(struct { calls: type_of(__anon4_calls), last: type_of(__anon4_last) }{calls = __anon4_calls, last = __anon4_last})
-	record := __closure_1(stats)
+	__anon4_calls := 0; __anon4_last := ""; stats := struct { calls: type_of(__anon4_calls), last: type_of(__anon4_last) }{calls = __anon4_calls, last = __anon4_last}
+	record := __closure_1(&stats)
 	record.call(record.env, "x")
 	record.call(record.env, "y")
-	fmt.println(stats^)
+	fmt.println(stats)
 
 	// same field names and types: same type
 	__anon5_v := 1; __anon6_v := 2; l, r := struct { v: type_of(__anon5_v) }{v = __anon5_v}, struct { v: type_of(__anon6_v) }{v = __anon6_v}
@@ -42,10 +42,10 @@ main :: proc() {
 	fmt.println(l)
 
 	// values are evaluated once, in order
-	n := new_clone(0)
-	next := __closure_2(n)
+	n := 0
+	next := __closure_2(&n)
 	__anon7_first := next.call(next.env); __anon7_second := next.call(next.env); __anon7_inner_third := next.call(next.env); seq := struct { first: type_of(__anon7_first), second: type_of(__anon7_second), inner: struct { third: type_of(__anon7_inner_third) } }{first = __anon7_first, second = __anon7_second, inner = {third = __anon7_inner_third}}
-	fmt.println(seq, n^)
+	fmt.println(seq, n)
 
 	// a typed context keeps Odin's own meaning
 	p: Point = { x = 3, y = 4 }
