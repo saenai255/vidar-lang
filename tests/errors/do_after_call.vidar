@@ -1,0 +1,7 @@
+// error: do! would run before 'side()', which comes first in the statement
+package main
+side :: proc() -> int { return 1 }
+main :: proc() {
+	n := side() + do! { take 1 }
+	_ = n
+}

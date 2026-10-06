@@ -1,0 +1,6 @@
+// error: 'squre' is not declared
+package main
+main :: proc() {
+	x := squre!(3)
+	_ = x
+}

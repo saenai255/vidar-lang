@@ -1,0 +1,64 @@
+package main
+
+import "core:fmt"
+
+fib :: proc!(n: int) -> int {
+	if n < 2 do return n
+	return fib(n - 1) + fib!(n - 2)
+}
+
+fib_iter :: proc(n: int) -> int {
+	a, b := 0, 1
+	for _ in 0..<n do a, b = b, a + b
+	return a
+}
+
+square :: proc(x: int) -> int {
+	return x * x
+}
+
+square32 :: proc(x: i32) -> i32 {
+	return x * x
+}
+
+Point :: struct { x, y: int }
+
+N :: 6
+
+main :: proc() {
+	a := fib!(20)
+	b := square!(N) + 1
+	c := fmt.tprintf!("fib(%d) = %d", 10, fib!(10))
+	primes: [5]int = first_primes!(5)
+	p: Point = make_point!(3)
+	d := square(7)
+	neg := comptime! { -N }
+	flags := comptime! { N > 3 && N < 10 }
+	fmt.println(a, b, c, primes, p, d, neg, flags)
+
+	// integers behave as they do at run time
+	big := comptime! { 1 << 40 }
+	f90 := fib_iter!(90)
+	wrapped := square32!(100000)
+	byte_wrap := comptime! { u8(255) + 1 }
+	fmt.println(big, f90, wrapped, wrapped == square32(100000), byte_wrap)
+}
+
+first_primes :: proc!(n: int) -> [dynamic]int {
+	out: [dynamic]int
+	for i := 2; len(out) < n; i += 1 {
+		prime := true
+		for j := 2; j * j <= i; j += 1 {
+			if i % j == 0 {
+				prime = false
+				break
+			}
+		}
+		if prime do append(&out, i)
+	}
+	return out
+}
+
+make_point :: proc!(v: int) -> Point {
+	return {x = v, y = v * 2}
+}

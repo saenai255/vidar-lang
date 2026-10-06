@@ -1,4 +1,4 @@
 // error: macros cannot return Type
 package main
-t :: comptime proc() -> Type { return int }
+t :: proc!() -> Type { return int }
 main :: proc() { _ = t!() }

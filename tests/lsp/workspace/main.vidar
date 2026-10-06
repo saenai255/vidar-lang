@@ -13,11 +13,12 @@ sq_area :: proc(q: ^Sq) -> f64 { return q.s * q.s }
 
 impl Shape for Sq { area = sq_area }
 
-twice :: comptime proc(x: Expr(int)) -> Expr(int) { return quote($x * 2) }
+twice :: proc!(x: Expr(int)) -> Expr(int) { return quote($x * 2) }
 
 main :: proc() {
 	v := geo.add({1, 2}, {3, 4})
 	count := 0
+	check!(count == 0)
 	inc := proc[&count]() { count += 1 }
 	inc()
 	sq := Sq{2}

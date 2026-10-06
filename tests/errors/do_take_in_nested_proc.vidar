@@ -1,0 +1,9 @@
+// error: 'take' gives the value of a do! { ... } or comptime! { ... } block, and cannot be used in a proc nested inside it
+package main
+main :: proc() {
+	n := do! {
+		f := proc() -> int { take 1 }
+		take f()
+	}
+	_ = n
+}

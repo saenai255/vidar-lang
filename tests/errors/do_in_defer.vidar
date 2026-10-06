@@ -2,5 +2,5 @@
 package main
 import "core:fmt"
 main :: proc() {
-	defer fmt.println(do! { return 1 })
+	defer fmt.println(do! { take 1 })
 }

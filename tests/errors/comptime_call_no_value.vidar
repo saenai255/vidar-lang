@@ -1,0 +1,7 @@
+// error: 'noop!' has no value
+package main
+noop :: proc() {}
+main :: proc() {
+	x := noop!()
+	_ = x
+}

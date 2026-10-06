@@ -9,9 +9,9 @@ Each example is its own directory, and the directory is the program. Run one wit
 | [methods/](methods) | method calls as proc groups: static through pointers, fields, indexes and dereferences, dynamic on interface values, and a user-declared `Destroy` interface |
 | [anon_structs/](anon_structs) | `x := { name = value, ... }`: struct types declared on the spot, nested literals, closure fields, structural compatibility |
 | [errors/](errors) | `or_return <value>`, `catch err { ... }`, `catch { ... }`, `catch unreachable` and `errdefer`, on a small config parser |
-| [macros/](macros) | `comptime proc` macros: `Expr(T)`, `Stmt`, `Type` and `Ident` parameters, `quote` and splicing, hygiene, trailing blocks, defaults, reflection, `compile_error` |
-| [comptime/](comptime) | `comptime expr`: folding proc calls, strings, lookup tables and structs at compile time, static assertions, and `comptime do! { ... }` blocks |
-| [builtins/](builtins) | the built-in macros `format!`, `match!`, `do!`, `dbg!`, `check!`, `with_allocator!`, `locked!`, `timed!`, `track!`, `todo!`, `unimplemented!` |
+| [macros/](macros) | comptime procs (`name :: proc!`): `Expr(T)`, `Stmt`, `Type` and `Ident` parameters, `quote` and splicing, hygiene, trailing blocks, defaults, reflection, `compile_error` |
+| [comptime/](comptime) | `name!(...)` and `comptime! { ... }`: running procs at compile time, strings, lookup tables and structs, static assertions, integer wrap-around |
+| [builtins/](builtins) | the built-in macros `do!`, `dbg!`, `check!`, `with_allocator!`, `locked!`, `timed!`, `track!`, `todo!`, `unimplemented!` |
 | [scoped/](scoped) | the built-in `scoped! { ... }` / `scoped!(allocator) { ... }`: a block with its own temp allocator, freed when the block ends |
 | [goroutines/](goroutines) | `import "vidar:sched"`: goroutines from closures, channels, `select` with a timeout, `try_select`, wait groups, and a TCP echo server over `core:nbio` |
 | [sched_io/](sched_io) | I/O that parks only the goroutine: `blocking` on a worker thread, files, DNS, UDP, `sched.Mutex` held across a sleep, and `after` as a `select` timeout |

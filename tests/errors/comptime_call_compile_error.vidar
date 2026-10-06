@@ -1,0 +1,10 @@
+// error: in expansion of 'check!': too big
+package main
+check :: proc!(n: int) -> int {
+	if n > 3 do compile_error("too big")
+	return n
+}
+main :: proc() {
+	x := check!(5)
+	_ = x
+}

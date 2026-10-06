@@ -10,7 +10,8 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { CompileError } from "../lexer";
-import { Program as Analysis, emitProgram, loadProgram, outputName } from "../project";
+import { Program as Analysis, emitProgram, loadProgram, outputName, preludeSourcePath } from "../project";
+import { PRELUDE_PATH } from "../prelude";
 import { writeOutput } from "../cli";
 import * as F from "./features";
 import { OdinBridge } from "./odin";
@@ -34,7 +35,7 @@ let settings = { odinCheckOnSave: true, odinPath: "odin", ols: true, olsPath: "o
 let ols: OdinBridge | undefined;
 
 const toPath = (uri: string) => fileURLToPath(uri);
-const toUri = (path: string) => pathToFileURL(path).toString();
+const toUri = (path: string) => pathToFileURL(path === PRELUDE_PATH ? preludeSourcePath() : path).toString();
 
 function pkg(dir: string): PackageState {
   let p = packages.get(dir);
@@ -137,12 +138,15 @@ function odinCheck(dir: string): void {
       const m = ODIN_DIAG.exec(lines[i].trim());
       if (!m) continue;
       const rel = m[1].startsWith(work) ? m[1].slice(work.length + 1) : m[1];
-      const sourcePath = out.sourceOf.get(rel.split("\\").join("/"));
+      const name = rel.split("\\").join("/");
+      const sourcePath = out.sourceOf.get(name);
       const source = a.sources.find((s) => s.path === sourcePath);
       if (!source) continue;
       const lineCount = source.text.split("\n").length;
-      const line = Math.min(Number(m[2]), lineCount) - 1;
-      const inGenerated = Number(m[2]) > lineCount;
+      const mapped = out.lineMap.get(name)?.[Number(m[2]) - 1] ?? 0;
+      // helper code vidar appends has no source line; report it on the last one
+      const line = (mapped ? Math.abs(mapped) : lineCount) - 1;
+      const inGenerated = mapped <= 0;
       const detail = lines[i + 1]?.trim();
       const list = diags.get(source.path) ?? [];
       list.push({
@@ -249,7 +253,7 @@ connection.onRenameRequest(({ textDocument, position, newName }) => {
   const r = F.rename(state.index, path, position, newName);
   if (r.error) throw new Error(r.error);
   const changes: Record<string, TextEdit[]> = {};
-  for (const e of r.edits) (changes[toUri(e.file)] ??= []).push(TextEdit.replace(e.range, newName));
+  for (const e of r.edits) (changes[toUri(e.file)] ??= []).push(TextEdit.replace(e.range, e.text));
   return { changes };
 });
 

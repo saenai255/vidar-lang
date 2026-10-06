@@ -21,12 +21,12 @@ const STMT_DIRECTIVES = new Set(["#no_type_assert", "#type_assert", "#partial", 
 
 const ALWAYS_STMT_DIRECTIVES = new Set(["#no_bounds_check", "#bounds_check", "#no_type_assert", "#type_assert"]);
 
-const EXPR_START_KEYWORDS = new Set(["cast", "transmute", "auto_cast", "struct", "union", "enum", "bit_set", "map", "distinct", "matrix", "typeid", "dynamic"]);
-
 const STMT_KEYWORDS = new Set(["for", "switch", "if", "when"]);
 
 export interface ParseOptions {
   comptimeDepth?: number;
+  /** the body of a `do!` or `comptime!` block: `take value` is a statement */
+  take?: boolean;
 }
 
 type NodeOf<K extends string> = Extract<Expr | Stmt, { k: K }>;
@@ -36,9 +36,11 @@ export class Parser {
   private noLit = false;
   private typeCtx = false;
   private comptime: number;
+  private take: boolean;
 
   constructor(private toks: Token[], opts: ParseOptions = {}) {
     this.comptime = opts.comptimeDepth ?? 0;
+    this.take = opts.take ?? false;
   }
 
   // ---- token helpers ----
@@ -305,6 +307,11 @@ export class Parser {
       const stmt = this.parseStmtNoSemi();
       return this.node("Labeled", start, { label: t.text, stmt });
     }
+    if (this.isTake()) {
+      this.i++;
+      const results = this.parseExprList();
+      return this.node("Take", start, { results });
+    }
     if (this.isErrDefer()) {
       this.i++;
       const stmt = this.parseStmtNoSemi();
@@ -318,9 +325,19 @@ export class Parser {
   private startsOrReturnValue(kw: Token): boolean {
     const t = this.cur;
     if (t.kind === "semi" || t.kind === "eof" || t.pos.line !== kw.pos.line) return false;
-    if (t.kind === "op") return [".", "(", "-", "&", "!"].includes(t.text);
+    // in Odin, `f() or_return - 1` subtracts from the result
+    if (t.kind === "op" && (t.text === "-" || t.text === "&"))
+      throw this.err(`ambiguous '${t.text}' after 'or_return': write 'or_return (${t.text}...)' to return it as the error, or '(f() or_return) ${t.text} ...' for the operator`);
+    if (t.kind === "op") return [".", "(", "!"].includes(t.text);
     if (t.kind === "kw") return ["cast", "transmute", "auto_cast"].includes(t.text);
     return !(t.kind === "ident" && (t.text === "catch" || t.text === "else"));
+  }
+
+  private isTake(): boolean {
+    if (!this.take || this.cur.kind !== "ident" || this.cur.text !== "take") return false;
+    const n = this.peek();
+    if (n.kind === "semi" || n.kind === "eof") return false;
+    return !(n.kind === "op" && [":", "::", ":=", "=", ".", "[", ",", "->", "^", "+=", "-=", "*=", "/="].includes(n.text));
   }
 
   private isErrDefer(): boolean {
@@ -366,6 +383,9 @@ export class Parser {
   parseSimpleStmt(): Stmt {
     const start = this.i;
     const lhs = this.parseExprList();
+    if (this.isOp("!") && this.isOp("::", this.peek()) && lhs.length === 1 && lhs[0].k === "Ident") throw this.err("comptime procs are declared as name :: proc!(...) { ... }");
+    if (this.isOp("::") && this.isKw("proc", this.peek()) && this.isOp("!", this.peek(2)) && lhs.length === 1 && lhs[0].k === "Ident")
+      return this.parseComptimeDecl(start, lhs[0]);
     const t = this.cur;
     if (t.kind === "op" && (t.text === ":" || t.text === "::" || t.text === ":=")) {
       const names = lhs.map((e) => {
@@ -393,6 +413,14 @@ export class Parser {
     }
     if (lhs.length !== 1) throw this.err("expected ':=', '=' or ':' after expression list");
     return this.node("ExprStmt", start, { x: lhs[0] });
+  }
+
+  /** `name :: proc!(...) { ... }`: a comptime proc, invoked as `name!(...)`. */
+  private parseComptimeDecl(start: number, name: Extract<Expr, { k: "Ident" }>): Stmt {
+    this.i++;
+    const value = this.parseProc(true);
+    if (value.k !== "ProcLit" || value.captures || !value.body) throw new CompileError(`'${name.name}!' must be a proc with a body`, value.toks[value.start].pos);
+    return this.node("ValueDecl", start, { names: [{ name: name.name, tok: name.start }], type: null, values: [value], isConst: true, attrs: [] });
   }
 
   private isImplDecl(): boolean {
@@ -623,28 +651,6 @@ export class Parser {
     });
   }
 
-  /** `comptime` is a prefix when an expression follows on the same line; `comptime(x)` stays a call. */
-  private comptimePrefixAhead(): boolean {
-    const t = this.peek();
-    if (t.pre.includes("\n")) return false;
-    switch (t.kind) {
-      case "ident":
-      case "int":
-      case "float":
-      case "imag":
-      case "string":
-      case "rune":
-      case "directive":
-        return true;
-      case "kw":
-        return EXPR_START_KEYWORDS.has(t.text);
-      case "op":
-        if (t.text === "(" || t.text === "[") return t.pre !== "";
-        return ["-", "!", "~", "&"].includes(t.text) && t.pre !== "" && this.peek(2).pre === "";
-    }
-    return false;
-  }
-
   /** `closure(...)` followed by `->` is a closure type even outside a type position. */
   private closureTypeAhead(): boolean {
     let depth = 0;
@@ -838,15 +844,8 @@ export class Parser {
       case "ident": {
         const typeCtx = this.typeCtx;
         this.typeCtx = false;
-        if (t.text === "comptime" && this.isKw("proc", this.peek())) {
-          this.i++;
-          return this.parseProc(true, start);
-        }
-        if (t.text === "comptime" && this.comptimePrefixAhead()) {
-          this.i++;
-          const x = this.parseExpr();
-          return this.node("Comptime", start, { x });
-        }
+        if (t.text === "comptime" && this.isKw("proc", this.peek()))
+          throw this.err("comptime procs are declared as name :: proc!(...) { ... }");
         if (t.text === "closure" && this.isOp("(", this.peek()) && (typeCtx || this.closureTypeAhead())) {
           this.i++;
           const sig = this.parseSignature();
@@ -950,6 +949,7 @@ export class Parser {
     const t = this.cur;
     switch (t.text) {
       case "proc":
+        if (this.isOp("!", this.peek())) throw this.err("comptime procs are declared as name :: proc!(...) { ... }");
         return this.parseProc(false);
       case "struct":
         return this.parseStruct();
@@ -1082,7 +1082,7 @@ export class Parser {
   }
 
   private parseProc(comptime: boolean, start = this.i): Expr {
-    this.i++;
+    this.i += comptime ? 2 : 1;
     if (this.cur.kind === "string") this.i++;
     if (this.isOp("{")) {
       this.i++;

@@ -1,0 +1,7 @@
+// error: do! would run before the statement, even when the right side of '&&' is skipped
+package main
+main :: proc() {
+	ready := false
+	ok := ready && do! { take true }
+	_ = ok
+}

@@ -4,17 +4,17 @@ import "core:fmt"
 
 // Comptime procs run inside the transpiler and are invoked with `name!(...)`.
 // Expr(T) parameters must be expressions of type T at the call site.
-square :: comptime proc(x: Expr(i32)) -> Expr(i32) {
+square :: proc!(x: Expr(i32)) -> Expr(i32) {
 	return quote($x * $x)
 }
 
 // Plain parameter types take compile-time constants; the result folds to a literal.
-fib :: comptime proc(n: int) -> int {
+fib :: proc!(n: int) -> int {
 	return n if n < 2 else fib(n - 1) + fib(n - 2)
 }
 
 // A statement macro. `tmp` is hygienic: it can't collide with the caller's names.
-swap :: comptime proc(a, b: Expr) -> Stmt {
+swap :: proc!(a, b: Expr) -> Stmt {
 	return quote {
 		tmp := $a
 		$a = $b
@@ -24,14 +24,14 @@ swap :: comptime proc(a, b: Expr) -> Stmt {
 
 // A trailing Stmt parameter can be passed as a block after the call.
 // Parameters can have defaults: code for Expr/Stmt/Type, constants otherwise.
-repeat :: comptime proc(n: int = 2, body: Stmt) -> Stmt {
+repeat :: proc!(n: int = 2, body: Stmt) -> Stmt {
 	out: [dynamic]Stmt
 	for _ in 0..<n do append(&out, body)
 	return quote { $out }
 }
 
 // stringify gives the source text of a code argument.
-expect :: comptime proc(cond: Expr(bool)) -> Stmt {
+expect :: proc!(cond: Expr(bool)) -> Stmt {
 	msg := "expectation failed: " + stringify(cond)
 	return quote {
 		if !$cond { fmt.println($msg) }
@@ -39,7 +39,7 @@ expect :: comptime proc(cond: Expr(bool)) -> Stmt {
 }
 
 // Type parameters and reflection: a printer for any struct.
-show :: comptime proc(T: Type, value: Expr) -> Expr(string) {
+show :: proc!(T: Type, value: Expr) -> Expr(string) {
 	layout := type_name(T) + "{{"
 	args: [dynamic]Expr
 	for f, i in type_fields(T) {
@@ -51,18 +51,18 @@ show :: comptime proc(T: Type, value: Expr) -> Expr(string) {
 }
 
 // type_of_expr gives the type of an argument, so the caller doesn't have to spell it.
-zero_like :: comptime proc(x: Expr) -> Expr {
+zero_like :: proc!(x: Expr) -> Expr {
 	T := type_of_expr(x)
 	return quote($T{})
 }
 
 // Ident parameters splice unhygienically, so a macro can declare names on purpose.
-define_twice :: comptime proc(name: Ident, value: int) -> Stmt {
+define_twice :: proc!(name: Ident, value: int) -> Stmt {
 	return quote { $name := $value * 2 }
 }
 
 // Macros can generate closures, and reject bad input with compile_error.
-make_scaler :: comptime proc(T: Type, k: Expr) -> Expr {
+make_scaler :: proc!(T: Type, k: Expr) -> Expr {
 	if type_name(T) == "string" do compile_error("make_scaler: cannot scale a string")
 	return quote(proc[](x: $T) -> $T { return x * $k })
 }

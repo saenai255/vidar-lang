@@ -67,9 +67,7 @@ export type Expr =
   | N<"Raw", {}>
   /** `blockArg`: the last argument was written as a trailing block, `name!(...) { ... }` or `name! { ... }` */
   | N<"MacroCall", { path: string[]; args: Token[][]; blockArg: boolean; _expansion?: Expr }>
-  | N<"Quote", { kind: "expr" | "stmt"; body: Token[] }>
-  /** `comptime expr`: folded to a constant when it can be evaluated at compile time, otherwise left as is */
-  | N<"Comptime", { x: Expr }>;
+  | N<"Quote", { kind: "expr" | "stmt"; body: Token[] }>;
 
 export interface Block extends Base {
   k: "Block";
@@ -101,6 +99,8 @@ export type Stmt =
   | N<"Catch", { stmt: Stmt; errName: string | null; errTok: number; unreachable: boolean; body: Block | null }>
   /** `errdefer stmt`: a defer that only runs when the procedure returns a failure */
   | N<"ErrDefer", { stmt: Stmt }>
+  /** `take value`: the value of a `do! { ... }` or `comptime! { ... }` block */
+  | N<"Take", { results: Expr[] }>
   | N<"RawStmt", {}>
   | N<"Empty", {}>;
 

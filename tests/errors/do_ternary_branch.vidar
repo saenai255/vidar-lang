@@ -1,0 +1,6 @@
+// error: do! would run before the statement, even when its branch of the ternary is not taken
+package main
+main :: proc() {
+	n := 1 if true else do! { take 2 }
+	_ = n
+}

@@ -2,7 +2,7 @@ package main
 
 import "core:fmt"
 
-swap :: comptime proc(a, b: Expr) -> Stmt {
+swap :: proc!(a, b: Expr) -> Stmt {
 	return quote {
 		tmp := $a
 		$a = $b
@@ -10,13 +10,13 @@ swap :: comptime proc(a, b: Expr) -> Stmt {
 	}
 }
 
-times :: comptime proc(n: int, body: Stmt) -> Stmt {
+times :: proc!(n: int, body: Stmt) -> Stmt {
 	return quote {
 		for i in 0..<$n { $body }
 	}
 }
 
-declare :: comptime proc(name: Ident, value: Expr) -> Stmt {
+declare :: proc!(name: Ident, value: Expr) -> Stmt {
 	return quote { $name := $value }
 }
 

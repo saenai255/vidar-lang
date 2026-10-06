@@ -5,14 +5,14 @@ import "core:fmt"
 Color :: struct { r, g, b: u8 }
 
 // constant folding at compile time
-pow :: comptime proc(base, exp: int) -> int {
+pow :: proc!(base, exp: int) -> int {
 	r := 1
 	for _ in 0..<exp { r *= base }
 	return r
 }
 
 // generate one statement per field
-print_fields :: comptime proc(T: Type, v: Expr) -> Stmt {
+print_fields :: proc!(T: Type, v: Expr) -> Stmt {
 	out: [dynamic]Stmt
 	for f in type_fields(T) {
 		label := type_name(T) + "." + f + ":"
@@ -22,14 +22,14 @@ print_fields :: comptime proc(T: Type, v: Expr) -> Stmt {
 }
 
 // build an expression from a list
-sum_of :: comptime proc(n: int) -> Expr(int) {
+sum_of :: proc!(n: int) -> Expr(int) {
 	e := quote(0)
 	for k in 1..=n { e = quote($e + $k) }
 	return e
 }
 
 // generate a closure
-scaler :: comptime proc(T: Type, k: int) -> Expr {
+scaler :: proc!(T: Type, k: int) -> Expr {
 	return quote(proc[](x: $T) -> $T { return x * $k })
 }
 

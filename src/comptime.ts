@@ -7,7 +7,8 @@ import type { GlobalSym, Scope, Ty } from "./scope";
 type ProcLit = Extract<Expr, { k: "ProcLit" }>;
 
 export type Val =
-  | { k: "int"; v: number }
+  /** `ty` is the integer type it has; untyped constants have none */
+  | { k: "int"; v: bigint; ty?: string }
   | { k: "float"; v: number }
   | { k: "bool"; v: boolean }
   | { k: "string"; v: string }
@@ -31,6 +32,12 @@ export class NotConstant extends CompileError {}
 
 const VOID: Val = { k: "void" };
 const MAX_STEPS = 5_000_000;
+const INT_BITS: Record<string, [bits: number, signed: boolean]> = {
+  int: [64, true], uint: [64, false], uintptr: [64, false], i8: [8, true], i16: [16, true], i32: [32, true], i64: [64, true],
+  i128: [128, true], u8: [8, false], u16: [16, false], u32: [32, false], u64: [64, false], u128: [128, false], byte: [8, false], rune: [32, true],
+};
+const MAX_SHIFT = 4096n;
+
 const BASIC_TYPES = new Set([
   "int", "uint", "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "uintptr", "byte",
   "f16", "f32", "f64", "bool", "b8", "b16", "b32", "b64", "string", "cstring", "rune", "rawptr", "typeid", "any",
@@ -49,7 +56,7 @@ class Env {
   }
 }
 
-type Completion = { k: "normal" } | { k: "break" } | { k: "continue" } | { k: "return"; v: Val };
+type Completion = { k: "normal" } | { k: "break" } | { k: "continue" } | { k: "return"; v: Val } | { k: "take"; v: Val };
 const NORMAL: Completion = { k: "normal" };
 
 let gensym = 0;
@@ -67,7 +74,7 @@ export class Interp {
   callSite: Pos | undefined;
   /** the scope it was invoked in */
   scope: Scope | undefined;
-  /** while folding a `comptime` expression: the environment macros invoked from it see */
+  /** while evaluating code at compile time (`comptime! { ... }`, `name!(...)` inside comptime code): its environment */
   foldEnv: Env | undefined;
 
   constructor(readonly an: Analyzer) {}
@@ -92,7 +99,7 @@ export class Interp {
     return this.eval(e, new Env(null, scope));
   }
 
-  /** Evaluates a `comptime expr` written in ordinary code. */
+  /** Evaluates an expression written in ordinary code at compile time. */
   evalAt(e: Expr, scope: Scope, pos: Pos): Val {
     const [outerSite, outerScope, outerSteps, outerFold] = [this.callSite, this.scope, this.steps, this.foldEnv];
     this.callSite = pos;
@@ -111,17 +118,17 @@ export class Interp {
   }
 
   private invoke(p: Extract<Val, { k: "proc" }>, args: Val[], pos: Pos): Val {
-    const params = p.lit.sig.params.flatMap((g) => g.names.map((n) => ({ name: n.name, def: g.value })));
-    if (args.length > params.length) throw new CompileError(`'${p.sym.name}' takes ${params.length} argument(s), got ${args.length}`, pos);
     const env = new Env(null, p.sym.scope);
+    const params = p.lit.sig.params.flatMap((g) => g.names.map((n) => ({ name: n.name, def: g.value, type: g.type })));
+    if (args.length > params.length) throw new CompileError(`'${p.sym.name}' takes ${params.length} argument(s), got ${args.length}`, pos);
     params.forEach((param, i) => {
       const v = args[i] ?? (param.def ? this.eval(param.def, env) : undefined);
       if (!v) throw new CompileError(`missing argument '${param.name}' for '${p.sym.name}'`, pos);
-      env.vars.set(param.name, { v });
+      env.vars.set(param.name, { v: typed(param.type, v) });
     });
     if (!p.lit.body) throw new NotConstant(`'${p.sym.name}' has no body to evaluate`, pos);
     const c = this.block(p.lit.body, env);
-    return c.k === "return" ? c.v : VOID;
+    return c.k === "return" ? typed(p.lit.sig.results[0]?.type, c.v) : VOID;
   }
 
   // ---- names ----
@@ -185,7 +192,7 @@ export class Interp {
         return NORMAL;
       case "ValueDecl": {
         let vals: Val[];
-        if (s.values.length) vals = s.values.map((v) => this.eval(v, env));
+        if (s.values.length) vals = s.values.map((v) => (s.type ? typed(s.type, this.eval(v, env)) : defaultTyped(this.eval(v, env))));
         else vals = s.names.map(() => (s.type ? zero(s.type) : VOID));
         if (vals.length !== s.names.length) throw new CompileError("multi-value declarations are not supported at compile time", posOf(s));
         s.names.forEach((n, i) => env.vars.set(n.name, { v: vals[i] }));
@@ -196,7 +203,9 @@ export class Interp {
         const vals = s.rhs.map((r) => this.eval(r, env));
         s.lhs.forEach((l, i) => {
           const cell = this.place(l, env);
-          cell.set(s.op === "=" ? vals[i] : binop(s.op.slice(0, -1), cell.get(), vals[i], posOf(s)));
+          const old = cell.get();
+          const v = s.op === "=" ? vals[i] : binop(s.op.slice(0, -1), old, vals[i], posOf(s));
+          cell.set(old.k === "int" && old.ty && v.k === "int" && !v.ty ? wrapInt(v.v, old.ty) : v);
         });
         return NORMAL;
       }
@@ -219,7 +228,7 @@ export class Interp {
           this.tick(posOf(s));
           const c = this.block(s.body, inner);
           if (c.k === "break") break;
-          if (c.k === "return") return c;
+          if (c.k === "return" || c.k === "take") return c;
           if (s.post) this.exec(s.post, inner);
         }
         return NORMAL;
@@ -242,6 +251,9 @@ export class Interp {
       case "Return":
         if (s.results.length > 1) throw new CompileError("comptime procs return a single value", posOf(s));
         return { k: "return", v: s.results.length ? this.eval(s.results[0], env) : VOID };
+      case "Take":
+        if (s.results.length !== 1) throw new CompileError("'take' takes exactly one value", posOf(s));
+        return { k: "take", v: this.eval(s.results[0], env) };
       case "Branch":
         if (s.op === "break") return { k: "break" };
         if (s.op === "continue") return { k: "continue" };
@@ -252,15 +264,24 @@ export class Interp {
 
   private rangeFor(s: Extract<Stmt, { k: "RangeFor" }>, env: Env): Completion {
     const items: [Val, Val][] = [];
+    const index = (i: number): Val => ({ k: "int", v: BigInt(i), ty: "int" });
     if (s.x.k === "Binary" && (s.x.op === "..<" || s.x.op === "..=")) {
-      const lo = num(this.eval(s.x.x, env), posOf(s));
-      const hi = num(this.eval(s.x.y, env), posOf(s)) + (s.x.op === "..=" ? 1 : 0);
-      for (let i = lo; i < hi; i++) items.push([{ k: "int", v: i }, { k: "int", v: i - lo }]);
+      const loV = this.eval(s.x.x, env);
+      const hiV = this.eval(s.x.y, env);
+      const ty = (loV.k === "int" && loV.ty) || (hiV.k === "int" && hiV.ty) || "int";
+      const lo = num(loV, posOf(s));
+      const hi = num(hiV, posOf(s)) + (s.x.op === "..=" ? 1 : 0);
+      for (let i = lo; i < hi; i++) items.push([{ k: "int", v: BigInt(i), ty }, index(i - lo)]);
     } else {
       const it = this.eval(s.x, env);
-      if (it.k === "array") it.items.forEach((v, i) => items.push([v, { k: "int", v: i }]));
-      else if (it.k === "string") [...it.v].forEach((ch, i) => items.push([{ k: "int", v: ch.codePointAt(0)! }, { k: "int", v: i }]));
-      else throw new CompileError(`cannot iterate over ${it.k} at compile time`, posOf(s));
+      if (it.k === "array") it.items.forEach((v, i) => items.push([v, index(i)]));
+      else if (it.k === "string") {
+        let offset = 0;
+        for (const ch of it.v) {
+          items.push([{ k: "int", v: BigInt(ch.codePointAt(0)!), ty: "rune" }, index(offset)]);
+          offset += new TextEncoder().encode(ch).length;
+        }
+      } else throw new CompileError(`cannot iterate over ${it.k} at compile time`, posOf(s));
     }
     for (const [v, i] of items) {
       this.tick(posOf(s));
@@ -269,7 +290,7 @@ export class Interp {
       if (s.vals[1]) inner.vars.set(s.vals[1].name, { v: i });
       const c = this.block(s.body, inner);
       if (c.k === "break") break;
-      if (c.k === "return") return c;
+      if (c.k === "return" || c.k === "take") return c;
     }
     return NORMAL;
   }
@@ -311,9 +332,10 @@ export class Interp {
         if (e.op === "&") return { k: "ref", cell: this.refCell(e.x, env) };
         const v = this.eval(e.x, env);
         if (e.op === "!") return { k: "bool", v: !truthy(v, posOf(e)) };
-        if (e.op === "-" && (v.k === "int" || v.k === "float")) return { k: v.k, v: -v.v };
+        if (e.op === "-" && v.k === "int") return wrapInt(-v.v, v.ty);
+        if (e.op === "-" && v.k === "float") return { k: "float", v: -v.v };
         if (e.op === "+") return v;
-        if (e.op === "~" && v.k === "int") return { k: "int", v: ~v.v };
+        if (e.op === "~" && v.k === "int") return wrapInt(~v.v, v.ty);
         throw new NotConstant(`unsupported unary '${e.op}' at compile time`, posOf(e));
       }
       case "Binary": {
@@ -335,7 +357,11 @@ export class Interp {
           if (i < 0 || i >= obj.items.length) throw new CompileError(`index ${i} out of bounds (len ${obj.items.length})`, posOf(e));
           return obj.items[i];
         }
-        if (obj.k === "string") return { k: "int", v: obj.v.charCodeAt(i) };
+        if (obj.k === "string") {
+          const bytes = new TextEncoder().encode(obj.v);
+          if (i < 0 || i >= bytes.length) throw new CompileError(`index ${i} out of bounds (len ${bytes.length})`, posOf(e));
+          return { k: "int", v: BigInt(bytes[i]), ty: "u8" };
+        }
         throw new CompileError(`cannot index ${obj.k} at compile time`, posOf(e));
       }
       case "Selector": {
@@ -360,15 +386,15 @@ export class Interp {
       case "Quote":
         return instantiate(e.body, e.kind, env, this, posOf(e));
       case "MacroCall":
-        if (this.foldEnv) return this.foldMacro(e, env);
-        throw new NotConstant("inside comptime procs, call other comptime procs directly (without '!')", posOf(e));
+        return this.evalMacro(e, env);
     }
     throw new NotConstant(`this expression is not supported at compile time`, posOf(e));
   }
 
-  /** A macro called from a `comptime` expression: expand it, then evaluate the code it produced. */
-  private foldMacro(call: Extract<Expr, { k: "MacroCall" }>, env: Env): Val {
+  /** `name!(...)` in code that runs at compile time: a comptime proc is expanded and the code it produced evaluated; any other proc is called. */
+  private evalMacro(call: Extract<Expr, { k: "MacroCall" }>, env: Env): Val {
     const pos = posOf(call);
+    if (!this.an.macroTarget(call, env.scope)) return this.eval(this.an.macroAsCall(call), env);
     const { sym, lit, args } = this.an.macroInvocation(call, env.scope, (node) => this.eval(node, env));
     const outerFold = this.foldEnv;
     this.foldEnv = env;
@@ -386,13 +412,31 @@ export class Interp {
     return this.eval(node, env);
   }
 
-  /** `do!` while folding: runs the block now and yields what it returns. */
+  /** `do!` at compile time: runs the block now and yields what it takes. */
   runBlock(body: Token[], type: string | undefined, pos: Pos): Val {
-    const env = this.foldEnv!;
-    const block = new Parser([...body, { kind: "eof", text: "", pre: "", pos }]).parseBlock();
-    const c = this.block(block, env);
-    if (c.k !== "return") throw new CompileError("do!: the block needs a 'return value'", pos);
+    const block = new Parser([...body, { kind: "eof", text: "", pre: "", pos }], { take: true }).parseBlock();
+    const c = this.block(block, this.foldEnv!);
+    if (c.k === "return") throw new CompileError("do!: 'return' cannot leave a block that runs at compile time; use 'take value'", pos);
+    if (c.k !== "take") throw new CompileError("do!: the block needs a 'take value'", pos);
     return type ? convert(type, c.v) : c.v;
+  }
+
+  /** `comptime! { ... }`: evaluates the block in the transpiler; its value is its single expression, or what it takes. */
+  foldBlock(body: Token[], pos: Pos): Val {
+    const outer = this.foldEnv;
+    const env = outer ? new Env(outer, outer.scope) : new Env(null, this.scope!);
+    this.foldEnv = env;
+    try {
+      const block = new Parser([...body, { kind: "eof", text: "", pre: "", pos }], { take: true }).parseBlock();
+      const only = block.stmts.length === 1 ? block.stmts[0] : undefined;
+      if (only?.k === "ExprStmt") return this.eval(only.x, env);
+      const c = this.block(block, env);
+      if (c.k === "take") return c.v;
+      if (c.k === "return") throw new CompileError("comptime!: use 'take value' to give the block its value", pos);
+      throw new CompileError("comptime!: the block needs a single expression or a 'take value'", pos);
+    } finally {
+      this.foldEnv = outer;
+    }
   }
 
   private refCell(e: Expr, env: Env): Cell {
@@ -435,6 +479,11 @@ export class Interp {
     throw new NotConstant(`${f.k} is not callable at compile time`, pos);
   }
 
+  /** A builtin callable at compile time without a declaration (`len`, `min`, a basic type conversion, ...). */
+  isBuiltin(name: string): boolean {
+    return name in BUILTINS || BASIC_TYPES.has(name);
+  }
+
   fieldsOf(t: Extract<Val, { k: "type" }>, pos: Pos): string[] {
     let node = t.node;
     let scope = t.scope;
@@ -466,13 +515,31 @@ function zero(t: Expr): Val {
     if (t.name === "string") return { k: "string", v: "" };
     if (t.name === "bool") return { k: "bool", v: false };
     if (/^(f16|f32|f64)$/.test(t.name)) return { k: "float", v: 0 };
-    if (BASIC_TYPES.has(t.name)) return { k: "int", v: 0 };
+    if (INT_BITS[t.name]) return { k: "int", v: 0n, ty: t.name };
   }
   return { k: "nil" };
 }
 
+/** Integers wrap around like they do at run time. */
+export function wrapInt(v: bigint, ty: string | undefined): Val {
+  const size = ty ? INT_BITS[ty] : undefined;
+  if (!size) return { k: "int", v, ty };
+  return { k: "int", v: size[1] ? BigInt.asIntN(size[0], v) : BigInt.asUintN(size[0], v), ty };
+}
+
+/** A value stored in a slot of a basic type (a parameter, a typed declaration, a result) takes that type. */
+function typed(type: Expr | null | undefined, v: Val): Val {
+  return type?.k === "Ident" && BASIC_TYPES.has(type.name) ? convert(type.name, v) : v;
+}
+
+/** `x := 1`: an untyped integer constant gets its default type. */
+function defaultTyped(v: Val): Val {
+  return v.k === "int" && !v.ty ? wrapInt(v.v, "int") : v;
+}
+
 function num(v: Val, pos: Pos): number {
-  if (v.k === "int" || v.k === "float") return v.v;
+  if (v.k === "int") return Number(v.v);
+  if (v.k === "float") return v.v;
   throw new CompileError(`expected a number, got ${v.k}`, pos);
 }
 
@@ -483,8 +550,14 @@ function truthy(v: Val, pos: Pos): boolean {
 
 function convert(type: string, v: Val): Val {
   if (v.k !== "int" && v.k !== "float") return v;
-  if (/^(f16|f32|f64)/.test(type)) return { k: "float", v: v.v };
-  if (BASIC_TYPES.has(type) && type !== "string" && type !== "bool") return { k: "int", v: Math.trunc(v.v) };
+  if (/^(f16|f32|f64)$/.test(type)) {
+    const f = Number(v.v);
+    return { k: "float", v: type === "f64" ? f : Math.fround(f) };
+  }
+  if (INT_BITS[type]) {
+    if (v.k === "float" && !Number.isFinite(v.v)) throw new CompileError(`cannot convert ${v.v} to ${type}`);
+    return wrapInt(v.k === "int" ? v.v : BigInt(Math.trunc(v.v)), type);
+  }
   return v;
 }
 
@@ -492,16 +565,15 @@ function literal(t: Token, pos: Pos): Val {
   switch (t.kind) {
     case "int": {
       const s = t.text.replace(/_/g, "");
-      const m = /^0([xbo])/.exec(s);
-      const v = m ? parseInt(s.slice(2), m[1] === "x" ? 16 : m[1] === "b" ? 2 : 8) : Number(s);
-      return { k: "int", v };
+      if (!/^(\d+|0[xX][0-9a-fA-F]+|0[bB][01]+|0[oO][0-7]+)$/.test(s)) throw new CompileError(`unsupported literal '${t.text}' at compile time`, pos);
+      return { k: "int", v: BigInt(s.replace(/^0[XBO]/, (p) => p.toLowerCase())) };
     }
     case "float":
       return { k: "float", v: Number(t.text.replace(/_/g, "")) };
     case "string":
       return { k: "string", v: t.text.startsWith("`") ? t.text.slice(1, -1) : unescape(t.text.slice(1, -1), pos) };
     case "rune":
-      return { k: "int", v: unescape(t.text.slice(1, -1), pos).codePointAt(0) ?? 0 };
+      return { k: "int", v: BigInt(unescape(t.text.slice(1, -1), pos).codePointAt(0) ?? 0), ty: "rune" };
   }
   throw new CompileError(`unsupported literal '${t.text}' at compile time`, pos);
 }
@@ -534,25 +606,48 @@ function binop(op: string, a: Val, b: Val, pos: Pos): Val {
   }
   if ((a.k !== "int" && a.k !== "float") || (b.k !== "int" && b.k !== "float"))
     throw new CompileError(`operator '${op}' is not supported for ${a.k} and ${b.k} at compile time`, pos);
-  const float = a.k === "float" || b.k === "float";
-  const k = float ? "float" : "int";
+  if (a.k === "int" && b.k === "int") return intOp(op, a, b, pos);
+  const x = Number(a.v);
+  const y = Number(b.v);
+  switch (op) {
+    case "+": return { k: "float", v: x + y };
+    case "-": return { k: "float", v: x - y };
+    case "*": return { k: "float", v: x * y };
+    case "/": return { k: "float", v: x / y };
+    case "<": return { k: "bool", v: x < y };
+    case ">": return { k: "bool", v: x > y };
+    case "<=": return { k: "bool", v: x <= y };
+    case ">=": return { k: "bool", v: x >= y };
+  }
+  throw new CompileError(`operator '${op}' is not supported for floats at compile time`, pos);
+}
+
+function intOp(op: string, a: Extract<Val, { k: "int" }>, b: Extract<Val, { k: "int" }>, pos: Pos): Val {
+  const ty = a.ty ?? b.ty;
   const x = a.v;
   const y = b.v;
+  const nonZero = () => {
+    if (y === 0n) throw new CompileError("division by zero at compile time", pos);
+  };
   switch (op) {
-    case "+": return { k, v: x + y };
-    case "-": return { k, v: x - y };
-    case "*": return { k, v: x * y };
-    case "/":
-      if (!float && y === 0) throw new CompileError("division by zero at compile time", pos);
-      return { k, v: float ? x / y : Math.trunc(x / y) };
-    case "%": return { k, v: x % y };
-    case "%%": return { k, v: ((x % y) + y) % y };
-    case "&": return { k: "int", v: x & y };
-    case "|": return { k: "int", v: x | y };
-    case "~": return { k: "int", v: x ^ y };
-    case "&~": return { k: "int", v: x & ~y };
-    case "<<": return { k: "int", v: x << y };
-    case ">>": return { k: "int", v: x >> y };
+    case "+": return wrapInt(x + y, ty);
+    case "-": return wrapInt(x - y, ty);
+    case "*": return wrapInt(x * y, ty);
+    case "/": nonZero(); return wrapInt(x / y, ty);
+    case "%": nonZero(); return wrapInt(x % y, ty);
+    case "%%": nonZero(); return wrapInt(((x % y) + y) % y, ty);
+    case "&": return wrapInt(x & y, ty);
+    case "|": return wrapInt(x | y, ty);
+    case "~": return wrapInt(x ^ y, ty);
+    case "&~": return wrapInt(x & ~y, ty);
+    case "<<":
+    case ">>": {
+      if (y < 0n) throw new CompileError("negative shift count at compile time", pos);
+      const bits = a.ty ? INT_BITS[a.ty]?.[0] : undefined;
+      if (bits !== undefined && y >= BigInt(bits)) return wrapInt(op === "<<" || x >= 0n ? 0n : -1n, a.ty);
+      if (y > MAX_SHIFT) throw new CompileError("shift count too large at compile time", pos);
+      return wrapInt(op === "<<" ? x << y : x >> y, a.ty);
+    }
     case "<": return { k: "bool", v: x < y };
     case ">": return { k: "bool", v: x > y };
     case "<=": return { k: "bool", v: x <= y };
@@ -562,7 +657,8 @@ function binop(op: string, a: Val, b: Val, pos: Pos): Val {
 }
 
 function valEq(a: Val, b: Val): boolean {
-  if ((a.k === "int" || a.k === "float") && (b.k === "int" || b.k === "float")) return a.v === b.v;
+  if (a.k === "int" && b.k === "int") return a.v === b.v;
+  if ((a.k === "int" || a.k === "float") && (b.k === "int" || b.k === "float")) return Number(a.v) === Number(b.v);
   if (a.k !== b.k) return false;
   switch (a.k) {
     case "bool": case "string": return a.v === (b as typeof a).v;
@@ -616,10 +712,10 @@ function format(fmt: string, args: Val[]): string {
     if (!v) return m;
     if (c === "q") return JSON.stringify(display(v));
     if (v.k === "int" && "xXbo".includes(c)) {
-      const digits = Math.abs(v.v).toString(c === "b" ? 2 : c === "o" ? 8 : 16);
-      return (v.v < 0 ? "-" : "") + (c === "X" ? digits.toUpperCase() : digits);
+      const digits = (v.v < 0n ? -v.v : v.v).toString(c === "b" ? 2 : c === "o" ? 8 : 16);
+      return (v.v < 0n ? "-" : "") + (c === "X" ? digits.toUpperCase() : digits);
     }
-    if (v.k === "int" && c === "c") return String.fromCodePoint(v.v);
+    if (v.k === "int" && c === "c") return String.fromCodePoint(Number(v.v));
     return display(v);
   });
 }
@@ -654,7 +750,7 @@ function splitBinary(args: Val[], pos: Pos, name: string, ops: Set<string>): Val
 }
 
 /** Whether evaluating `e` twice is the same as evaluating it once: no calls, no macros. */
-function repeatable(e: Expr): boolean {
+export function repeatable(e: Expr): boolean {
   switch (e.k) {
     case "Ident": case "Lit": case "ImplicitSelector":
       return true;
@@ -668,61 +764,6 @@ function repeatable(e: Expr): boolean {
   return false;
 }
 
-/**
- * The arms of a `{ p1, p2 => value, ... }` block, as `{patterns, value}` structs. Arms end at a
- * newline or a top-level comma after the value.
- */
-function matchArms(body: Token[], pos: Pos): Val[] {
-  const toks = isOp(body[0], "{") && isOp(body[body.length - 1], "}") ? body.slice(1, -1) : body;
-  const expr = (from: number, to: number, what: string): Val => {
-    const part = toks.slice(from, to).filter((t) => t.kind !== "semi");
-    const at = toks[from]?.pos ?? toks[from - 1]?.pos ?? pos;
-    if (!part.length) throw new CompileError(`match!: expected ${what}`, at);
-    const eof: Token = { kind: "eof", text: "", pre: "", pos: at };
-    const p = new Parser([...part, eof]);
-    const node = p.parseExpr();
-    p.expectEnd();
-    return { k: "expr", toks: part, node };
-  };
-  const arms: Val[] = [];
-  let i = 0;
-  const skipSemis = () => {
-    while (toks[i]?.kind === "semi") i++;
-  };
-  for (skipSemis(); i < toks.length; skipSemis()) {
-    const patterns: Val[] = [];
-    let depth = 0;
-    let start = i;
-    for (;; i++) {
-      const t = toks[i];
-      if (!t) throw new CompileError("match!: expected '=>' after the pattern", toks[i - 1]?.pos ?? pos);
-      if (isOp(t, "(") || isOp(t, "[") || isOp(t, "{")) depth++;
-      else if (isOp(t, ")") || isOp(t, "]") || isOp(t, "}")) depth--;
-      else if (depth === 0 && isOp(t, ",")) {
-        patterns.push(expr(start, i, "a pattern"));
-        start = i + 1;
-      } else if (depth === 0 && isOp(t, "=") && isOp(toks[i + 1], ">") && toks[i + 1].pre === "") {
-        patterns.push(expr(start, i, "a pattern"));
-        i += 2;
-        break;
-      }
-    }
-    skipSemis();
-    start = i;
-    depth = 0;
-    for (; i < toks.length; i++) {
-      const t = toks[i];
-      if (isOp(t, "(") || isOp(t, "[") || isOp(t, "{")) depth++;
-      else if (isOp(t, ")") || isOp(t, "]") || isOp(t, "}")) depth--;
-      else if (depth === 0 && (isOp(t, ",") || t.kind === "semi")) break;
-    }
-    const value = expr(start, i, "a value after '=>'");
-    i++;
-    arms.push({ k: "struct", fields: new Map([["patterns", { k: "array", items: patterns }], ["value", value]]) });
-  }
-  return arms;
-}
-
 const BUILTINS: Record<string, Builtin> = {
   call_site(_args, pos, interp) {
     const at = interp.callSite ?? pos;
@@ -734,10 +775,16 @@ const BUILTINS: Record<string, Builtin> = {
   split_range(args, pos) {
     return splitBinary(args, pos, "split_range", RANGES);
   },
-  match_arms(args, pos) {
+  comptime_value(args, pos, interp) {
     const body = args[0];
-    if (body?.k !== "stmts") throw new CompileError("match_arms: expected a Stmt", pos);
-    return { k: "array", items: matchArms(body.toks, pos) };
+    if (body?.k !== "stmts") throw new CompileError("comptime_value: expected a Stmt", pos);
+    try {
+      return interp.foldBlock(body.toks, interp.callSite ?? pos);
+    } catch (err) {
+      if (err instanceof NotConstant) err.message = `comptime!: cannot be evaluated at compile time: ${err.message}`;
+      else if (err instanceof CompileError && !err.message.startsWith("comptime!:")) err.message = `comptime!: ${err.message}`;
+      throw err;
+    }
   },
   block_value(args, pos, interp) {
     const [type, body] = args;
@@ -776,15 +823,15 @@ const BUILTINS: Record<string, Builtin> = {
   },
   len(args, pos) {
     const v = args[0];
-    if (v?.k === "array") return { k: "int", v: v.items.length };
-    if (v?.k === "string") return { k: "int", v: new TextEncoder().encode(v.v).length };
+    if (v?.k === "array") return { k: "int", v: BigInt(v.items.length), ty: "int" };
+    if (v?.k === "string") return { k: "int", v: BigInt(new TextEncoder().encode(v.v).length), ty: "int" };
     throw new CompileError("len: expected an array or string", pos);
   },
   append(args, pos) {
     const target = args[0];
     if (target?.k !== "ref" || target.cell.v.k !== "array") throw new CompileError("append: first argument must be &array", pos);
     target.cell.v.items.push(...args.slice(1));
-    return { k: "int", v: args.length - 1 };
+    return { k: "int", v: BigInt(args.length - 1), ty: "int" };
   },
   println(args) {
     process.stderr.write(`[comptime] ${args.map(display).join(" ")}\n`);
@@ -822,14 +869,15 @@ const BUILTINS: Record<string, Builtin> = {
     throw new CompileError(args.map(display).join(" "), pos);
   },
   min(args, pos) {
-    return args.reduce((a, b) => (num(b, pos) < num(a, pos) ? b : a));
+    return args.reduce((a, b) => (truthy(binop("<", b, a, pos), pos) ? b : a));
   },
   max(args, pos) {
-    return args.reduce((a, b) => (num(b, pos) > num(a, pos) ? b : a));
+    return args.reduce((a, b) => (truthy(binop(">", b, a, pos), pos) ? b : a));
   },
   abs(args, pos) {
     const v = args[0];
-    return { k: v.k === "float" ? "float" : "int", v: Math.abs(num(v, pos)) } as Val;
+    if (v?.k === "int") return wrapInt(v.v < 0n ? -v.v : v.v, v.ty);
+    return { k: "float", v: Math.abs(num(v, pos)) };
   },
 };
 
@@ -855,14 +903,14 @@ const NO_SPACE_BEFORE = new Set([")", "]", ",", ".", ";", ":", "..<", "..="]);
 const NO_SPACE_AFTER = new Set(["(", "[", ".", "$", "..<", "..="]);
 const UNARY = new Set(["-", "+", "!", "&", "^", "~"]);
 
-/** Gives synthesized tokens conventional spacing (they carry no source whitespace). */
-/** Lines of the macro call: code passed in from there keeps its line breaks, so line numbers still match. */
+/** Lines of the macro call: code passed in from there keeps its line breaks and the comments in them. */
 export interface CallSpan {
   file: string;
   from: number;
   to: number;
 }
 
+/** Gives synthesized tokens conventional spacing (they carry no source whitespace). */
 export function respace(toks: Token[], call?: CallSpan): Token[] {
   const valueEnd = (t: Token) => t.kind !== "op" && t.kind !== "kw" && t.kind !== "semi" || [")", "]", "}", "^"].includes(t.text);
   const fromCall = (t: Token) => !!call && t.pos.file === call.file && t.pos.line >= call.from && t.pos.line <= call.to;
@@ -877,6 +925,8 @@ export function respace(toks: Token[], call?: CallSpan): Token[] {
     else if (prev.kind === "op" && NO_SPACE_AFTER.has(prev.text)) space = false;
     else if ((t.text === "(" || t.text === "[") && t.kind === "op" && (valueEnd(prev) || (prev.kind === "kw" && prev.text === "proc"))) space = false;
     else if (t.kind === "op" && t.text === "^" && valueEnd(prev)) space = false;
+    // `[]int`, `[dynamic]T`: an identifier only follows `]` in a type
+    else if (t.kind === "ident" && prev.kind === "op" && prev.text === "]") space = false;
     else if (prev.kind === "op" && UNARY.has(prev.text) && (!prevPrev || !valueEnd(prevPrev))) space = false;
     return { ...t, pre: space ? " " : "" };
   });
@@ -912,10 +962,13 @@ export function valueToTokens(v: Val, pos: Pos, ctx: "expr" | "stmt" | "splice")
       return v.toks.map((t) => fresh(t));
     case "ident":
       return [{ kind: "ident", text: v.name, pre: " ", pos }];
-    case "int":
+    case "int": {
+      const lit: Token = { kind: "int", text: String(v.v < 0n ? -v.v : v.v), pre: " ", pos };
+      return v.v < 0n ? [fresh(op("(", pos)), fresh(op("-", pos)), lit, fresh(op(")", pos))] : [lit];
+    }
     case "float": {
-      const text = v.k === "float" && Number.isInteger(v.v) ? Math.abs(v.v).toFixed(1) : String(Math.abs(v.v));
-      const lit: Token = { kind: v.k, text, pre: " ", pos };
+      const text = Number.isInteger(v.v) ? Math.abs(v.v).toFixed(1) : String(Math.abs(v.v));
+      const lit: Token = { kind: "float", text, pre: " ", pos };
       return v.v < 0 ? [fresh(op("(", pos)), fresh(op("-", pos)), lit, fresh(op(")", pos))] : [lit];
     }
     case "string":

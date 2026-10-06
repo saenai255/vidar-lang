@@ -7,8 +7,6 @@ import "core:thread"
 
 // Every macro here is built into Vidar: no definitions, no imports.
 
-Point :: struct { x, y: f32 }
-
 area :: proc(w, h: int) -> int {
 	check!(w >= 0, "width must not be negative") // on failure, also prints the value of `w`
 	check!(h >= 0)
@@ -24,22 +22,16 @@ parse_mode :: proc(s: string) -> int {
 	todo!("decide what unknown modes do")
 }
 
-Shape :: enum { Circle, Square, Triangle }
-
 grade :: proc(score: int) -> string {
-	return match!(score) {
-		90..=100 => "A",
-		75..<90  => "B",
-		_        => "C",
+	return do! {
+		if score >= 90 do take "A"
+		if score >= 75 do take "B"
+		take "C"
 	}
 }
 
 main :: proc() {
-	// format!: string interpolation
 	name := "vidar"
-	p := Point{1.5, -2}
-	fmt.println(format!("hello {name}, p = {p}, x = {p.x:.2f}, sum = {p.x + p.y}"))
-	fmt.println(format!("{{literal braces}} and 100%"))
 
 	// dbg!: prints the source location, expression and value to stderr, and passes the value through
 	total := dbg!(area(3, 4)) + 1
@@ -94,22 +86,7 @@ main :: proc() {
 	}
 	delete(kept)
 
-	// match!: a switch that evaluates to a value
-	shape := Shape.Square
-	corners := match!(shape) {
-		.Circle => 0
-		.Square => 4
-		.Triangle => 3
-	}
-	fmt.println("match:", corners, grade(95), grade(80), grade(12))
-	sign := match! {
-		total < 0  => "negative",
-		total == 0 => "zero",
-		_          => "positive",
-	}
-	fmt.println("match:", sign)
-
-	// do!: a block that evaluates to the value it returns
+	// do!: a block that evaluates to the value it takes
 	primes := do! {
 		count := 0
 		for n in 2..<30 {
@@ -119,15 +96,15 @@ main :: proc() {
 			}
 			if prime do count += 1
 		}
-		return count
+		take count
 	}
 	first_even := do! {
 		for x in ([]int{3, 7, 8, 5}) {
-			if x % 2 == 0 do return x
+			if x % 2 == 0 do take x
 		}
-		return -1
+		take -1
 	}
-	fmt.println("do:", primes, first_even)
+	fmt.println("do:", primes, first_even, grade(95), grade(80), grade(12))
 
 	fmt.println("mode:", parse_mode("safe"))
 }

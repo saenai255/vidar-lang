@@ -90,13 +90,19 @@ export function main(argv: string[]): number {
   const odinArgs = cmd === "run" ? ["run", outDir, `-out:${join(outDir, name)}`, ...(progArgs.length ? ["--", ...progArgs] : [])] : ["check", outDir];
   const r = spawnSync("odin", odinArgs, { encoding: "utf8", stdio: ["inherit", "inherit", "pipe"] });
   if (r.stderr) {
-    // generated files keep their source's line numbers, so point Odin's errors at the .vidar files
-    let msg = r.stderr;
-    const real = realpathSync(outDir);
-    for (const [gen, src] of out.sourceOf) msg = msg.split(join(real, gen)).join(src);
-    process.stderr.write(msg);
+    process.stderr.write(mapLocations(r.stderr, out, realpathSync(outDir)));
   }
   return r.status ?? 1;
+}
+
+/** Points `file.odin(line:col)` locations in Odin's output at the .vidar files and lines they came from. */
+export function mapLocations(text: string, out: Output, root: string): string {
+  for (const [gen, src] of out.sourceOf) {
+    const path = join(root, gen);
+    const lines = out.lineMap.get(gen) ?? [];
+    text = text.split(path).map((part, i) => (i ? part.replace(/^\((\d+):(\d+)\)/, (m, l, c) => (lines[l - 1] ? `(${Math.abs(lines[l - 1])}:${c})` : m)) : part)).join(src);
+  }
+  return text;
 }
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));

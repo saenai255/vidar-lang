@@ -1,4 +1,4 @@
 // error: returns Stmt and can only be used as a statement
 package main
-noop :: comptime proc() -> Stmt { return quote { x := 1 } }
+noop :: proc!() -> Stmt { return quote { x := 1 } }
 main :: proc() { y := noop!() }

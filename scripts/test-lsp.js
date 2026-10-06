@@ -134,13 +134,13 @@ function change(text) {
   check("definition of a proc bound in an impl jumps to the proc", defBound.result?.range.start.line === at("sq_area :: proc", "sq_area").line, JSON.stringify(defBound.result));
 
   const defMacro = await request("textDocument/definition", { textDocument: doc, position: at("fmt.println", "twice", 1) });
-  check("definition of macro call jumps to the comptime proc", defMacro.result?.range.start.line === at("twice :: comptime", "twice").line, JSON.stringify(defMacro.result));
+  check("definition of macro call jumps to the comptime proc", defMacro.result?.range.start.line === at("twice :: proc!", "twice").line, JSON.stringify(defMacro.result));
 
   const refs = await request("textDocument/references", { textDocument: doc, position: at("count := 0", "count"), context: { includeDeclaration: true } });
-  check("references include capture list, closure body and macro argument", refs.result?.length === 5, JSON.stringify(refs.result?.map((r) => r.range.start)));
+  check("references include capture list, closure body and macro argument", refs.result?.length === 6, JSON.stringify(refs.result?.map((r) => r.range.start)));
 
   const ren = await request("textDocument/rename", { textDocument: doc, position: at("count := 0", "count"), newName: "clicks" });
-  check("rename edits every reference", ren.result?.changes?.[uri]?.length === 5, JSON.stringify(ren.result));
+  check("rename edits every reference", ren.result?.changes?.[uri]?.length === 6, JSON.stringify(ren.result));
 
   const edits = [...(ren.result?.changes?.[uri] ?? [])].sort((a, b) => b.range.start.line - a.range.start.line || b.range.start.character - a.range.start.character);
   const renamed = lines.slice();
@@ -186,7 +186,7 @@ function change(text) {
   check("completion after anonymous struct value lists its fields", anonItems.includes("size") && anonItems.includes("label"), JSON.stringify(anonItems));
   const scopeItems = await complete("co");
   check("completion offers locals, macros and imports in scope", scopeItems.includes("count") && scopeItems.includes("twice!") && scopeItems.includes("geo"), JSON.stringify(scopeItems.slice(0, 20)));
-  check("completion offers the built-in macros", ["scoped!", "check!", "format!", "dbg!", "locked!"].every((m) => scopeItems.includes(m)), JSON.stringify(scopeItems.filter((x) => x.endsWith("!"))));
+  check("completion offers the built-in macros", ["scoped!", "check!", "do!", "comptime!", "dbg!", "locked!"].every((m) => scopeItems.includes(m)), JSON.stringify(scopeItems.filter((x) => x.endsWith("!"))));
 
   // plain Odin goes to ols, when installed
   if (spawnSync("sh", ["-c", "command -v ols"]).status !== 0) {
@@ -298,6 +298,150 @@ function change(text) {
   const sComp = await request("textDocument/completion", { textDocument: { uri: sMain }, position: { line: eLine, character: sEdited.split("\n")[eLine].indexOf("sched.") + 6 } });
   const sLabels = (sComp.result ?? []).map((c) => c.label);
   check("completion after sched. lists the public API only", ["go", "make_chan", "select", "on_recv", "Chan", "sleep"].every((x) => sLabels.includes(x)) && !sLabels.includes("park"), JSON.stringify(sLabels));
+
+  // ---- macros, comptime code and interfaces: code the analyzer expands or folds away ----
+  const mac = realpathSync(mkdtempSync(join(tmpdir(), "vidar-lsp-macros-")));
+  cpSync("tests/lsp/macros", mac, { recursive: true });
+  const mPath = join(mac, "main.vidar");
+  const mUri = pathToFileURL(mPath).toString();
+  const mText = readFileSync(mPath, "utf8");
+  const mLines = mText.split("\n");
+  const mDoc = { uri: mUri };
+  /** Like `at`, for the macros fixture. */
+  const mAt = (lineHas, needle, offset = 0, nth = 0) => {
+    const line = mLines.findIndex((l) => l.includes(lineHas));
+    if (line < 0) throw new Error(`no line with ${lineHas}`);
+    let col = -1;
+    for (let i = 0; i <= nth; i++) col = mLines[line].indexOf(needle, col + 1);
+    if (col < 0) throw new Error(`no '${needle}' on line ${line + 1}`);
+    return { line, character: col + offset };
+  };
+  const mHover = async (pos) => (await request("textDocument/hover", { textDocument: mDoc, position: pos })).result?.contents?.value ?? "";
+  const mDef = async (pos) => (await request("textDocument/definition", { textDocument: mDoc, position: pos })).result;
+  const mRefs = async (pos) => (await request("textDocument/references", { textDocument: mDoc, position: pos, context: { includeDeclaration: true } })).result ?? [];
+  const sameLine = (loc, pos) => loc?.uri === mUri && loc.range.start.line === pos.line && loc.range.start.character === pos.character;
+  const refLines = (refs) => refs.map((r) => r.range.start.line + 1).join(",");
+
+  const mDiag = nextDiagnostics((d) => d.uri === mUri);
+  notify("textDocument/didOpen", { textDocument: { uri: mUri, languageId: "vidar", version: 1, text: mText } });
+  const md = await mDiag;
+  check("macros fixture has no errors", md.diagnostics.length === 0, JSON.stringify(md.diagnostics));
+
+  // comptime proc bodies are never analyzed as Odin, but their names still resolve
+  const hovParam = await mHover(mAt("return n if n < 2", "n if", 0));
+  check("hover on a comptime proc parameter inside its body", hovParam.includes("n: int") && hovParam.includes("parameter"), hovParam);
+  const defParam = await mDef(mAt("return n if n < 2", "n", 0, 2));
+  check("definition of a comptime proc parameter", sameLine(defParam, mAt("fib :: proc!", "n:")), JSON.stringify(defParam));
+  const defSplice = await mDef(mAt("return quote($x * 2)", "x"));
+  check("definition of a $splice inside quote jumps to the macro parameter", sameLine(defSplice, mAt("double :: proc!", "x:")), JSON.stringify(defSplice));
+  const defLocal = await mDef(mAt("return quote($name)", "name"));
+  check("definition of a comptime local used in a quote", sameLine(defLocal, mAt("name := type_name", "name")), JSON.stringify(defLocal));
+  const fibRefs = await mRefs(mAt("fib :: proc!", "fib"));
+  check("references to a comptime proc include recursive calls and compile-time calls", fibRefs.length === 4, refLines(fibRefs));
+
+  // compile-time calls fold to literals; the names in them are still references
+  const limitRefs = await mRefs(mAt("LIMIT :: 10", "LIMIT"));
+  check("references to a constant include compile-time calls and comptime! blocks", limitRefs.length === 3, refLines(limitRefs));
+  const defTotal = await mDef(mAt("take total", "total"));
+  check("definition inside a comptime! block", sameLine(defTotal, mAt("total := 0", "total")), JSON.stringify(defTotal));
+
+  // statement macros and their arguments
+  const hovSwap = await mHover(mAt("swap!(x, y)", "swap", 1));
+  check("hover on a statement macro call shows the macro", hovSwap.includes("swap :: proc!") && hovSwap.includes("macro"), hovSwap);
+  const defSwap = await mDef(mAt("swap!(x, y)", "swap", 1));
+  check("definition of a statement macro call", sameLine(defSwap, mAt("swap :: proc!", "swap")), JSON.stringify(defSwap));
+  const defCheck = await mDef(mAt("check!(x > y)", "check", 1));
+  const checkPath = defCheck?.uri?.startsWith("file:") ? require("node:url").fileURLToPath(defCheck.uri) : "";
+  check("definition of a built-in statement macro opens the prelude", checkPath.endsWith(".vidar") && readFileSync(checkPath, "utf8").split("\n")[defCheck.range.start.line].startsWith("check :: proc!"), JSON.stringify(defCheck));
+  const pairRefs = await mRefs(mAt("Pair :: struct", "Pair"));
+  check("references include a type passed to a macro that only inspects it", pairRefs.some((r) => r.range.start.line === mAt("describe!(Pair)", "Pair").line && r.range.start.character === mAt("describe!(Pair)", "Pair").character), refLines(pairRefs));
+  const madeRefs = await mRefs(mAt("declare!(made", "made"));
+  check("a name declared through an Ident macro argument is linked to its uses", madeRefs.length === 2, refLines(madeRefs));
+  const hovWords = await mHover(mAt("fmt.println(words", "words", 1));
+  check("hover on a local declared in a macro block", hovWords.includes("words: int"), hovWords);
+
+  // interfaces: the method list and impl bindings name the method
+  const labelRefs = await mRefs(mAt("label :: proc", "label"));
+  check("references to an interface method include the interface and impl bindings", labelRefs.length === 4, refLines(labelRefs));
+  const defBinding = await mDef(mAt("impl Named for Pair", "label", 1));
+  check("definition of an impl binding name jumps to the interface method", sameLine(defBinding, mAt("label :: proc", "label")), JSON.stringify(defBinding));
+
+  // named results and catch bindings
+  const valueRefs = await mRefs(mAt("parse :: proc", "value"));
+  check("named results are declarations with references", valueRefs.length === 2, refLines(valueRefs));
+  const hovErr = await mHover(mAt("fmt.println(\"bad\", err)", "err", 1));
+  check("hover on a catch error binding", hovErr.includes("err:"), hovErr);
+  const defErr = await mDef(mAt("fmt.println(\"bad\", err)", "err", 1));
+  check("definition of a catch error binding", sameLine(defErr, mAt("catch err", "err")), JSON.stringify(defErr));
+
+  // renaming every symbol must give a program that still transpiles to the same code
+  const { loadProgram, emitProgram } = require("../dist/project.js");
+  const emitted = (d, overrides) => {
+    const p = loadProgram(d, { tolerant: true, overrides });
+    if (p.errors.length) return `error: ${p.errors[0].message}`;
+    return [...emitProgram(p).files].map(([k, v]) => `${k}\n${v}`).join("\n");
+  };
+  const renameAll = async (d, path, text) => {
+    const u = pathToFileURL(path).toString();
+    const base = emitted(d);
+    const broken = [];
+    const seen = new Set();
+    const tLines = text.split("\n");
+    for (let line = 0; line < tLines.length; line++) {
+      if (tLines[line].startsWith("import")) continue;
+      for (const m of tLines[line].matchAll(/::|:=|:/g)) {
+        // the name just before a declaration operator
+        const name = /([A-Za-z_]\w*)\s*(?:,\s*[A-Za-z_]\w*\s*)*$/.exec(tLines[line].slice(0, m.index));
+        if (!name || seen.has(`${line}:${name.index}`)) continue;
+        seen.add(`${line}:${name.index}`);
+        const fresh = `zz_${name[1]}`;
+        const r = await request("textDocument/rename", { textDocument: { uri: u }, position: { line, character: name.index }, newName: fresh });
+        const edits = r.result?.changes?.[u];
+        if (!edits?.length) continue;
+        const out = tLines.slice();
+        for (const e of [...edits].sort((a, b) => b.range.start.line - a.range.start.line || b.range.start.character - a.range.start.character)) {
+          const l = out[e.range.start.line];
+          out[e.range.start.line] = l.slice(0, e.range.start.character) + fresh + l.slice(e.range.end.character);
+        }
+        const after = emitted(d, new Map([[path, out.join("\n")]]));
+        if (after.split(fresh).join(name[1]) !== base) broken.push(`${name[1]} (line ${line + 1}): ${after.startsWith("error") ? after : "output differs"}`);
+      }
+    }
+    return broken;
+  };
+  const brokenMac = await renameAll(mac, mPath, mText);
+  check("renaming any symbol in the macros fixture keeps the program equivalent", brokenMac.length === 0, brokenMac.join("\n  "));
+
+  const renImport = await request("textDocument/rename", { textDocument: mDoc, position: mAt('import "core:fmt"', "fmt"), newName: "f" });
+  const importEdits = renImport.result?.changes?.[mUri] ?? [];
+  const importDecl = importEdits.find((e) => e.range.start.line === mAt('import "core:fmt"', "fmt").line);
+  check("renaming an import without an alias adds one", importDecl?.newText === "f " && importDecl.range.start.character === importDecl.range.end.character && importEdits.length === 3, JSON.stringify(importEdits));
+  const renPrelude = await request("textDocument/rename", { textDocument: mDoc, position: mAt("check!(x > y)", "check", 1), newName: "verify" });
+  check("renaming a built-in macro is refused", !!renPrelude.error && !renPrelude.result, JSON.stringify(renPrelude));
+
+  // completion where scopes only exist in expanded or folded code
+  const completeIn = async (u, text, after, line) => {
+    const ls = text.split("\n");
+    const at = ls.findIndex((l) => l.includes(after)) + 1;
+    ls.splice(at, 0, line);
+    notify("textDocument/didChange", { textDocument: { uri: u, version: ++version }, contentChanges: [{ text: ls.join("\n") }] });
+    await new Promise((r) => setTimeout(r, 300));
+    const res = await request("textDocument/completion", { textDocument: { uri: u }, position: { line: at, character: line.length } });
+    return (res.result ?? []).map((c) => c.label);
+  };
+  const inBlock = await completeIn(mUri, mText, "words := double!(n)", "\t\two");
+  check("completion inside a macro block offers its locals and the enclosing ones", inBlock.includes("words") && inBlock.includes("small") && inBlock.includes("made"), JSON.stringify(inBlock.slice(0, 20)));
+  const inDo = await completeIn(mUri, mText, "total := 0", "\t\tto");
+  check("completion inside a comptime! block offers its locals", inDo.includes("total") && inDo.includes("LIMIT"), JSON.stringify(inDo.slice(0, 20)));
+  const inComptime = await completeIn(mUri, mText, "name := type_name(T)", "\tna");
+  check("completion inside a comptime proc offers its parameters and locals", inComptime.includes("name") && inComptime.includes("T"), JSON.stringify(inComptime.slice(0, 20)));
+
+  writeFileSync(file, original);
+  const restored = nextDiagnostics((d) => d.uri === uri && d.diagnostics.length === 0);
+  change(original);
+  await restored;
+  const brokenMain = await renameAll(dir, file, original);
+  check("renaming any symbol in the main fixture keeps the program equivalent", brokenMain.length === 0, brokenMain.join("\n  "));
 
   console.log(`\n${pass} passed, ${fail} failed`);
   await request("shutdown", null);

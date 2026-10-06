@@ -2,30 +2,32 @@ package main
 
 import "core:fmt"
 
-// `comptime expr` evaluates expr inside the transpiler and replaces it with the result.
-// It can call comptime procs and regular procs, without `!`, and use macros.
-// If expr cannot be evaluated at compile time, transpilation fails.
+// `name!(args)` runs a proc inside the transpiler and replaces the call with its result.
+// Procs declared as `name :: proc!` only exist at compile time; any other proc can be
+// called with `!` too, when its arguments are constants. `comptime! { ... }` runs a
+// whole block at compile time: every call in it behaves as if it had a `!`.
+// If something needs a run-time value, transpilation fails.
 
 VERSION :: 3
 TABLE_SIZE :: 16
 
-fib :: comptime proc(n: int) -> int {
+fib :: proc!(n: int) -> int {
 	return n if n < 2 else fib(n - 1) + fib(n - 2)
 }
 
-// A regular proc: callable at run time, and foldable when its arguments are constants.
+// A regular proc: callable at run time, and at compile time with `square!(...)`.
 square :: proc(x: int) -> int {
 	return x * x
 }
 
 // Lookup tables are built once, in the transpiler; the output holds only the literal.
-squares_table :: comptime proc(n: int) -> [dynamic]int {
+squares_table :: proc!(n: int) -> [dynamic]int {
 	out: [dynamic]int
 	for i in 0..<n do append(&out, i * i)
 	return out
 }
 
-first_primes :: comptime proc(n: int) -> [dynamic]int {
+first_primes :: proc!(n: int) -> [dynamic]int {
 	out: [dynamic]int
 	for i := 2; len(out) < n; i += 1 {
 		prime := true
@@ -48,50 +50,50 @@ Config :: struct {
 	verbose: bool,
 }
 
-default_config :: comptime proc(workers: int) -> Config {
+default_config :: proc!(workers: int) -> Config {
 	return {name = fmt.tprintf("pool-%d", workers), workers = workers, verbose = workers > 4}
 }
 
 // A static assertion: folds to `true`, or stops compilation with a message.
-static_assert :: comptime proc(ok: bool, msg: string) -> bool {
+static_assert :: proc!(ok: bool, msg: string) -> bool {
 	if !ok do compile_error(msg)
 	return true
 }
 
 // Strings: build banners, keys, tables of names...
-banner :: comptime proc(title: string, width: int) -> string {
+banner :: proc!(title: string, width: int) -> string {
 	pad := (width - len(title) - 2) / 2
 	line := ""
 	for _ in 0..<pad do line = line + "="
 	return line + " " + title + " " + line
 }
 
-// A macro whose code result is evaluated when it is folded.
-cube :: comptime proc(x: Expr) -> Expr {
+// A macro: its code is expanded, and evaluated when it is used at compile time.
+cube :: proc!(x: Expr) -> Expr {
 	return quote($x * $x * $x)
 }
 
 main :: proc() {
 	// Numbers
-	f := comptime fib(25)
-	area := comptime square(TABLE_SIZE) + 1
-	mask := comptime (1 << 10) - 1
+	f := fib!(25)
+	area := square!(TABLE_SIZE) + 1
+	mask := comptime! { (1 << 10) - 1 }
 
 	// Strings
-	version := comptime fmt.tprintf("v%d.%d", VERSION, fib(7))
-	title := comptime banner("comptime", 24)
+	version := comptime! { fmt.tprintf("v%d.%d", VERSION, fib(7)) }
+	title := banner!("comptime", 24)
 
 	// Arrays and structs: the target needs a known type
-	squares: [TABLE_SIZE]int = comptime squares_table(TABLE_SIZE)
-	primes: [8]int = comptime first_primes(8)
-	cfg: Config = comptime default_config(8)
+	squares: [TABLE_SIZE]int = squares_table!(TABLE_SIZE)
+	primes: [8]int = first_primes!(8)
+	cfg: Config = default_config!(8)
 
 	// Assertions checked while transpiling
-	_ = comptime static_assert(TABLE_SIZE & (TABLE_SIZE - 1) == 0, "TABLE_SIZE must be a power of two")
+	static_assert!(TABLE_SIZE & (TABLE_SIZE - 1) == 0, "TABLE_SIZE must be a power of two")
 
-	// comptime do! { ... }: an inline compile-time block, no helper proc needed.
-	// It folds to the value it returns; macros used inside it are folded too.
-	month_starts: [12]int = comptime do! {
+	// comptime! { ... }: an inline compile-time block, no helper proc needed.
+	// It folds to the value it takes; macros used inside it are folded too.
+	month_starts: [12]int = comptime! {
 		days := [12]int{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 		starts: [dynamic]int
 		total := 0
@@ -99,34 +101,29 @@ main :: proc() {
 			append(&starts, total)
 			total += d
 		}
-		return starts
+		take starts
 	}
-	hex_digits := comptime do! {
+	hex_digits := comptime! {
 		out := ""
 		for i in 0..<16 do out = out + fmt.tprintf("%x", i)
-		return out
+		take out
 	}
-	sum_of_cubes := comptime do!(i64) {
-		total := 0
-		for i in 1..=TABLE_SIZE do total += cube!(i)
-		return total
+	sum_of_cubes := comptime! {
+		total: i64 = 0
+		for i in 1..=TABLE_SIZE do total += cube!(i64(i))
+		take total
 	}
-	grade := comptime do! {
-		score := fib(11) // 89
-		return match!(score / 10) {
-			10, 9 => "A",
-			8 => "B",
-			_ => "C",
-		}
-	}
+
+	// Integers wrap like they do at run time
+	wrapped := comptime! { u8(200) + u8(100) }
 
 	// Anything that depends on run-time values is a compile error, e.g.
 	//     n := len(os.args)
-	//     x := comptime square(n)    // error: 'n' is a runtime value ...
+	//     x := square!(n)    // error: 'square!' cannot run at compile time: 'n' is a runtime value ...
 
 	fmt.println(title)
 	fmt.println(f, area, mask, version)
 	fmt.println(squares[TABLE_SIZE - 1], primes)
 	fmt.println(cfg)
-	fmt.println(month_starts, hex_digits, sum_of_cubes, grade)
+	fmt.println(month_starts, hex_digits, sum_of_cubes, wrapped)
 }

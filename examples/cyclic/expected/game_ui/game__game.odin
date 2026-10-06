@@ -27,9 +27,7 @@ game__sprite_draw :: proc(s: ^game__Sprite) -> string { return fmt.tprintf("<%s>
 
 
 
-
-
-
+// log :: proc!(msg: Expr(string)) -> Stmt — comptime, game.vidar:30
 
 game__make_world :: proc() -> game__World {
 	w: game__World
@@ -41,7 +39,9 @@ game__spawn :: proc(w: ^game__World, label: string) -> game__Error {
 	if label == "" do return .Empty_Label
 	if len(w.entities) >= 3 do return .Too_Many
 	append(&w.entities, __game__Entity_from(new_clone(game__Sprite{label})))
-	if false { __macro_typecheck: string = (fmt.tprintf("spawned %s", label)); _ = __macro_typecheck }; fmt.println("[game]", fmt.tprintf("spawned %s", label))
+	// log!(fmt.tprintf("spawned %s", label)) — game.vidar:44
+	if false { __macro_typecheck: string = fmt.tprintf("spawned %s", label); _ = __macro_typecheck }
+	fmt.println("[game]", fmt.tprintf("spawned %s", label))
 	return .None
 }
 

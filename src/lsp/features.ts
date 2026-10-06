@@ -1,8 +1,9 @@
 import type { Token } from "../lexer";
 import { Block, Expr, Node, Param, Stmt, children } from "../ast";
 import { A, AnonFieldType, IfaceMethod, nodeText } from "../analyzer";
-import type { Program as Analysis } from "../project";
-import type { CaptureSym, GlobalSym, LocalSym, Scope, Sym, Ty } from "../scope";
+import { Parser } from "../parser";
+import { type Program as Analysis, schedSourcePath } from "../project";
+import { CaptureSym, GlobalSym, LocalSym, Scope, Sym, Ty } from "../scope";
 
 /** 0-based position, as in LSP. */
 export interface Position {
@@ -51,7 +52,7 @@ const KEYWORDS = [
   "package", "import", "proc", "struct", "union", "enum", "bit_set", "map", "dynamic", "distinct", "using", "when", "if", "else",
   "for", "in", "not_in", "switch", "case", "break", "continue", "fallthrough", "defer", "return", "cast", "transmute", "auto_cast",
   "or_else", "or_return", "or_break", "or_continue", "context", "nil", "true", "false",
-  "closure", "comptime", "quote", "interface", "impl", "catch", "errdefer", "unreachable",
+  "closure", "quote", "take", "interface", "impl", "catch", "errdefer", "unreachable",
 ];
 const BUILTIN_TYPES = ["int", "uint", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f16", "f32", "f64", "bool", "string", "cstring", "rune", "rawptr", "typeid", "any", "byte", "uintptr"];
 const MACRO_KINDS = ["Expr", "Stmt", "Type", "Ident"];
@@ -145,22 +146,14 @@ export class Index {
           if (t) this.add(t, a._sym, true);
         }
         break;
-      case "MacroCall": {
-        const parts: Sym[] | undefined = a._partSyms;
-        if (parts) parts.forEach((s, i) => this.add(n.toks[n.start + 2 * i], s, false));
-        else if (a._macroSym) this.add(n.toks[n.start], a._macroSym, false);
+      case "MacroCall":
         if (a._expansion) this.visit(a._expansion);
+        this.macroCall(n, a._scope);
         return;
-      }
-      case "Comptime":
-        if (a._expansion) {
-          this.visit(a._expansion);
-          return;
-        }
-        break;
       case "ExprStmt":
         if (a._expansion) {
           for (const s of (a._expansion as Block).stmts) this.visit(s);
+          if (n.x.k === "MacroCall") this.macroCall(n.x, A(n.x)._scope);
           return;
         }
         break;
@@ -171,14 +164,217 @@ export class Index {
         });
         break;
       case "ProcLit":
-        for (const p of (a._params as LocalSym[] | undefined) ?? []) if (p.declTok) this.add(p.declTok, p, true);
+        if (n.comptime) {
+          this.lexical(n, a._scope ?? this.a.analyzer.global);
+          return;
+        }
+        for (const p of [...((a._params as LocalSym[] | undefined) ?? []), ...((a._results as LocalSym[] | undefined) ?? [])]) if (p.declTok) this.add(p.declTok, p, true);
         for (const c of (a._captures as CaptureSym[] | undefined) ?? []) if (c.declTok) this.add(c.declTok, c, false);
         break;
       case "RangeFor":
         for (const s of (a._syms as LocalSym[] | undefined) ?? []) if (s.declTok) this.add(s.declTok, s, true);
         break;
+      case "Catch":
+        if (a._errSym) this.add(n.toks[n.errTok], a._errSym, true);
+        break;
+      case "InterfaceType":
+        for (const m of (a._methods as IfaceMethod[] | undefined) ?? []) {
+          const t = n.toks[n.methods.find((x) => x.name === m.name)!.tok];
+          this.add(t, m.sym, false);
+        }
+        break;
+      case "ImplBlock": {
+        const iface = A(n.iface)._sym ?? A(n.iface)._pkgMember;
+        if (iface?.kind !== "global") break;
+        for (const b of n.bindings) {
+          const m = iface.pkg.scope.syms.get(b.name);
+          if (m) this.add(n.toks[b.tok], m, false);
+        }
+        break;
+      }
     }
     for (const c of children(n)) this.visit(c);
+  }
+
+  /** The macro's name, and arguments the expansion does not keep (types, names only inspected at compile time). */
+  private macroCall(n: Extract<Node, { k: "MacroCall" }>, scope: Scope | undefined): void {
+    const a = A(n);
+    const parts: Sym[] | undefined = a._partSyms;
+    if (parts) parts.forEach((s, i) => this.add(n.toks[n.start + 2 * i], s, false));
+    else if (a._macroSym) this.add(n.toks[n.start], a._macroSym, false);
+    else if (scope) this.lexical(n, scope);
+    a._argNodes = [];
+    if (scope) for (const arg of n.args) this.lexTokens(arg, scope, n);
+  }
+
+  // ---- code the analyzer does not resolve: comptime procs and macro arguments ----
+
+  /** Resolves `name` as seen at `at`: locals declared later in the same file are skipped. */
+  private lookup(name: string, scope: Scope, at: Token): Sym | undefined {
+    for (let s: Scope | null = scope; s; s = s.parent) {
+      const sym = s.syms.get(name);
+      if (!sym) continue;
+      const t = sym.kind === "local" || sym.kind === "capture" ? sym.declTok : undefined;
+      if (t && t.pos.file === at.pos.file && (t.pos.line > at.pos.line || (t.pos.line === at.pos.line && t.pos.col > at.pos.col))) continue;
+      return sym;
+    }
+    return undefined;
+  }
+
+  private resolve(t: Token, scope: Scope, only?: (s: Sym) => boolean): void {
+    const sym = this.lookup(t.text, scope, t);
+    if (sym && (!only || only(sym))) this.add(t, sym, false);
+  }
+
+  private declare(t: Token, scope: Scope, init: Partial<LocalSym>): void {
+    const sym: LocalSym = { kind: "local", name: t.text, ctx: scope.ctx ?? { closure: false }, isConst: false, scope, boxed: false, declKind: "decl", declTok: t, ...init };
+    if (sym.name !== "_") scope.syms.set(sym.name, sym);
+    this.add(t, sym, true);
+  }
+
+  private typeOf(e: Expr, scope: Scope): Ty | undefined {
+    try {
+      return this.a.analyzer.typeOf(e, scope);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private lexical(n: Node, scope: Scope): void {
+    switch (n.k) {
+      case "Ident":
+        this.resolve(n.toks[n.start], scope);
+        return;
+      case "Selector": {
+        const head = n.x.k === "Ident" ? this.lookup(n.x.name, scope, n.x.toks[n.x.start]) : undefined;
+        if (head?.kind !== "pkg") return this.lexical(n.x, scope);
+        this.add(n.x.toks[n.x.start], head, false);
+        const member = head.target?.scope.syms.get(n.name);
+        if (member) this.add(n.toks[n.end - 1], member, false);
+        return;
+      }
+      case "MacroCall": {
+        const head = this.lookup(n.path[0], scope, n.toks[n.start]);
+        if (head) this.add(n.toks[n.start], head, false);
+        const member = n.path.length > 1 && head?.kind === "pkg" ? head.target?.scope.syms.get(n.path[1]) : undefined;
+        if (member) this.add(n.toks[n.start + 2], member, false);
+        A(n)._argNodes = [];
+        for (const arg of n.args) this.lexTokens(arg, scope, n);
+        return;
+      }
+      case "Quote":
+        this.lexTokens(n.body, scope);
+        return;
+      case "ProcLit": {
+        const root = new Scope(scope, null, { closure: !!n.captures });
+        for (const c of n.captures ?? []) this.resolve(n.toks[c.tok], scope);
+        const declare = (params: Param[], named: boolean) => {
+          for (const p of params) {
+            if (p.type) this.lexical(p.type, root);
+            if (p.value) this.lexical(p.value, root);
+            if (named) for (const nm of p.names) this.declare(n.toks[nm.tok], root, { declKind: "param", ty: p.type ? { t: "node", node: p.type, scope: root } : undefined });
+          }
+        };
+        declare(n.sig.params, !n.sig.unnamed);
+        declare(n.sig.results, !n.sig.resultsUnnamed);
+        if (n.body) this.lexical(n.body, root);
+        return;
+      }
+      case "Block": {
+        const inner = n.inline ? scope : new Scope(scope);
+        A(n)._scope ??= inner;
+        for (const s of n.stmts) this.lexical(s, inner);
+        return;
+      }
+      case "ValueDecl":
+        if (n.type) this.lexical(n.type, scope);
+        for (const v of n.values) this.lexical(v, scope);
+        n.names.forEach((nm, i) => {
+          const v = n.values.length === n.names.length ? n.values[i] : undefined;
+          const ty: Ty | undefined = n.type ? { t: "node", node: n.type, scope } : v && this.typeOf(v, scope);
+          this.declare(n.toks[nm.tok], scope, { isConst: n.isConst, ty, value: n.isConst ? v : undefined });
+        });
+        return;
+      case "RangeFor": {
+        this.lexical(n.x, scope);
+        const inner = new Scope(scope);
+        for (const v of n.vals) this.declare(n.toks[v.tok], inner, { declKind: "range" });
+        this.lexical(n.body, inner);
+        return;
+      }
+      case "If":
+      case "For":
+      case "Switch": {
+        const inner = new Scope(scope);
+        if (n.init) this.lexical(n.init, inner);
+        if (n.k === "If") {
+          this.lexical(n.cond, inner);
+          this.lexical(n.then, inner);
+          if (n.else) this.lexical(n.else, inner);
+        } else if (n.k === "For") {
+          if (n.cond) this.lexical(n.cond, inner);
+          if (n.post) this.lexical(n.post, inner);
+          this.lexical(n.body, inner);
+        } else {
+          if (n.tag) this.lexical(n.tag, inner);
+          if (n.typeSwitchVar) this.declare(n.toks[n.typeSwitchVar.tok], inner, { declKind: "other" });
+          for (const c of n.cases) {
+            c.exprs.forEach((e) => this.lexical(e, inner));
+            const caseScope = new Scope(inner);
+            for (const b of c.body) this.lexical(b, caseScope);
+          }
+        }
+        return;
+      }
+      case "Catch": {
+        this.lexical(n.stmt, scope);
+        if (!n.body) return;
+        const inner = new Scope(scope);
+        if (n.errName) this.declare(n.toks[n.errTok], inner, { declKind: "other" });
+        this.lexical(n.body, inner);
+        return;
+      }
+    }
+    for (const c of children(n)) this.lexical(c, scope);
+  }
+
+  /**
+   * Raw tokens: an argument of macro call `call` (parsed when possible, and kept on the call so completion
+   * finds its scopes), or else a quote body, where only `$name` and `$(...)` are compile-time code.
+   */
+  private lexTokens(toks: Token[], scope: Scope, call?: Node): void {
+    const quote = !call;
+    if (call) {
+      const end = toks[toks.length - 1]?.kind === "eof" ? toks : [...toks, { kind: "eof" as const, text: "", pre: "", pos: toks[toks.length - 1]?.pos }];
+      for (const parse of [(p: Parser) => p.parseExpr(), (p: Parser) => p.parseBlock(), (p: Parser) => p.parseType()]) {
+        let node: Node;
+        try {
+          const p = new Parser(end, { comptimeDepth: 1, take: true });
+          node = parse(p);
+          p.expectEnd();
+        } catch {
+          continue;
+        }
+        A(call)._argNodes.push(node);
+        return this.lexical(node, scope);
+      }
+    }
+    const declared = new Set<string>();
+    let splice = 0;
+    for (let i = 0; i < toks.length; i++) {
+      const t = toks[i];
+      const prev = toks[i - 1];
+      if (t.kind === "op" && t.text === "(" && (splice || (quote && prev?.text === "$"))) splice++;
+      else if (t.kind === "op" && t.text === ")" && splice) splice--;
+      if (t.kind !== "ident" || prev?.text === ".") continue;
+      if (!quote || splice || prev?.text === "$") {
+        this.resolve(t, scope);
+        continue;
+      }
+      const next = toks[i + 1]?.text;
+      if (next === ":=" || next === ":" || next === "::") declared.add(t.text);
+      if (!declared.has(t.text)) this.resolve(t, scope, (s) => s.kind === "global" || s.kind === "pkg");
+    }
   }
 
   globals(): Sym[] {
@@ -230,8 +426,49 @@ export function scopeAt(a: Analysis, file: string, p: Position): { scope: Scope;
       scope = s;
       depth++;
     }
+    let inner: { scope: Scope; depth: number } | undefined;
+    for (const x of generated(n)) {
+      const found = generatedScopeAt(x, file, p);
+      if (found && found.depth > (inner?.depth ?? 0)) inner = found;
+    }
+    if (inner) {
+      scope = inner.scope;
+      depth += inner.depth;
+    }
   }
   return { scope, depth };
+}
+
+/** Code the analyzer made from `n` (macro expansions, hoisted statements): not children, but scopes live there. */
+function generated(n: Node): Node[] {
+  const a = A(n);
+  return [...(a._expansion ? [a._expansion as Node] : []), ...((a._pre as Stmt[] | undefined) ?? []), ...((a._argNodes as Node[] | undefined) ?? [])];
+}
+
+/** Where the tokens of `n` that come from `file` start and end. */
+function spanIn(n: Node, file: string): Range | undefined {
+  if (n.k === "Block" && n.end <= n.start) {
+    const spans = n.stmts.map((s) => spanIn(s, file)).filter((r): r is Range => !!r);
+    return spans.length ? { start: spans[0].start, end: spans[spans.length - 1].end } : undefined;
+  }
+  const toks = n.toks.slice(n.start, n.end).filter((t) => t.pos.file === file);
+  return toks.length ? { start: tokRange(toks[0]).start, end: tokRange(toks[toks.length - 1]).end } : undefined;
+}
+
+/** The innermost analyzed block around `p` inside generated code, by the source positions its tokens keep. */
+function generatedScopeAt(root: Node, file: string, p: Position): { scope: Scope; depth: number } | undefined {
+  let best: { scope: Scope; depth: number } | undefined;
+  const visit = (n: Node, depth: number) => {
+    const s: Scope | undefined = A(n)._scope;
+    if (n.k === "Block" && s) {
+      const span = spanIn(n, file);
+      if (!span || !contains(span, p)) return;
+      best = { scope: s, depth: ++depth };
+    }
+    for (const c of [...children(n), ...generated(n)]) visit(c, depth);
+  };
+  visit(root, 0);
+  return best;
 }
 
 // ---- types ----
@@ -442,12 +679,24 @@ export function references(index: Index, file: string, p: Position, includeDecl 
   return index.refsTo(ref.sym).filter((r) => includeDecl || !r.decl).map((r) => ({ file: r.file, range: r.range }));
 }
 
-export function rename(index: Index, file: string, p: Position, newName: string): { edits: Location[]; error?: string } {
+export interface RenameEdit extends Location {
+  text: string;
+}
+
+export function rename(index: Index, file: string, p: Position, newName: string): { edits: RenameEdit[]; error?: string } {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(newName)) return { edits: [], error: `'${newName}' is not a valid identifier` };
   const ref = index.refAt(file, p);
   if (!ref) return { edits: [], error: "nothing to rename here" };
-  if (!declToken(ref.sym)) return { edits: [], error: "this symbol is not declared in the workspace" };
-  return { edits: index.refsTo(ref.sym).map((r) => ({ file: r.file, range: r.range })) };
+  const decl = declToken(ref.sym);
+  if (!decl || !index.a.sources.some((s) => s.path === decl.pos.file) || decl.pos.file === schedSourcePath())
+    return { edits: [], error: "this symbol is not declared in the workspace" };
+  return {
+    edits: index.refsTo(ref.sym).map((r) => {
+      // `import "path"` has no name to replace: give it an alias
+      if (r.decl && ref.sym.kind === "pkg" && !ref.sym.stmt.alias) return { file: r.file, range: { start: r.range.start, end: r.range.start }, text: `${newName} ` };
+      return { file: r.file, range: r.range, text: newName };
+    }),
+  };
 }
 
 // ---- outline ----
@@ -574,7 +823,7 @@ export function complete(cur: Analysis, fallback: Analysis | undefined, file: st
   }
   for (const k of KEYWORDS) if (!seen.has(k)) out.push({ label: k, kind: "keyword" });
   for (const t of BUILTIN_TYPES) if (!seen.has(t)) out.push({ label: t, kind: "type", detail: "builtin type" });
-  if (/comptime\s+proc\s*\([^)]*$/.test(lineText) || /->\s*\w*$/.test(lineText)) {
+  if (/::\s*proc!\s*\([^)]*$/.test(lineText) || /->\s*\w*$/.test(lineText)) {
     for (const k of MACRO_KINDS) out.push({ label: k, kind: "type", detail: "macro parameter kind" });
   }
   return out;

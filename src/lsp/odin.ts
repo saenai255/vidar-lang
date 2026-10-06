@@ -12,8 +12,8 @@ import { Program as Analysis, Output, outputName } from "../project";
 /**
  * Forwards requests on plain Odin code to ols, run over a shadow copy of the generated Odin.
  *
- * Generated code keeps the source's line numbers, and lines vidar does not rewrite come out
- * unchanged, so a position on such a line is the same position in the shadow file.
+ * Lines vidar does not rewrite come out unchanged, and the emitter's line map says where each
+ * one went, so a position on such a line has a matching position in the shadow file.
  */
 
 interface ShadowFile {
@@ -27,13 +27,19 @@ interface Shadow {
   dir: string;
   files: Map<string, ShadowFile>;
   bySource: Map<string, string>;
-  /** source lines per output file; shadow lines past this are generated */
-  sourceLines: Map<string, number>;
+  /** per output file, the source line of each shadow line (see `EmittedFile.lines`) */
+  lines: Map<string, number[]>;
 }
 
 interface GoodEmit {
   sourceText: string;
   output: string;
+  lines: number[];
+}
+
+export interface Patched {
+  text: string;
+  lines: number[];
 }
 
 const TIMEOUT_MS = 2000;
@@ -42,18 +48,34 @@ const GENERATED_NAME = /^__|^vidar_runtime$/;
 /**
  * Generated Odin for `current` built from an older (source, output) pair: unchanged leading and
  * trailing lines keep their generated text, edited lines are taken from `current` as is.
+ * `oldLines` is the old output's line map; without one, output lines are taken to match source lines.
  */
-export function patch(oldSource: string, oldOutput: string, current: string): string {
+export function patch(oldSource: string, oldOutput: string, current: string, oldLines?: number[]): Patched {
   const s0 = oldSource.split("\n");
   const o0 = oldOutput.split("\n");
   const s1 = current.split("\n");
-  if (o0.length < s0.length) return current;
+  const map = oldLines ?? o0.map((_, i) => (i < s0.length ? i + 1 : 0));
+  if (o0.length < s0.length && !oldLines) return { text: current, lines: s1.map((_, i) => i + 1) };
   let pre = 0;
   while (pre < s0.length && pre < s1.length && s0[pre] === s1[pre]) pre++;
   let suf = 0;
   while (suf < s0.length - pre && suf < s1.length - pre && s0[s0.length - 1 - suf] === s1[s1.length - 1 - suf]) suf++;
-  return [...o0.slice(0, pre), ...s1.slice(pre, s1.length - suf), ...o0.slice(s0.length - suf)].join("\n");
+  // output lines before the first one from an edited line, and from the first one after them
+  let cut = 0;
+  while (cut < o0.length && map[cut] !== 0 && Math.abs(map[cut]) <= pre) cut++;
+  let tail = cut;
+  while (tail < o0.length && map[tail] !== 0 && Math.abs(map[tail]) <= s0.length - suf) tail++;
+  const shift = s1.length - s0.length;
+  const middle = s1.slice(pre, s1.length - suf);
+  return {
+    text: [...o0.slice(0, cut), ...middle, ...o0.slice(tail)].join("\n"),
+    lines: [...map.slice(0, cut), ...middle.map((_, i) => pre + i + 1), ...map.slice(tail).map((l) => (l === 0 ? 0 : l + Math.sign(l) * shift))],
+  };
 }
+
+const params = (t: { textDocument: { uri: string }; position: Position }) => ({ textDocument: t.textDocument, position: t.position });
+
+const identity = (text: string): number[] => text.split("\n").map((_, i) => i + 1);
 
 export class OdinBridge {
   private proc?: ChildProcess;
@@ -125,7 +147,7 @@ export class OdinBridge {
     for (const [name, text] of out.files) {
       const src = out.sourceOf.get(name);
       const sourceText = src && a.sources.find((s) => s.path === src)?.text;
-      if (sourceText !== undefined) this.lastGood.set(src!, { sourceText, output: text });
+      if (sourceText !== undefined) this.lastGood.set(src!, { sourceText, output: text, lines: out.lineMap.get(name) ?? identity(text) });
       else extra.set(name, text);
     }
     this.extraFiles.set(program, extra);
@@ -136,7 +158,7 @@ export class OdinBridge {
     if (this.disabled || !(await this.start())) return;
     let shadow = this.shadows.get(program);
     if (!shadow) {
-      shadow = { dir: join(this.root, String(this.shadows.size)), files: new Map(), bySource: new Map(), sourceLines: new Map() };
+      shadow = { dir: join(this.root, String(this.shadows.size)), files: new Map(), bySource: new Map(), lines: new Map() };
       this.shadows.set(program, shadow);
     }
     for (const pkg of a.packages) {
@@ -145,8 +167,7 @@ export class OdinBridge {
         const text = texts.get(f.path) ?? a.sources.find((s) => s.path === f.path)?.text;
         if (text === undefined) continue;
         shadow.bySource.set(f.path, name);
-        this.put(shadow, name, this.shadowText(f.path, text), f.path);
-        shadow.sourceLines.set(name, text.split("\n").length);
+        this.putShadow(shadow, name, f.path, text);
       }
     }
     for (const [name, text] of this.extraFiles.get(program) ?? []) this.put(shadow, name, text);
@@ -156,14 +177,15 @@ export class OdinBridge {
   private refresh(shadow: Shadow, path: string, text: string): string | undefined {
     const name = shadow.bySource.get(path);
     if (!name) return undefined;
-    this.put(shadow, name, this.shadowText(path, text), path);
-    shadow.sourceLines.set(name, text.split("\n").length);
+    this.putShadow(shadow, name, path, text);
     return name;
   }
 
-  private shadowText(path: string, text: string): string {
+  private putShadow(shadow: Shadow, name: string, path: string, text: string): void {
     const good = this.lastGood.get(path);
-    return good ? patch(good.sourceText, good.output, text) : text;
+    const out = good ? patch(good.sourceText, good.output, text, good.lines) : { text, lines: identity(text) };
+    this.put(shadow, name, out.text, path);
+    shadow.lines.set(name, out.lines);
   }
 
   private put(shadow: Shadow, name: string, text: string, source?: string): void {
@@ -191,8 +213,11 @@ export class OdinBridge {
     const name = this.refresh(shadow, path, text);
     if (!name) return undefined;
     const sourceLine = text.split("\n")[p.line];
-    if (sourceLine === undefined || shadow.files.get(name)!.text.split("\n")[p.line] !== sourceLine) return undefined;
-    return { textDocument: { uri: pathToFileURL(join(shadow.dir, name)).toString() }, position: p };
+    const shadowLines = shadow.files.get(name)!.text.split("\n");
+    const lines = shadow.lines.get(name) ?? [];
+    const line = lines.findIndex((l, i) => l === p.line + 1 && shadowLines[i] === sourceLine);
+    if (sourceLine === undefined || line < 0) return undefined;
+    return { textDocument: { uri: pathToFileURL(join(shadow.dir, name)).toString() }, position: { line, character: p.character }, lines };
   }
 
   private async request<T>(method: string, params: unknown): Promise<T | undefined> {
@@ -208,39 +233,48 @@ export class OdinBridge {
   }
 
   /** Maps a location in the shadow tree back to its source; drops generated code. */
-  private toSource(uri: string, line: number): string | null | undefined {
+  private toSource(uri: string, line: number): { uri: string; line: number } | null {
     const file = uri.startsWith("file:") ? fileURLToPath(uri) : uri;
-    if (!this.root || !file.startsWith(this.root + sep)) return uri;
+    if (!this.root || !file.startsWith(this.root + sep)) return { uri, line };
     for (const shadow of this.shadows.values()) {
       if (!file.startsWith(shadow.dir + sep)) continue;
       const name = relative(shadow.dir, file).split(sep).join("/");
       const entry = shadow.files.get(name);
-      if (!entry?.source || line >= (shadow.sourceLines.get(name) ?? 0)) return null;
-      return pathToFileURL(entry.source).toString();
+      const source = shadow.lines.get(name)?.[line] ?? 0;
+      if (!entry?.source || source <= 0) return null;
+      return { uri: pathToFileURL(entry.source).toString(), line: source - 1 };
     }
     return null;
   }
 
+  /** A range on the shadow line of `t` as a range on the source line `p`; undefined for any other line. */
+  private onSourceLine<R extends { start: Position; end: Position }>(r: R | undefined, t: { position: Position }, p: Position): R | undefined {
+    if (!r || r.start.line !== t.position.line || r.end.line !== t.position.line) return undefined;
+    return { ...r, start: { ...r.start, line: p.line }, end: { ...r.end, line: p.line } };
+  }
+
   async hover(program: string, path: string, text: string, p: Position): Promise<Hover | undefined> {
     const t = this.target(program, path, text, p);
-    return t && ((await this.request<Hover | null>("textDocument/hover", t)) ?? undefined);
+    const res = t && (await this.request<Hover | null>("textDocument/hover", params(t)));
+    return res ? { ...res, range: this.onSourceLine(res.range, t, p) } : undefined;
   }
 
   async signatureHelp(program: string, path: string, text: string, p: Position): Promise<SignatureHelp | undefined> {
     const t = this.target(program, path, text, p);
-    return t && ((await this.request<SignatureHelp | null>("textDocument/signatureHelp", t)) ?? undefined);
+    return t && ((await this.request<SignatureHelp | null>("textDocument/signatureHelp", params(t))) ?? undefined);
   }
 
   async definition(program: string, path: string, text: string, p: Position): Promise<Location[]> {
     const t = this.target(program, path, text, p);
     if (!t) return [];
-    const res = await this.request<Location | Location[] | LocationLink[] | null>("textDocument/definition", t);
+    const res = await this.request<Location | Location[] | LocationLink[] | null>("textDocument/definition", params(t));
     const list = res ? (Array.isArray(res) ? res : [res]) : [];
     const out: Location[] = [];
     for (const l of list) {
       const loc = "targetUri" in l ? { uri: l.targetUri, range: l.targetSelectionRange } : l;
-      const uri = this.toSource(loc.uri, loc.range.start.line);
-      if (uri) out.push({ uri, range: loc.range });
+      const src = this.toSource(loc.uri, loc.range.start.line);
+      const shift = src ? src.line - loc.range.start.line : 0;
+      if (src) out.push({ uri: src.uri, range: { start: { ...loc.range.start, line: src.line }, end: { ...loc.range.end, line: loc.range.end.line + shift } } });
     }
     return out;
   }
@@ -248,8 +282,28 @@ export class OdinBridge {
   async completion(program: string, path: string, text: string, p: Position): Promise<CompletionItem[]> {
     const t = this.target(program, path, text, p);
     if (!t) return [];
-    const res = await this.request<CompletionItem[] | CompletionList | null>("textDocument/completion", t);
+    const res = await this.request<CompletionItem[] | CompletionList | null>("textDocument/completion", params(t));
     const items = Array.isArray(res) ? res : res?.items ?? [];
-    return items.filter((i) => !GENERATED_NAME.test(i.label));
+    return items.filter((i) => !GENERATED_NAME.test(i.label)).map((i) => this.completionOnSource(i, t, p));
+  }
+
+  private completionOnSource(item: CompletionItem, t: { position: Position; lines: number[] }, p: Position): CompletionItem {
+    const edit = item.textEdit;
+    let textEdit = edit;
+    if (edit && "range" in edit) {
+      const range = this.onSourceLine(edit.range, t, p);
+      textEdit = range && { ...edit, range };
+    } else if (edit) {
+      const insert = this.onSourceLine(edit.insert, t, p);
+      const replace = this.onSourceLine(edit.replace, t, p);
+      textEdit = insert && replace && { ...edit, insert, replace };
+    }
+    // edits elsewhere in the file (auto-imports) go to the source line their shadow line came from
+    const additionalTextEdits = item.additionalTextEdits?.flatMap((e) => {
+      const line = t.lines[e.range.start.line] ?? 0;
+      if (line <= 0 || e.range.end.line !== e.range.start.line) return [];
+      return [{ ...e, range: { start: { ...e.range.start, line: line - 1 }, end: { ...e.range.end, line: line - 1 } } }];
+    });
+    return { ...item, textEdit, additionalTextEdits };
   }
 }

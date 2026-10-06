@@ -1,0 +1,6 @@
+// error: comptime!: use 'take value' to give the block its value
+package main
+main :: proc() {
+	x := comptime! { y := 2; return y * 2 }
+	_ = x
+}

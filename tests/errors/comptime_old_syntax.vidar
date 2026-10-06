@@ -1,0 +1,4 @@
+// error: comptime procs are declared as name :: proc!(...) { ... }
+package main
+fib :: comptime proc(n: int) -> int { return n }
+main :: proc() {}

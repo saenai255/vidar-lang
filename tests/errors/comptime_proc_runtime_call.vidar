@@ -1,6 +1,6 @@
 // error: 'fib' is a comptime proc
 package main
-fib :: comptime proc(n: int) -> int { return n }
+fib :: proc!(n: int) -> int { return n }
 main :: proc() {
 	k := 3
 	x := fib(k)

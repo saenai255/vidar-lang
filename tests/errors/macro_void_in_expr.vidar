@@ -1,4 +1,4 @@
 // error: returns nothing and can only be used as a statement
 package main
-noop :: comptime proc() { }
+noop :: proc!() { }
 main :: proc() { x := noop!() }

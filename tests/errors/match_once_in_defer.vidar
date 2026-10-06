@@ -1,6 +1,0 @@
-// error: 'next()' must be evaluated once here; assign it to a variable first
-package main
-next :: proc() -> int { return 1 }
-main :: proc() {
-	defer _ = match!(next()) { 1 => true, _ => false }
-}

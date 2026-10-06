@@ -27,7 +27,7 @@ sprite_draw :: proc(s: ^Sprite) -> string { return fmt.tprintf("<%s>", s.label) 
 
 impl Entity for Sprite { name = sprite_name, draw = sprite_draw }
 
-log :: comptime proc(msg: Expr(string)) -> Stmt {
+log :: proc!(msg: Expr(string)) -> Stmt {
 	return quote { fmt.println("[game]", $msg) }
 }
 

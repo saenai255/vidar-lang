@@ -2,7 +2,7 @@ import { CompileError, Pos, Token } from "./lexer";
 import { Block, Expr, File, Node, Param, ProcSig, Stmt, children } from "./ast";
 import { Parser } from "./parser";
 import { CaptureSym, Ctx, GlobalSym, LocalSym, PackageInfo, PkgSym, Scope, Sym, Ty } from "./scope";
-import { CallSpan, Interp, NotConstant, Val, joinTokens, respace, valueToTokens, tokensOf } from "./comptime";
+import { CallSpan, Interp, NotConstant, Val, joinTokens, repeatable, respace, valueToTokens, tokensOf } from "./comptime";
 
 /** Annotation accessor: analysis results live in `_`-prefixed fields on nodes. */
 export const A = (n: object) => n as Record<string, any>;
@@ -10,7 +10,6 @@ export const A = (n: object) => n as Record<string, any>;
 type ProcLit = Extract<Expr, { k: "ProcLit" }>;
 type ValueDecl = Extract<Stmt, { k: "ValueDecl" }>;
 type MacroCall = Extract<Expr, { k: "MacroCall" }>;
-type ComptimeExpr = Extract<Expr, { k: "Comptime" }>;
 type ImplBlock = Extract<Stmt, { k: "ImplBlock" }>;
 type Selector = Extract<Expr, { k: "Selector" }>;
 type CompoundLit = Extract<Expr, { k: "CompoundLit" }>;
@@ -333,11 +332,13 @@ export class Analyzer {
       case "RangeFor": {
         this.expr(s.x, scope);
         const inner = new Scope(scope);
-        const iterTy = this.typeOf(s.x, scope);
+        const isRange = s.x.k === "Binary" && (s.x.op === "..<" || s.x.op === "..=");
+        const iterTy = isRange ? undefined : this.typeOf(s.x, scope);
+        const rangeTy = isRange ? this.rangeElemTy(s.x as Extract<Expr, { k: "Binary" }>, scope) : undefined;
         A(s)._syms = s.vals.map((v, i) =>
           this.declareLocal(v.name, inner, {
             declKind: "range",
-            ty: i === 0 ? (iterTy && this.elemOf(iterTy)) : { t: "node", node: synthIdent("int", posOf(s)), scope: this.global },
+            ty: i === 0 ? (rangeTy ?? (iterTy && this.elemOf(iterTy))) : { t: "node", node: synthIdent("int", posOf(s)), scope: this.global },
             declTok: s.toks[v.tok],
           }),
         );
@@ -367,9 +368,17 @@ export class Analyzer {
         this.stmt(s.stmt, scope);
         return;
       }
+      case "Take":
+        throw new CompileError("'take' gives the value of a do! { ... } or comptime! { ... } block, and cannot be used in a proc nested inside it", posOf(s));
       default:
         for (const c of children(s)) this.node(c, scope);
     }
+  }
+
+  /** `for i in lo..<hi`: the type of the bounds, `int` for untyped ones. */
+  private rangeElemTy(r: Extract<Expr, { k: "Binary" }>, scope: Scope): Ty {
+    const typed = [this.typeOf(r.x, scope), this.typeOf(r.y, scope)].find((t) => t && this.normalize(t)?.t !== "untyped");
+    return typed ?? { t: "node", node: synthIdent("int", posOf(r)), scope: this.global };
   }
 
   private exprStmtFrom(e: Expr): Stmt {
@@ -460,7 +469,7 @@ export class Analyzer {
         const fnSym = e.fn.k === "Ident" ? A(e.fn)._sym : e.fn.k === "Selector" ? A(e.fn)._pkgMember : undefined;
         const ifaceVal = fnSym?.kind === "global" ? fnSym.decl.values[fnSym.index] : undefined;
         if (ifaceVal?.k === "ProcLit" && ifaceVal.comptime)
-          throw new CompileError(`'${fnSym!.name}' is a comptime proc: invoke it as a macro with '${fnSym!.name}!(...)', or fold it with 'comptime ${fnSym!.name}(...)' when every argument is a constant`, posOf(e));
+          throw new CompileError(`'${fnSym!.name}' is a comptime proc: call it as '${fnSym!.name}!(...)'`, posOf(e));
         if (ifaceVal?.k === "InterfaceType") {
           A(e)._ifaceConv = fnSym;
           if (e.args.length === 1) this.requirePointer(e.args[0], fnSym);
@@ -503,12 +512,6 @@ export class Analyzer {
       case "InterfaceType":
         if (!A(e)._ifaceSym) throw new CompileError("interfaces must be declared as named constants: Name :: interface { ... }", posOf(e));
         return;
-      case "Comptime": {
-        const out = this.foldComptime(e, scope);
-        A(e)._expansion = out;
-        this.expr(out, scope);
-        return;
-      }
       case "Quote":
         throw new CompileError("'quote' is only allowed inside comptime procs", posOf(e));
       default:
@@ -538,7 +541,7 @@ export class Analyzer {
         return sym;
       });
     }
-    A(p)._params = this.sig(p.sig, root, true, p.toks);
+    A(p)._params = this.sig(p.sig, root, true, p.toks, (r) => (A(p)._results = r));
     if (p.body) {
       this.resultStack.push({ sig: p.sig, scope: root, proc: p });
       try {
@@ -549,9 +552,9 @@ export class Analyzer {
     }
   }
 
-  private sig(sig: ProcSig, scope: Scope, declare: boolean, toks?: Token[]): LocalSym[] {
+  private sig(sig: ProcSig, scope: Scope, declare: boolean, toks?: Token[], onResults?: (results: LocalSym[]) => void): LocalSym[] {
     const params = this.params(sig.params, scope, declare && !sig.unnamed, toks);
-    this.params(sig.results, scope, declare && !sig.resultsUnnamed, toks);
+    onResults?.(this.params(sig.results, scope, declare && !sig.resultsUnnamed, toks));
     return params;
   }
 
@@ -704,8 +707,6 @@ export class Analyzer {
         return { t: "sig", closure: !!e.captures, sig: e.sig, scope };
       case "MacroCall":
         return A(e)._expansion ? this.typeOf(A(e)._expansion, scope, depth + 1) : undefined;
-      case "Comptime":
-        return this.typeOf(A(e)._expansion ?? e.x, scope, depth + 1);
       case "Call": {
         const fn = e.fn;
         if (fn.k === "Ident") {
@@ -1075,11 +1076,18 @@ export class Analyzer {
   // ---- macros ----
 
   macroSym(call: MacroCall, scope: Scope): { sym: GlobalSym; lit: ProcLit } {
+    const target = this.macroTarget(call, scope);
+    if (!target) throw new CompileError(`'${call.path.join(".")}' is not a comptime proc`, posOf(call));
+    return target;
+  }
+
+  /** The comptime proc `name!(...)` invokes; undefined when `name` is something else (a proc run at compile time). */
+  macroTarget(call: MacroCall, scope: Scope): { sym: GlobalSym; lit: ProcLit } | undefined {
     let sym: Sym | undefined;
-    if (call.path.length === 1) sym = this.lookup(call.path[0], scope, call);
+    if (call.path.length === 1) sym = this.lookup(call.path[0], scope, null);
     else {
       const p = this.lookup(call.path[0], scope, null);
-      if (p?.kind !== "pkg" || !p.target) throw new CompileError(`'${call.path[0]}' is not an imported vidar package`, posOf(call));
+      if (p?.kind !== "pkg" || !p.target) return undefined;
       sym = p.target.scope.syms.get(call.path[1]);
       if (!sym) throw new CompileError(`package '${p.name}' has no member '${call.path[1]}'`, posOf(call));
       if (sym.kind === "global" && sym.isPrivate && scope.package !== sym.pkg)
@@ -1087,9 +1095,17 @@ export class Analyzer {
       A(call)._partSyms = [p, sym];
     }
     const lit = sym?.kind === "global" ? sym.decl.values[sym.index] : undefined;
-    if (!sym || sym.kind !== "global" || !lit || lit.k !== "ProcLit" || !lit.comptime)
-      throw new CompileError(`'${call.path.join(".")}' is not a comptime proc`, posOf(call));
+    if (!sym || sym.kind !== "global" || !lit || lit.k !== "ProcLit" || !lit.comptime) return undefined;
     return { sym, lit };
+  }
+
+  /** `name!(args)` as the plain call `name(args)`. */
+  macroAsCall(call: MacroCall): Expr {
+    const name = call.path.join(".");
+    if (call.blockArg) throw new CompileError(`'${name}' is not a comptime proc, so '${name}!' runs it at compile time and takes no trailing block`, posOf(call));
+    const toks = call.toks.slice(call.start, call.end);
+    const bang = toks.findIndex((t) => t.kind === "op" && t.text === "!");
+    return this.parseTokens([...toks.slice(0, bang), ...toks.slice(bang + 1), eofTok(posOf(call))], (p) => p.parseExpr());
   }
 
   /** Counts macro expansions that are still being analyzed, so self-expanding macros are caught. */
@@ -1117,6 +1133,7 @@ export class Analyzer {
   }
 
   expandMacro(call: MacroCall, scope: Scope, position: "expr" | "stmt"): Expr | Stmt[] {
+    if (!this.macroTarget(call, scope)) return this.foldCall(call, scope, position);
     const { sym, lit, args } = this.macroInvocation(call, scope);
     {
       let result: Val;
@@ -1125,7 +1142,7 @@ export class Analyzer {
         result = this.interp.callComptime(sym, lit, args, posOf(call), scope);
       } catch (err) {
         if (err instanceof CompileError) {
-          err.message = `in expansion of '${sym.name}!': ${err.message}`;
+          if (!err.message.startsWith(`${sym.name}!:`)) err.message = `in expansion of '${sym.name}!': ${err.message}`;
           err.pos ??= posOf(call);
         }
         throw err;
@@ -1136,29 +1153,40 @@ export class Analyzer {
     }
   }
 
-  /** The code a `comptime expr` folds to. */
-  private foldComptime(e: ComptimeExpr, scope: Scope): Expr {
-    const pos = posOf(e);
+  /** `name!(args)` where `name` is not a comptime proc: the call runs in the transpiler and folds to its result. */
+  private foldCall(call: MacroCall, scope: Scope, position: "expr" | "stmt"): Expr | Stmt[] {
+    const name = call.path.join(".");
+    const pos = posOf(call);
+    if (call.path.length === 1 && !this.lookup(name, scope, null) && !this.interp.isBuiltin(name)) throw new CompileError(`'${name}' is not declared`, pos);
     let v: Val;
     try {
-      v = this.interp.evalAt(e.x, scope, pos);
+      v = this.interp.evalAt(this.macroAsCall(call), scope, pos);
     } catch (err) {
-      if (err instanceof NotConstant) err.message = `comptime expression cannot be evaluated at compile time: ${err.message}`;
-      else if (err instanceof CompileError) err.message = `in comptime expression: ${err.message}`;
+      if (err instanceof NotConstant) err.message = `'${name}!' cannot run at compile time: ${err.message}`;
+      else if (err instanceof CompileError) err.message = `in '${name}!': ${err.message}`;
       throw err;
     }
-    if (v.k === "proc") throw new CompileError("comptime expression produced a proc, which is already a constant: drop 'comptime'", pos);
-    const toks = respace(this.comptimeTokens(v, pos), this.callSpan(e));
-    return this.parseTokens([...toks, eofTok(pos)], (p) => p.parseExpr());
+    if (position === "stmt") return [];
+    return this.foldValue(v, call, `'${name}!'`);
+  }
+
+  /** The literal a compile-time value folds to. */
+  private foldValue(v: Val, call: MacroCall, what: string): Expr {
+    const pos = posOf(call);
+    if (v.k === "void") throw new CompileError(`${what} has no value`, pos);
+    if (v.k === "proc") throw new CompileError(`${what} produced a proc, which is already a constant`, pos);
+    let toks = this.comptimeTokens(v, pos);
+    if (v.k === "int" && v.ty && v.ty !== "int") toks = [...tokensOf(`${v.ty}(`, pos), ...toks, ...tokensOf(")", pos)];
+    return this.parseTokens([...respace(toks, this.callSpan(call)), eofTok(pos)], (p) => p.parseExpr());
   }
 
   private comptimeTokens(v: Val, pos: Pos): Token[] {
     const brace = (inner: Token[]): Token[] => [{ kind: "op", text: "{", pre: "", pos }, ...inner, { kind: "op", text: "}", pre: "", pos }];
     switch (v.k) {
       case "void":
-        throw new CompileError("comptime expression has no value", pos);
+        throw new CompileError("a compile-time value is missing", pos);
       case "stmts":
-        throw new CompileError("comptime expression produced statements, not an expression", pos);
+        throw new CompileError("produced statements, not a value", pos);
       case "array":
         return brace(v.items.flatMap((x, i) => [...(i ? [{ kind: "op" as const, text: ",", pre: "", pos }] : []), ...this.comptimeTokens(x, pos)]));
       case "struct":
@@ -1174,7 +1202,7 @@ export class Analyzer {
     return valueToTokens(v, pos, "expr");
   }
 
-  private callSpan(call: MacroCall | ComptimeExpr): CallSpan {
+  private callSpan(call: MacroCall): CallSpan {
     return { file: posOf(call).file, from: posOf(call).line, to: call.toks[call.end - 1].pos.line };
   }
 
@@ -1269,13 +1297,15 @@ export class Analyzer {
       ...tokensOf(") ; _ = __macro_typecheck }", pos), { kind: "eof" as const, text: "", pre: "", pos },
     ];
     const check = this.parseTokens([...respace(toks.slice(0, -1)), toks[toks.length - 1]], (p) => p.parseStmt());
+    A(check)._compact = true;
     this.stmt(check, scope);
     (A(owner)._pre ??= []).push(check);
   }
 
   /** Declares `name := <toks>` just before the statement being analyzed; the result names it. */
   hoist(toks: Token[], scope: Scope | undefined, pos: Pos, name: string): Val {
-    const owner = this.hoistTarget(scope, pos, `'${joinTokens(toks)}' must be evaluated once here; assign it to a variable first`);
+    const text = `'${joinTokens(toks)}'`;
+    const owner = this.hoistTarget(scope, pos, `${text} must be evaluated once here; assign it to a variable first`, text);
     const decl = this.parseTokens([...respace([...tokensOf(`${name} :=`, pos), ...toks]), eofTok(pos)], (p) => p.parseStmt());
     this.stmt(decl, scope!);
     (A(owner)._pre ??= []).push(decl);
@@ -1283,30 +1313,85 @@ export class Analyzer {
   }
 
   /** The statement code can be hoisted in front of; anywhere else, that could change when (or whether) it runs. */
-  private hoistTarget(scope: Scope | undefined, pos: Pos, message: string): Node {
+  private hoistTarget(scope: Scope | undefined, pos: Pos, message: string, what: string): Node {
     const owner = this.stmtStack[this.stmtStack.length - 1];
     if (!owner || !scope?.ctx || !["ValueDecl", "Assign", "ExprStmt", "Return"].includes(owner.k)) throw new CompileError(message, pos);
+    const call = this.macroCalls[this.macroCalls.length - 1];
+    if (call) this.checkHoistOrder(owner, call, what, pos);
     return owner;
   }
 
   /**
-   * `do! { ...; return v }`: the block runs just before the current statement, as a labeled block
-   * where each `return v` stores `v` and leaves it; the result names the stored value.
+   * Hoisted code runs before the whole statement. That's only the same as running it in place when
+   * it would run unconditionally, and nothing with effects comes before it.
+   */
+  private checkHoistOrder(owner: Node, call: MacroCall, what: string, pos: Pos): void {
+    const path = this.pathTo(owner, call);
+    if (!path) return;
+    const fix = "compute it in a statement of its own first";
+    for (let i = 0; i + 1 < path.length; i++) {
+      const parent = path[i];
+      const child = path[i + 1];
+      if (parent.k === "Binary" && ["&&", "||", "or_else"].includes(parent.op) && child === parent.y)
+        throw new CompileError(`${what} would run before the statement, even when the right side of '${parent.op}' is skipped; ${fix}`, pos);
+      if (parent.k === "Ternary" && child !== parent.cond)
+        throw new CompileError(`${what} would run before the statement, even when its branch of the ternary is not taken; ${fix}`, pos);
+      for (const sib of children(parent)) {
+        if (sib === child) break;
+        if (!this.pure(sib)) throw new CompileError(`${what} would run before '${nodeText(sib)}', which comes first in the statement; ${fix}`, pos);
+      }
+    }
+  }
+
+  private pathTo(root: Node, target: Node): Node[] | undefined {
+    if (root === target) return [root];
+    const kids = children(root);
+    if (root.k === "MacroCall" && A(root)._expansion) kids.push(A(root)._expansion);
+    for (const k of kids) {
+      const p = this.pathTo(k, target);
+      if (p) return [root, ...p];
+    }
+    return undefined;
+  }
+
+  /** Evaluating `n` has no effects, so moving code in front of it changes nothing. */
+  private pure(n: Node): boolean {
+    if (isTypeExpr(n as Expr)) return true;
+    switch (n.k) {
+      case "Ident": case "Lit": case "ImplicitSelector": case "ProcLit":
+        return true;
+      case "MacroCall":
+        return !!A(n)._expansion && this.pure(A(n)._expansion);
+      case "Call": {
+        const fn = n.fn;
+        const conversion = fn.k === "Ident" && (INT_TYPES.has(fn.name) || FLOAT_TYPES.has(fn.name) || ["string", "bool", "rune", "cstring", "len", "cap", "size_of", "align_of", "type_of", "typeid_of"].includes(fn.name)
+          || !!this.typeDeclOf(this.lookup(fn.name, A(n)._scope ?? this.global, null)));
+        return conversion && n.args.every((a) => this.pure(a));
+      }
+      case "Paren": case "Unary": case "Selector": case "Deref": case "Binary": case "Index": case "Ternary": case "Cast": case "CompoundLit": case "FieldValue":
+        return repeatable(n as Expr) || children(n).every((c) => this.pure(c));
+    }
+    return false;
+  }
+
+  /**
+   * `do! { ...; take v }`: the block runs just before the current statement, as a labeled block
+   * where each `take v` stores `v` and leaves it; the result names the stored value.
    */
   blockValue(type: Token[] | undefined, body: Token[], scope: Scope | undefined, pos: Pos, id: number): Val {
-    const owner = this.hoistTarget(scope, pos, "do! can only be used in a declaration, an assignment, an expression statement or a return");
+    const owner = this.hoistTarget(scope, pos, "do! can only be used in a declaration, an assignment, an expression statement or a return", "do!");
     const label = `__do${id}`;
     const result = `__do${id}_result`;
-    const block = this.parseTokens([...body, eofTok(pos)], (p) => p.parseBlock());
-    const returns: Extract<Stmt, { k: "Return" }>[] = [];
-    const findReturns = (n: Node) => {
+    const block = new Parser([...body, eofTok(pos)], { take: true }).parseBlock();
+    const returns: Extract<Stmt, { k: "Take" }>[] = [];
+    const findTakes = (n: Node) => {
       if (n.k === "ProcLit") return;
-      if (n.k === "Return") returns.push(n);
-      children(n).forEach(findReturns);
+      if (n.k === "Take") returns.push(n);
+      children(n).forEach(findTakes);
     };
-    block.stmts.forEach(findReturns);
-    if (!returns.length) throw new CompileError("do!: the block needs a 'return value'", pos);
-    for (const r of returns) if (r.results.length !== 1) throw new CompileError("do!: 'return' takes exactly one value", posOf(r));
+    block.stmts.forEach(findTakes);
+    if (!returns.length) throw new CompileError("do!: the block needs a 'take value'", pos);
+    for (const r of returns) if (r.results.length !== 1) throw new CompileError("do!: 'take' takes exactly one value", posOf(r));
 
     const snippet = (src: string, at: Pos, pre: string) => respace(tokensOf(src, at).filter((t) => t.kind !== "semi" || t.text === ";")).map((t, j) => (j ? t : { ...t, pre }));
     const toks: Token[] = snippet(`${label}:`, pos, "");
@@ -1317,17 +1402,19 @@ export class Analyzer {
       // Odin rejects `do { ... }`
       const viaDo = before[before.length - 1]?.kind === "kw" && before[before.length - 1].text === "do";
       if (viaDo) before.pop();
-      toks.push(...before, ...snippet(`{ ${result} =`, ret.pos, viaDo ? " " : ret.pre), ...slice(r.results[0]), ...snippet(`; break ${label} }`, ret.pos, ""));
+      // `do take v` needs braces around the two statements it becomes
+      toks.push(...before, ...snippet(`${viaDo ? "{ " : ""}${result} =`, ret.pos, viaDo ? " " : ret.pre), ...slice(r.results[0]), ...snippet(`; break ${label}${viaDo ? " }" : ""}`, ret.pos, ""));
       i = r.end;
     }
     const close = block.end - 1;
     toks.push(...block.toks.slice(i, close));
     const end = block.toks[close];
-    const fellOff = block.stmts[block.stmts.length - 1]?.k !== "Return";
+    const last = block.stmts[block.stmts.length - 1]?.k;
+    const fellOff = last !== "Take" && last !== "Return";
     // on the closing brace's line, so a panic points there
     if (fellOff) toks.push(...snippet("; __vidar.do_fell_off()", end.pos, end.pre));
     toks.push(fellOff ? { ...end, pre: " " } : end);
-    const labeled = this.parseTokens([...toks, eofTok(pos)], (p) => p.parseStmt());
+    const labeled = new Parser([...toks, eofTok(pos)], { take: true }).parseStmt();
 
     const sym = this.declareLocal(result, scope!, {});
     this.stmt(labeled, scope!);
@@ -1336,9 +1423,6 @@ export class Analyzer {
     this.stmt(decl, scope!);
     sym.ty = (A(decl)._syms as LocalSym[])[0].ty;
     (A(owner)._pre ??= []).push(decl, labeled);
-    // the block already takes up the call's lines
-    const call = this.macroCalls[this.macroCalls.length - 1];
-    if (call) A(call)._linesHoisted = true;
     return identVal(result, pos);
   }
 
@@ -1358,7 +1442,7 @@ export class Analyzer {
     const typed = types.find((t) => this.normalize(t)?.t !== "untyped");
     const cannot = () => new CompileError("do!: cannot infer the type of the result; give it as do!(T) { ... }", pos);
     if (typed) {
-      if (typed.t === "node" && typed.scope.package !== scope.package) throw cannot();
+      if (typed.t === "node" && typed.scope.package !== scope.package && !this.isBasic(typed)) throw cannot();
       return this.typeName(typed) ?? (() => { throw cannot(); })();
     }
     const kinds = types.map((t) => this.normalize(t)).map((t) => (t?.t === "untyped" ? t.kind : ""));
@@ -1382,6 +1466,12 @@ export class Analyzer {
       return [];
     }
     const { kind, of } = this.paramKind(ret);
+    if (kind === "value" || (kind === "Expr" && isConstVal(v))) {
+      if (position === "stmt") return [];
+      const node = this.foldValue(v, call, where);
+      if (of) this.checkTyped(node, this.typeOf(node, scope), { t: "node", node: of, scope: sym.scope }, scope, `result of ${where}`, pos);
+      return node;
+    }
     if (kind === "Stmt") {
       if (position !== "stmt") throw new CompileError(`${where} returns Stmt and can only be used as a statement`, pos);
       const toks = respace(valueToTokens(v, pos, "stmt"), this.callSpan(call));
@@ -1399,6 +1489,12 @@ export function eofTok(pos: Pos): Token {
   return { kind: "eof", text: "", pre: "", pos };
 }
 
+/** A value (not code) a compile-time evaluation produced. */
+function isConstVal(v: Val): boolean {
+  if (v.k === "array") return v.items.every(isConstVal);
+  return ["int", "float", "bool", "string", "struct", "nil"].includes(v.k);
+}
+
 function identVal(name: string, pos: Pos): Val {
   return { k: "expr", toks: tokensOf(name, pos).filter((t) => t.kind !== "semi") };
 }
@@ -1411,7 +1507,7 @@ function synthIdent(name: string, pos: Pos): Expr {
   return { k: "Ident", name, toks: [{ kind: "ident", text: name, pre: "", pos }], start: 0, end: 1 };
 }
 
-const STMT_KINDS = new Set(["Catch", "ErrDefer", "ImplBlock", "Block", "ValueDecl", "Assign", "ExprStmt", "If", "When", "For", "RangeFor", "Switch", "Return", "Branch", "Defer", "Using", "Labeled", "DirectiveStmt", "Package", "Import", "RawStmt", "Empty"]);
+const STMT_KINDS = new Set(["Catch", "ErrDefer", "Take", "ImplBlock", "Block", "ValueDecl", "Assign", "ExprStmt", "If", "When", "For", "RangeFor", "Switch", "Return", "Branch", "Defer", "Using", "Labeled", "DirectiveStmt", "Package", "Import", "RawStmt", "Empty"]);
 
 export function isStmt(n: Node): boolean {
   return STMT_KINDS.has(n.k);

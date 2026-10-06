@@ -1,0 +1,6 @@
+// error: comptime!: the block needs a single expression or a 'take value'
+package main
+main :: proc() {
+	x := comptime! { y := 1; _ = y }
+	_ = x
+}

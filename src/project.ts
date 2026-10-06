@@ -39,25 +39,37 @@ export interface LoadOptions {
 const SOURCE_EXTS = [".vidar", ".odin"];
 export const RUNTIME_DIR = "vidar_runtime";
 
-let schedPath: string | undefined;
+const bundledPaths = new Map<string, string>();
 
 /**
- * Where the bundled "vidar:sched" source lives. It is written to a real file so editors can
- * open it from go-to-definition; the directory name is a hash of the source, so versions don't clash.
+ * Where a bundled source lives. It is written to a real file so editors can open it from
+ * go-to-definition; the directory name is a hash of the source, so versions don't clash.
  */
-export function schedSourcePath(): string {
-  if (schedPath) return schedPath;
-  const dir = join(tmpdir(), `vidar-sched-${createHash("sha1").update(SCHED_SOURCE).digest("hex").slice(0, 12)}`);
-  schedPath = join(dir, "sched.vidar");
+function bundledSourcePath(name: string, source: string): string {
+  const known = bundledPaths.get(name);
+  if (known) return known;
+  const dir = join(tmpdir(), `vidar-${name}-${createHash("sha1").update(source).digest("hex").slice(0, 12)}`);
+  const path = join(dir, `${name}.vidar`);
+  bundledPaths.set(name, path);
   try {
-    if (!existsSync(schedPath) || readFileSync(schedPath, "utf8") !== SCHED_SOURCE) {
+    if (!existsSync(path) || readFileSync(path, "utf8") !== source) {
       mkdirSync(dir, { recursive: true });
-      writeFileSync(schedPath, SCHED_SOURCE);
+      writeFileSync(path, source);
     }
   } catch {
     // unwritable temp dir: the path is still a fine name for the in-memory source
   }
-  return schedPath;
+  return path;
+}
+
+/** The bundled "vidar:sched" package. */
+export function schedSourcePath(): string {
+  return bundledSourcePath("sched", SCHED_SOURCE);
+}
+
+/** A real file holding the prelude, for editors (the compiler itself reads it as PRELUDE_PATH). */
+export function preludeSourcePath(): string {
+  return bundledSourcePath("prelude", PRELUDE_SOURCE);
 }
 
 /** Collection imports (`core:fmt`) are plain Odin; everything else is a path relative to the importing package. */
@@ -231,6 +243,8 @@ export interface Output {
   files: Map<string, string>;
   /** output path -> the source file it was generated from */
   sourceOf: Map<string, string>;
+  /** output path -> the source line of each output line (see `EmittedFile.lines`) */
+  lineMap: Map<string, number[]>;
 }
 
 export function outputName(pkg: PackageInfo, f: File): string {
@@ -242,6 +256,7 @@ export function outputName(pkg: PackageInfo, f: File): string {
 export function emitProgram(p: Program): Output {
   const files = new Map<string, string>();
   const sourceOf = new Map<string, string>();
+  const lineMap = new Map<string, number[]>();
   let closures = false;
   for (const unit of p.units) {
     const em = new Emitter(p.analyzer, unit);
@@ -249,14 +264,16 @@ export function emitProgram(p: Program): Output {
       if (pkg.dir === dirname(schedSourcePath())) for (const [name, text] of SCHED_ASM) files.set(posix.join(unit.outDir, name), text);
       for (const f of pkg.files) {
         const name = outputName(pkg, f);
-        files.set(name, em.emitFile(f, pkg));
+        const { text, lines } = em.emitFile(f, pkg);
+        files.set(name, text);
         sourceOf.set(name, f.path);
+        lineMap.set(name, lines);
       }
     }
     closures ||= em.usesRuntime;
   }
   if (closures) files.set(`${RUNTIME_DIR}/runtime.odin`, CLOSURE_RUNTIME);
-  return { files, sourceOf };
+  return { files, sourceOf, lineMap };
 }
 
 /** Transpiles in-memory sources forming one package (imports are not followed). */

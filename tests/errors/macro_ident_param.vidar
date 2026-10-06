@@ -1,4 +1,4 @@
 // error: argument 'name' must be an identifier
 package main
-decl :: comptime proc(name: Ident) -> Stmt { return quote { $name := 1 } }
+decl :: proc!(name: Ident) -> Stmt { return quote { $name := 1 } }
 main :: proc() { decl!(a + b) }

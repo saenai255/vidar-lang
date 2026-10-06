@@ -1,5 +1,0 @@
-// error: call other comptime procs directly (without '!')
-package main
-a :: comptime proc() -> int { return 1 }
-b :: comptime proc() -> int { return a!() }
-main :: proc() { _ = b!() }

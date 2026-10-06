@@ -28,7 +28,7 @@ temp_arena_end :: proc(arena: ^Temp_Arena) {
 	runtime.default_temp_allocator_destroy(arena)
 }
 
-// built-in macros: with_allocator!, locked!, timed!, track!, dbg!, check!, todo!, unimplemented!, format!
+// built-in macros: with_allocator!, locked!, timed!, track!, dbg!, check!, todo!, unimplemented!
 lock :: proc(m: ^$T) { sync.lock(m) }
 unlock :: proc(m: ^$T) { sync.unlock(m) }
 
@@ -114,21 +114,9 @@ not_done :: proc(what: string, message: string, loc := #caller_location) -> ! {
 	panic(message != "" ? fmt.tprintf("%s: %s", what, message) : what, loc)
 }
 
-match_ok :: proc(ok: bool, loc := #caller_location) -> bool {
-	if !ok do panic("match: no arm matched", loc)
-	return true
-}
-
-match_ok_on :: proc(ok: bool, value: $T, loc := #caller_location) -> bool {
-	if !ok do panic(fmt.tprintf("match: no arm matched %v", value), loc)
-	return true
-}
-
 do_fell_off :: proc(loc := #caller_location) -> ! {
-	panic("do!: the block ended without a return", loc)
+	panic("do!: the block ended without a take", loc)
 }
-
-tprintf :: proc(format: string, args: ..any) -> string { return fmt.tprintf(format, ..args) }
 
 // whether a result signals failure: false for an ok-bool, otherwise anything but the zero/nil value
 failed :: #force_inline proc(e: $T) -> bool {

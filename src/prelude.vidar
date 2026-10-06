@@ -2,7 +2,7 @@ package vidar_prelude
 
 // scoped! { ... } gives the block its own temp allocator and frees it when the block ends.
 // scoped!(allocator) { ... } takes the arena's memory from `allocator` instead of context.allocator.
-scoped :: comptime proc(allocator: Expr = context.allocator, body: Stmt) -> Stmt {
+scoped :: proc!(allocator: Expr = context.allocator, body: Stmt) -> Stmt {
 	return quote {
 		{
 			arena: __vidar.Temp_Arena
@@ -14,7 +14,7 @@ scoped :: comptime proc(allocator: Expr = context.allocator, body: Stmt) -> Stmt
 }
 
 // with_allocator!(a) { ... } makes `a` the block's context.allocator.
-with_allocator :: comptime proc(allocator: Expr, body: Stmt) -> Stmt {
+with_allocator :: proc!(allocator: Expr, body: Stmt) -> Stmt {
 	return quote {
 		{
 			context.allocator = $allocator
@@ -24,7 +24,7 @@ with_allocator :: comptime proc(allocator: Expr, body: Stmt) -> Stmt {
 }
 
 // locked!(&mutex) { ... } holds the lock for the block and releases it on every exit.
-locked :: comptime proc(mutex: Expr, body: Stmt) -> Stmt {
+locked :: proc!(mutex: Expr, body: Stmt) -> Stmt {
 	return quote {
 		{
 			m := $mutex
@@ -36,7 +36,7 @@ locked :: comptime proc(mutex: Expr, body: Stmt) -> Stmt {
 }
 
 // timed!("label") { ... } prints how long the block took (to stderr). The label defaults to the call site.
-timed :: comptime proc(label: Expr = "", body: Stmt) -> Stmt {
+timed :: proc!(label: Expr = "", body: Stmt) -> Stmt {
 	site := call_site()
 	return quote {
 		{
@@ -51,7 +51,7 @@ timed :: comptime proc(label: Expr = "", body: Stmt) -> Stmt {
 // every allocation that is still live (to stderr). The label defaults to the call site.
 // Only in -debug builds; otherwise the block runs untracked.
 // track!(allocator) / track!(allocator, "label") tracks allocations made from `allocator` instead.
-track :: comptime proc(a: Expr = "", b: Expr = "", body: Stmt) -> Stmt {
+track :: proc!(a: Expr = "", b: Expr = "", body: Stmt) -> Stmt {
 	site := call_site()
 	a_text := stringify(a)
 	b_text := stringify(b)
@@ -78,71 +78,26 @@ track :: comptime proc(a: Expr = "", b: Expr = "", body: Stmt) -> Stmt {
 	}
 }
 
-// match!(value) { pattern => result, ... } evaluates to the result of the first arm whose pattern matches.
-// A pattern is a value (compared with ==), a range lo..<hi or lo..=hi, or _ (anything); p1, p2 => result
-// matches either. match! { condition => result, ... } takes the first arm whose condition holds.
-// When no arm matches it panics. The value is evaluated once.
-match :: comptime proc(subject: Expr = _, body: Stmt) -> Expr {
-	has_subject := stringify(subject) != "_"
-	if has_subject do subject = once(subject)
-	arms := match_arms(body)
-	if len(arms) == 0 do compile_error("match!: needs at least one arm")
-	last := len(arms) - 1
-	result := quote(false)
-	for i := last; i >= 0; i -= 1 {
-		value := arms[i].value
-		cond := quote(false)
-		catch_all := false
-		for p, j in arms[i].patterns {
-			c := p
-			if stringify(p) == "_" {
-				catch_all = true
-			} else if has_subject {
-				r := split_range(p)
-				if len(r) == 0 {
-					c = quote($subject == $p)
-				} else {
-					lo := r[0]
-					hi := r[2]
-					c = quote($subject >= $lo && $subject < $hi)
-					if r[1] == "..=" do c = quote($subject >= $lo && $subject <= $hi)
-				}
-			}
-			if j == 0 {
-				cond = c
-			} else {
-				cond = quote($cond || $c)
-			}
-		}
-		if catch_all {
-			if i != last do compile_error("match!: '_' must be in the last arm")
-			result = value
-		} else if i == last {
-			ok := quote(__vidar.match_ok($cond))
-			if has_subject do ok = quote(__vidar.match_ok_on($cond, $subject))
-			result = quote($value if $ok else $value)
-		} else {
-			result = quote($value if $cond else $result)
-		}
-	}
-	return result
-}
-
-// do! { ...; return value } evaluates to the returned value. The block runs just before the enclosing
-// statement; inside it, return leaves the block, not the procedure. do!(T) { ... } gives the result type
-// when it can't be inferred from the returned values.
-do :: comptime proc(T: Type = _, body: Stmt) -> Expr {
+// do! { ...; take value } evaluates to the value the block takes. The block runs just before the enclosing
+// statement. do!(T) { ... } gives the result type when it can't be inferred from the taken values.
+do :: proc!(T: Type = _, body: Stmt) -> Expr {
 	return block_value(T, body)
 }
 
+// comptime! { expr } / comptime! { ...; take value } runs the block in the transpiler and folds to its value:
+// calls in it run at compile time, as if each had a '!'.
+comptime :: proc!(body: Stmt) -> Expr {
+	return comptime_value(body)
+}
+
 // dbg!(expr) prints "file:line: expr = value" (to stderr) and evaluates to the value.
-dbg :: comptime proc(value: Expr) -> Expr {
+dbg :: proc!(value: Expr) -> Expr {
 	return quote(__vidar.dbg($value, $(stringify(value)), $(call_site())))
 }
 
 // check!(cond) panics when cond is false, showing the expression; for comparisons it also
 // shows both operands. check!(cond, "message") adds a message.
-check :: comptime proc(cond: Expr, message: Expr = "") -> Stmt {
+check :: proc!(cond: Expr, message: Expr = "") -> Stmt {
 	text := stringify(cond)
 	parts := split_comparison(cond)
 	if len(parts) == 0 {
@@ -180,72 +135,11 @@ check :: comptime proc(cond: Expr, message: Expr = "") -> Stmt {
 }
 
 // todo!() / todo!("message"): panic in code that isn't written yet.
-todo :: comptime proc(message: Expr = "") -> Expr {
+todo :: proc!(message: Expr = "") -> Expr {
 	return quote(__vidar.not_done("not yet implemented", $message))
 }
 
 // unimplemented!() / unimplemented!("message"): panic in code that is deliberately not supported.
-unimplemented :: comptime proc(message: Expr = "") -> Expr {
+unimplemented :: proc!(message: Expr = "") -> Expr {
 	return quote(__vidar.not_done("not implemented", $message))
-}
-
-// format!("hi {name}, pi is {x:.2f}") -> a temp-allocated string, like fmt.tprintf.
-// {expr} prints with %v; {expr:spec} uses %spec (e.g. .2f, 5d, x, q); {{ and }} are literal braces.
-format :: comptime proc(template: string) -> Expr {
-	out := ""
-	args: [dynamic]Expr
-	i := 0
-	n := len(template)
-	for i < n {
-		c := template[i]
-		if c == '{' && i + 1 < n && template[i + 1] == '{' {
-			out += "{{"
-			i += 2
-			continue
-		}
-		if c == '}' && i + 1 < n && template[i + 1] == '}' {
-			out += "}}"
-			i += 2
-			continue
-		}
-		if c == '}' {
-			compile_error("format!: unmatched '}' (write '}}' for a literal brace)")
-		}
-		if c == '%' {
-			out += "%%"
-			i += 1
-			continue
-		}
-		if c != '{' {
-			out += template[i:i + 1]
-			i += 1
-			continue
-		}
-		// a hole: {expr} or {expr:spec}, where the spec starts at the first ':' outside brackets
-		j := i + 1
-		depth := 0
-		colon := -1
-		for j < n {
-			d := template[j]
-			if d == '(' || d == '[' || d == '{' do depth += 1
-			if d == ')' || d == ']' do depth -= 1
-			if d == '}' {
-				if depth == 0 do break
-				depth -= 1
-			}
-			if d == ':' && depth == 0 && colon < 0 do colon = j
-			j += 1
-		}
-		if j >= n do compile_error("format!: unclosed '{' (write '{{' for a literal brace)")
-		expr_end := colon if colon >= 0 else j
-		expr := template[i + 1:expr_end]
-		spec := "v"
-		if colon >= 0 do spec = template[colon + 1:j]
-		if len(expr) == 0 do compile_error("format!: empty '{}'")
-		append(&args, parse_expr(expr))
-		out += "%" + spec
-		i = j + 1
-	}
-	if len(args) == 0 do return quote(__vidar.tprintf($out))
-	return quote(__vidar.tprintf($out, $args))
 }

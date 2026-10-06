@@ -1,17 +1,28 @@
 package main
 
 import "core:fmt"
+import "core:strconv"
 
 Point :: struct { x, y: f32 }
 
 classify :: proc(n: int) -> string {
 	return do! {
-		if n < 2 do return "small"
+		if n < 2 do take "small"
 		for d in 2..<n {
-			if n % d == 0 do return "composite"
+			if n % d == 0 do take "composite"
 		}
-		return "prime"
+		take "prime"
 	}
+}
+
+// `return` inside do! leaves the procedure, like `or_return` does
+parse_double :: proc(s: string) -> (int, bool) {
+	v := do!(int) {
+		n, ok := strconv.parse_int(s)
+		if !ok do return 0, false
+		take n * 2
+	}
+	return v, true
 }
 
 main :: proc() {
@@ -19,27 +30,35 @@ main :: proc() {
 	total := do! {
 		sum := 0
 		for x in xs do sum += x
-		return sum
+		take sum
 	} * 2
 	p := do! {
 		q := Point{1, 2}
 		q.x += 10
-		return q
+		take q
 	}
-	half := do!(f32) { return 3 }
+	half := do!(f32) { take 3 }
 	avg := do! {
-		if len(xs) == 0 do return 0
-		return f64(total) / 4
+		if len(xs) == 0 do take 0
+		take f64(total) / 4
 	}
 	nested := do! {
-		inner := do! { return 20 }
-		return inner + match!(inner) { 20 => 1, _ => 0 }
+		inner := do! { take 20 }
+		take inner + 1
 	}
 	fn := proc() -> int { return 7 }
 	callback := do! {
 		f := proc() -> int { return 100 }
-		return f() + fn()
+		take f() + fn()
 	}
-	fmt.println(total, p, half / 2, avg, nested, callback)
+	first := do! {
+		for x, i in xs {
+			if x == 4 do take i
+		}
+		take -1
+	}
+	both := do! { take 1 } + do! { take 2 }
+	fmt.println(total, p, half / 2, avg, nested, callback, first, both)
 	fmt.println(classify(1), classify(9), classify(7))
+	fmt.println(parse_double("21"), parse_double("x"))
 }

@@ -4,7 +4,7 @@ Odin with **closures**, **interfaces**, **error handling helpers**, **anonymous 
 
 [SYNTAX.md](SYNTAX.md) is a compact reference of every construct Vidar adds; [examples/](examples) has one runnable program per feature.
 
-Everything that is already Odin passes through **byte-for-byte**: comments, formatting and line numbers are kept. Only the new constructs are rewritten. As a check, 1313 of the 1317 `.odin` files in Odin's `core`, `base` and `vendor` libraries come out of the full pipeline unchanged. Because line numbers are kept, errors Odin reports in generated code point at the right line of your `.vidar` file.
+Everything that is already Odin passes through **byte-for-byte**: comments, formatting and line numbers are kept. Only the new constructs are rewritten. As a check, 1313 of the 1317 `.odin` files in Odin's `core`, `base` and `vendor` libraries come out of the full pipeline unchanged. Macro expansions get lines of their own, and vidar keeps a map from generated lines to source lines, so errors Odin reports in generated code point at the right line of your `.vidar` file.
 
 ```bash
 npm install && npm run build
@@ -123,7 +123,7 @@ vidar loads the entry package and every package it imports by relative path (`co
 - **Packages in a cycle** are merged into one Odin package (`game_ui/` above). Each one's members get its name as a prefix: `ui.render` becomes `ui__render`, `game.World` becomes `game__World`. That prefixing is scope-aware, so locals and struct fields are untouched. Imports between members of the cycle disappear. Importers outside the cycle import the merged package under their original alias, so `game.run(...)` becomes `game.game__run(...)`.
 - If the entry package is part of a cycle, it keeps its own names, so `main` stays `main`.
 - `@(private)` still means private to the original package, and vidar enforces it even after merging.
-- Line numbers are preserved in every generated file, and `vidar run`/`check` map Odin's errors back to the `.vidar` files.
+- `vidar run`/`check` map Odin's errors and panics back to the `.vidar` files and lines.
 
 See [examples/cyclic](examples/cyclic) for a cycle that shares an interface, closures and a macro, with a separate `util` package outside the cycle. [tests/cases/import_cycles](tests/cases/import_cycles) covers a three-package cycle, a cycle that includes the entry package, and the same names declared in several packages.
 
@@ -159,6 +159,7 @@ load_config :: proc(path: string) -> (Config, Error) {
 
 - **"Fails"** follows `or_return`: the last result is `false` (an ok-bool), or not nil/zero (an error enum, union or pointer). It works for your procs and for `core:` procs alike, through a small generic check in the runtime package.
 - **`or_return <value>` and `catch`** go after a call that is the whole right-hand side of `x := ...` or `x = ...`, or after a bare call statement. The declared names get the call's leading results.
+- **A value starting with `-` or `&`** is ambiguous after `or_return`, because in Odin `f() or_return - 1` subtracts from the result. vidar rejects it: write `or_return (-1)` for the error value, or `(f() or_return) - 1` for the arithmetic.
 - **A `catch` block after a declaration or assignment must leave the scope** (`return`, `break`, `continue`, `panic`); otherwise the values would be used unset. After a bare call it may fall through.
 - **`errdefer`** looks at the procedure's last result after `return` has set it. Unnamed results are given names in the generated code, which doesn't change how the procedure is called.
 - **Lowering:** everything becomes plain Odin on the same line: `x, e := f(); if failed(e) { ... }` and `defer if failed(err) { ... }`.
@@ -250,7 +251,7 @@ See [examples/goroutines](examples/goroutines) for workers, a closed channel, `s
 
 ## Built-in library
 
-Some macros come with the language: they're available in every file without an import, and a declaration of your own with the same name takes precedence. They're written in Vidar itself ([src/prelude.ts](src/prelude.ts)), and their expansions call helpers in the generated `vidar_runtime` package, so they need no imports.
+Some macros come with the language: they're available in every file without an import, and a declaration of your own with the same name takes precedence. They're written in Vidar itself ([src/prelude.vidar](src/prelude.vidar)), and their expansions call helpers in the generated `vidar_runtime` package, so they need no imports.
 
 | Macro | What it does |
 |---|---|
@@ -260,10 +261,8 @@ Some macros come with the language: they're available in every file without an i
 | `locked!(&mutex) { ... }` | holds the lock for the block and releases it on every exit (any `core:sync` lock type) |
 | `timed!("label") { ... }` | prints how long the block took to stderr; the label defaults to the source location |
 | `track!(allocator, "label") { ... }` | gives the block a tracking `context.allocator` over `allocator`; at its end, prints every allocation still live (size and location) to stderr. Both arguments are optional (allocator defaults to `context.allocator`, label to the source location); the label must be a string literal. Only active in `-debug` builds; otherwise the block runs on `allocator` untracked |
-| `format!("hi {name}, {x:.2f}")` | string interpolation into a temp-allocated string. `{expr}` prints with `%v`, `{expr:spec}` uses `%spec` (`.2f`, `5d`, `x`, `q`...), and `{{` / `}}` are literal braces. Malformed templates are compile errors. |
-| `match!(value) { pattern => result, ... }` | evaluates to the result of the first arm whose pattern matches `value`. A pattern is a value (compared with `==`), a range `lo..<hi` / `lo..=hi`, or `_` for anything (only in the last arm); `p1, p2 => result` matches either. Arms are separated by newlines or commas. `value` is evaluated once: if it contains calls it is stored in a temporary declared just before the statement. If no arm matches, it panics and shows `value` |
-| `match! { condition => result, ... }` | evaluates to the result of the first arm whose condition holds; `_` matches anything |
-| `do! { ...; return value }` | a block that evaluates to a value: inside it, `return value` leaves the block (not the procedure) with that value. The block runs just before the statement it's in, so it can be used in a declaration, an assignment, an expression statement or a `return`. The result type is inferred from the returned values; write `do!(T) { ... }` to give it. Reaching the end of the block without a `return` panics |
+| `do! { ...; take value }` | a block that evaluates to a value: `take value` leaves the block with that value, while `return` and `or_return` still leave the procedure. The block runs just before the statement it's in, so it can be used in a declaration, an assignment, an expression statement or a `return`, and nothing with side effects may come before it in that statement; it can't be on the right of `&&`, `\|\|` or `or_else`, or in a branch of a ternary. The result type is inferred from the taken values; write `do!(T) { ... }` to give it. Reaching the end of the block without a `take` panics |
+| `comptime! { expr }` / `comptime! { ...; take value }` | runs the block in the transpiler and folds to its value; see [compile-time evaluation](#compile-time-evaluation) |
 | `dbg!(expr)` | prints `[file:line] expr = value` to stderr and evaluates to the value, so it can wrap any expression |
 | `check!(cond)` / `check!(cond, "msg")` | panics when `cond` is false, showing the expression. For a comparison it also shows each non-literal operand's value, and each operand is evaluated once. |
 | `todo!()` / `todo!("msg")` | panics with "not yet implemented", for code paths that aren't written yet |
@@ -286,14 +285,14 @@ scoped! {
 
 ## Comptime procs (typed macros)
 
-A `comptime proc` runs inside the transpiler and is invoked with `name!(...)`. It never reaches the generated Odin; only its result does.
+A comptime proc is declared with a `!` after `proc`, `name :: proc!(...)`, runs inside the transpiler and is invoked with `name!(...)`. It never reaches the generated Odin; only its result does.
 
 ```odin
-square :: comptime proc(x: Expr(i32)) -> Expr(i32) {
+square :: proc!(x: Expr(i32)) -> Expr(i32) {
 	return quote($x * $x)
 }
 
-swap :: comptime proc(a, b: Expr) -> Stmt {
+swap :: proc!(a, b: Expr) -> Stmt {
 	return quote {
 		tmp := $a          // hygienic: renamed, so it cannot clash with the caller's `tmp`
 		$a = $b
@@ -301,7 +300,7 @@ swap :: comptime proc(a, b: Expr) -> Stmt {
 	}
 }
 
-fib :: comptime proc(n: int) -> int {
+fib :: proc!(n: int) -> int {
 	return n if n < 2 else fib(n - 1) + fib(n - 2)
 }
 
@@ -339,9 +338,19 @@ Macros from other packages are called as `pkg.name!(...)`.
 
 - **Trailing block:** a macro whose last parameter is a `Stmt` can take it as a block after the call, `name!(args) { ... }`, or `name! { ... }` when there are no other arguments, so it reads like a built-in statement.
 - **Defaults:** parameters can have default values, `allocator: Expr = context.allocator`. For `Expr`, `Stmt` and `Type` parameters the default is code; otherwise it's a compile-time value.
-- **Line numbers:** code passed into a macro keeps its line breaks, so Odin errors inside the block point at the right line.
+- **Generated code:** an expansion is written out as ordinary Odin, one statement per line, under a comment naming the call and where it is. The comptime proc itself becomes a one-line comment. Odin errors and panics in an expansion are reported at the call, or at the line of code passed into it.
 
-**Comptime body language:** a subset of Odin. You get `:=`, `if`/`else`, `for` (C-style, ranges, `for x, i in arr`), `switch`, `[dynamic]` arrays with `append`, `len`, string `+`, and calls to other comptime procs or regular procs.
+```odin
+// swap :: proc!(a, b: Expr) -> Stmt — comptime, main.vidar:5
+...
+	a, b := 1, 2
+	// swap!(a, b) — main.vidar:22
+	tmp__1 := a
+	a = b
+	b = tmp__1
+```
+
+**Comptime body language:** a subset of Odin. You get `:=`, `if`/`else`, `for` (C-style, ranges, `for x, i in arr`), `switch`, `[dynamic]` arrays with `append`, `len`, string `+`, and calls to other comptime procs or regular procs. A comptime body already runs at compile time, so calls in it need no `!` (`fib(n - 1)`); a `!` is allowed too, and on a macro that returns code it expands the macro and evaluates the code. Integers have the width of their type and wrap around as they do at run time; untyped constants are unbounded.
 
 Builtins:
 - `type_name(T)` and `type_fields(T)`: name and field list of a type
@@ -353,29 +362,31 @@ Builtins:
 
 See [examples/macros](examples/macros), which includes a struct printer built with `type_fields`.
 
-### `comptime` expressions
+### Compile-time evaluation
 
-Put `comptime` before any expression to evaluate it at compile time, with the same interpreter that runs macro bodies. It can call comptime procs and regular procs directly (without `!`), and use macros: their code is folded too.
+`name!(args)` on any proc runs it at compile time and replaces the call with its result, with the same interpreter that runs macro bodies. For a comptime proc that's its normal invocation; a regular proc is called the same way when every argument is a constant. `comptime! { ... }` runs a whole block at compile time: every call in it behaves as if it had a `!`.
 
 ```odin
-a := comptime fib(20)                          // a := 6765
-label := comptime fmt.tprintf("v%d", VERSION)  // label := "v3"
-primes: [5]int = comptime first_primes(5)      // primes: [5]int = { 2, 3, 5, 7, 11 }
-total := comptime do! {                        // total := 55
+a := fib!(20)                                // a := 6765
+area := square!(N)                           // a regular proc, run by the transpiler
+label := fmt.tprintf!("v%d", VERSION)        // label := "v3"
+primes: [5]int = first_primes!(5)            // primes: [5]int = { 2, 3, 5, 7, 11 }
+mask := comptime! { (1 << 10) - 1 }          // mask := 1023
+total := comptime! {                         // total := 55
 	sum := 0
 	for i in 1..=10 do sum += i
-	return sum
+	take sum
 }
-d := comptime square(k)                        // error: 'k' is a runtime value
+d := square!(k)                              // error: 'k' is a runtime value
 ```
 
-- Numbers, strings and booleans fold to literals. Arrays and structs fold to untyped compound literals, so the target needs a known type.
-- `comptime do! { ... }` runs the block in the transpiler and folds to the value it returns: a compile-time block with no helper proc. Macros inside it (`match!`, your own) fold as well.
-- If the expression cannot be evaluated at compile time (it reads a variable, calls a foreign proc, uses an unsupported statement, or a macro whose code needs the runtime such as `format!`), compilation fails.
+- Numbers, strings and booleans fold to literals; an integer of a sized type keeps it, e.g. `i32(1410065408)`. Arrays and structs fold to untyped compound literals, so the target needs a known type.
+- `comptime! { expr }` folds a single expression; with statements, `take value` gives the block its value. Macros used inside it (`do!`, your own) fold as well.
+- As a statement, `name!(...)` runs for its effects only, e.g. `static_assert!(N > 0, "N must be positive")`.
+- If something cannot be evaluated at compile time (it reads a variable, calls a foreign proc, uses an unsupported statement, or a macro whose code needs the runtime), compilation fails.
 - `compile_error`, out-of-bounds indexes and the step limit also stop compilation.
-- `comptime` applies to the whole expression after it: `comptime a + b` folds `a + b`. It is only a prefix when an expression follows on the same line, so `comptime` stays usable as a name and `comptime(x)` is still a call.
 
-See [examples/comptime](examples/comptime): lookup tables, struct configs, static assertions and `comptime do!` blocks.
+See [examples/comptime](examples/comptime): lookup tables, struct configs, static assertions and `comptime! { ... }` blocks.
 
 ## Language server
 
@@ -394,7 +405,7 @@ See [examples/comptime](examples/comptime): lookup tables, struct configs, stati
 
 The server analyzes the program rooted at the open file's package: that package plus everything it imports, cycles included. Unsaved editor contents are used. Editing a file re-checks every open program that contains it.
 
-**How ols is used:** the server keeps a shadow copy of the generated Odin in a temp directory and runs ols on it. Generated code keeps the source's line numbers, and lines vidar doesn't rewrite are unchanged, so a request on such a line is sent to ols at the same position. Results that point into generated code are dropped; results in the shadow tree map back to the `.vidar` file. While a file has errors, the last good output is reused for unchanged lines and the edited lines are passed to ols as typed, so completion keeps working mid-edit. vidar answers first for its own constructs (closures, captures, interfaces, impls, macros, anonymous structs); ols is the fallback, and for hover also wins when vidar couldn't infer a local's type. Lines vidar rewrites (for example a line that uses a by-reference capture) are not forwarded yet.
+**How ols is used:** the server keeps a shadow copy of the generated Odin in a temp directory and runs ols on it. Lines vidar doesn't rewrite are unchanged, and the emitter's line map says where each one went, so a request on such a line is sent to ols at the matching position. Results that point into generated code are dropped; results in the shadow tree map back to the `.vidar` file. While a file has errors, the last good output is reused for unchanged lines and the edited lines are passed to ols as typed, so completion keeps working mid-edit. vidar answers first for its own constructs (closures, captures, interfaces, impls, macros, anonymous structs); ols is the fallback, and for hover also wins when vidar couldn't infer a local's type. Lines vidar rewrites (for example a line that uses a by-reference capture) are not forwarded yet.
 
 **VS Code:** see [editors/vscode](editors/vscode). It provides highlighting, the client, and an *Vidar: Show Generated Odin* command.
 
@@ -473,6 +484,6 @@ VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js   # run the LSP su
 - **Memory:** closure environments and by-reference boxes are allocated with `context.allocator` and never freed. That is fine for arenas and short programs.
 - **Import cycles merge packages.** Odin sees one package for the whole cycle. Procs declared inside `foreign` blocks of cycle members are not prefixed, so they must not clash across the cycle. Only relative imports are followed; packages reached through collections (`core:`, `shared:`, ...) can't take part in a cycle.
 - **Anonymous struct literals** only work in `:=` declarations inside procedures; not at file scope or in `if`/`for`/`switch` initializers.
-- **Extension keywords are contextual.** `closure`, `comptime`, `quote`, `interface`, `impl`, `catch` and `errdefer` remain usable as ordinary identifiers.
+- **Extension keywords are contextual.** `closure`, `quote`, `interface`, `impl`, `catch` and `errdefer` remain usable as ordinary identifiers, and `take` is only a keyword inside `do!` and `comptime!` blocks.
 - **Goroutines run on one thread.** Goroutines don't run in parallel; only `blocking` work and non-Linux file I/O use other threads. Goroutines aren't preempted: a long loop that never calls into `sched` holds up the others. `core:sync` locks park the whole thread, so use `sched.Mutex` between goroutines. Only darwin/arm64, linux/arm64 and linux/amd64 are supported, and only darwin/arm64 is tested so far.
 - **Interfaces:** no embedding of one interface in another, no generic impls, and impl targets must be named types. Bound procs must be plain procs: no proc groups, polymorphic procs or closures. Method names are package-level names, so two interfaces in one package can't share a method name (`writer_write`, `stream_write`).

@@ -1,2 +1,3 @@
-28 Point{x = 11, y = 2} 1.5 7 21 107
+28 Point{x = 11, y = 2} 1.5 7 21 107 2 3
 small composite prime
+42 true 0 false

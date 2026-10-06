@@ -1,4 +1,4 @@
 // error: argument 'x' has type f64 but the macro expects i32
 package main
-square :: comptime proc(x: Expr(i32)) -> Expr(i32) { return quote($x * $x) }
+square :: proc!(x: Expr(i32)) -> Expr(i32) { return quote($x * $x) }
 main :: proc() { v: f64 = 2; _ = square!(v) }

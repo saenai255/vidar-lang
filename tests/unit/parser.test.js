@@ -28,7 +28,7 @@ test("parses the extension syntax into dedicated nodes", () => {
 I :: interface { m }
 impl I for T { m = t_m }
 T :: struct {}
-c :: comptime proc(x: Expr) -> Expr { return quote($x) }
+c :: proc!(x: Expr) -> Expr { return quote($x) }
 main :: proc() {
 	n := 1
 	f := proc[n, &n](y: int) -> int { return y }

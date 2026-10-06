@@ -1,6 +1,6 @@
-// error: do!: 'return' takes exactly one value
+// error: do!: 'take' takes exactly one value
 package main
 main :: proc() {
-	x := do! { return 1, 2 }
+	x := do! { take 1, 2 }
 	_ = x
 }

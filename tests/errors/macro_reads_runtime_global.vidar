@@ -1,5 +1,5 @@
 // error: 'counter' is a runtime variable and is not available at compile time
 package main
 counter := 5
-get :: comptime proc() -> int { return counter }
+get :: proc!() -> int { return counter }
 main :: proc() { _ = get!() }

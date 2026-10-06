@@ -19,7 +19,9 @@ ui__make_button :: proc(text: string) -> game__Entity {
 ui__render :: proc(w: ^game__World) -> string {
 	parts: [dynamic]string
 	for e in w.entities do append(&parts, game__draw(e))
-	if false { __macro_typecheck: string = (fmt.tprintf("rendered %d entities at frame %d", len(w.entities), w.frame)); _ = __macro_typecheck }; fmt.println("[game]", fmt.tprintf("rendered %d entities at frame %d", len(w.entities), w.frame))
+	// game.log!(...) — ui.vidar:22
+	if false { __macro_typecheck: string = fmt.tprintf("rendered %d entities at frame %d", len(w.entities), w.frame); _ = __macro_typecheck }
+	fmt.println("[game]", fmt.tprintf("rendered %d entities at frame %d", len(w.entities), w.frame))
 	return strings.join(parts[:], " ")
 }
 

@@ -2,7 +2,7 @@
 
 Everything Vidar adds on top of Odin, in one place. Anything not listed here is plain Odin and passes through unchanged. The [README](README.md) explains how each feature lowers to Odin; [examples/](examples) has a runnable program per feature.
 
-All new keywords are contextual: `closure`, `comptime`, `quote`, `interface`, `impl`, `catch` and `errdefer` stay usable as ordinary identifiers.
+All new keywords are contextual: `closure`, `quote`, `interface`, `impl`, `catch`, `unreachable` (after `catch`) and `errdefer` stay usable as ordinary identifiers, and `take` is a keyword only inside `do!` and `comptime!` blocks.
 
 ## Closures
 
@@ -34,6 +34,7 @@ Rules:
 - Each name may appear once in a capture list. Only locals can be captured: globals and constants are visible without capturing, and listing one is an error.
 - A nested closure can capture what its enclosing closure captured.
 - Closure bodies are lifted to file scope, so they cannot use the enclosing proc's local constants, local types or `$T` parameters.
+- Closure environments and by-reference boxes are allocated with `context.allocator` and never freed.
 
 Example: [examples/closures](examples/closures).
 
@@ -104,7 +105,8 @@ errdefer delete(buf)
 
 Rules:
 - "Fails" means what it means for `or_return`: the last result is `false` (ok-bool), or not nil/zero (error enum, union, pointer).
-- `or_return value` and `catch` follow a call that is the whole right-hand side of `x := ...` / `x = ...`, or a bare call statement. The left-hand names receive the call's leading results; a typed declaration (`x: T := ...`) is not allowed.
+- `or_return value` and `catch` follow a call that is the whole right-hand side of `x := ...` / `x = ...`, or a bare call statement. The left-hand names receive the call's leading results; a typed declaration (`x: T = ...`) is not allowed.
+- A value starting with `-` or `&` is ambiguous (Odin reads `f() or_return - 1` as arithmetic) and is an error: write `or_return (-1)`, or `(f() or_return) - 1`.
 - A `catch` block after a declaration or assignment must leave the scope (`return`, `break`, `continue`, `panic`, ...). After a bare call it may fall through.
 - `or_return value` and `errdefer` need a proc with results. `errdefer` checks the last result after `return` has set it.
 
@@ -156,8 +158,8 @@ Example: [examples/cyclic](examples/cyclic).
 
 | Syntax | Meaning |
 |---|---|
-| `name :: comptime proc(params) -> Kind { ... }` | a macro; runs inside the transpiler and never reaches the generated Odin |
-| `name!(args)` | invoke a macro |
+| `name :: proc!(params) -> Kind { ... }` | a comptime proc (macro): the `!` after `proc` makes it one. It runs inside the transpiler and never reaches the generated Odin |
+| `name!(args)` | invoke a comptime proc |
 | `pkg.name!(args)` | invoke a macro from another package |
 | `name!(args) { ... }` | trailing block, when the last parameter is a `Stmt` |
 | `name! { ... }` | trailing block with no other arguments |
@@ -182,13 +184,13 @@ Parameter kinds:
 Result kinds: `Expr` / `Expr(T)` (usable anywhere an expression is), `Stmt` (statements only), a constant type (folds to a literal), or none (runs for side effects such as `compile_error`).
 
 ```odin
-square :: comptime proc(x: Expr(i32)) -> Expr(i32) { return quote($x * $x) }
+square :: proc!(x: Expr(i32)) -> Expr(i32) { return quote($x * $x) }
 
-swap :: comptime proc(a, b: Expr) -> Stmt {
+swap :: proc!(a, b: Expr) -> Stmt {
 	return quote { tmp := $a; $a = $b; $b = tmp }   // `tmp` is renamed (hygiene)
 }
 
-repeat :: comptime proc(n: int = 2, body: Stmt) -> Stmt {
+repeat :: proc!(n: int = 2, body: Stmt) -> Stmt {
 	out: [dynamic]Stmt
 	for _ in 0..<n do append(&out, body)
 	return quote { $out }
@@ -199,7 +201,7 @@ swap!(a, b)
 repeat!(4) { total += 10 }
 ```
 
-Body language: a subset of Odin — `:=`, `if`/`else`, ternary `a if c else b`, `for` (C-style, ranges, `for x, i in arr`), `switch`, `[dynamic]` arrays with `append` and `len`, string `+` and slicing, and calls to other comptime procs.
+Body language: a subset of Odin — `:=`, `if`/`else`, ternary `a if c else b`, `for` (C-style, ranges, `for x, i in arr`), `switch`, `[dynamic]` arrays with `append` and `len`, string `+` and slicing, and calls to other procs. Integers have their type's width and wrap around as at run time; untyped constants are unbounded.
 
 Comptime builtins:
 
@@ -213,8 +215,8 @@ Comptime builtins:
 | `parse_expr(s)` | an `Expr` parsed from a string |
 | `split_comparison(e)` | `[lhs, op, rhs]` for a comparison, otherwise empty |
 | `split_range(e)` | `[lo, op, hi]` for a range `lo..<hi` / `lo..=hi`, otherwise empty |
-| `match_arms(body)` | the arms of a `{ p1, p2 => value, ... }` block: structs with `patterns` and `value` |
-| `block_value(T, body)` | what `do!` expands to: `body` hoisted before the current statement, its `return`s storing the result (`T` is `_` to infer it) |
+| `block_value(T, body)` | what `do!` expands to: `body` hoisted before the current statement, its `take`s storing the result (`T` is `_` to infer it) |
+| `comptime_value(body)` | what `comptime!` expands to: `body` evaluated now, folded to its value |
 | `once(e)` | `e` when evaluating it twice is harmless (no calls), otherwise a temporary holding it, declared just before the current statement |
 | `is_literal(e)` | whether `e` is a literal (optionally negated or parenthesized) |
 | `call_site()` | `"file:line"` of the macro call |
@@ -226,30 +228,33 @@ Comptime builtins:
 Rules:
 - Names declared inside a `quote` are renamed; spliced code is never renamed.
 - `Expr(T)` is checked by vidar when it can infer the type, and by Odin otherwise.
-- Inside a comptime body, call other comptime procs directly (`fib(n - 1)`), not with `!`. Expansion depth and evaluation steps are limited.
+- A comptime body already runs at compile time: calls need no `!` (`fib(n - 1)`), though one is allowed; on a macro returning code, `!` expands it and evaluates the code. Expansion depth and evaluation steps are limited.
 - A `Stmt` macro can also be invoked at file scope, e.g. to generate declarations.
 
 Example: [examples/macros](examples/macros).
 
-### `comptime` expressions
+### Compile-time evaluation
 
 | Syntax | Meaning |
 |---|---|
-| `comptime expr` | evaluate `expr` at compile time and replace it with the result; a compile error if it can't be |
-| `comptime do! { ...; return v }` | run a block at compile time; folds to `v` |
+| `f!(args)` | run `f` at compile time and replace the call with its result; works for comptime procs and, when every argument is a constant, regular procs (`square!(N)`, `fmt.tprintf!("v%d", V)`) |
+| `comptime! { expr }` | evaluate `expr` at compile time; every call in it behaves as if it had a `!` |
+| `comptime! { ...; take v }` | run a block at compile time; folds to `v` |
 
 ```odin
-a := comptime fib(20)                      // a := 6765
-primes: [5]int = comptime first_primes(5)  // { 2, 3, 5, 7, 11 }
-total := comptime do! { s := 0; for i in 1..=10 do s += i; return s }  // 55
-d := comptime square(k)                    // error: 'k' is a runtime value
+a := fib!(20)                                      // a := 6765
+primes: [5]int = first_primes!(5)                  // { 2, 3, 5, 7, 11 }
+total := comptime! { s := 0; for i in 1..=10 do s += i; take s }  // 55
+big := comptime! { 1 << 40 }                       // 1099511627776
+w := square32!(100000)                             // i32(1410065408), as at run time
+static_assert!(N > 0, "N must be positive")        // a statement: runs for its effects
+d := square!(k)                                    // error: 'k' is a runtime value
 ```
 
 Rules:
-- Applies to the whole expression after it. Only a prefix when an expression follows on the same line; `comptime(x)` is a call.
-- Comptime and regular procs are called directly, without `!`. Macros are expanded and their code is evaluated too.
-- Numbers, strings and booleans fold to literals; arrays and structs to untyped compound literals.
+- Numbers, strings and booleans fold to literals (sized integers keep their type); arrays and structs to untyped compound literals, so the target needs a known type.
 - Anything that needs run-time values, `compile_error` and other evaluation errors stop compilation.
+- `return` cannot leave a `comptime!` block; use `take`.
 
 Example: [examples/comptime](examples/comptime).
 
@@ -284,11 +289,9 @@ Available in every file with no import; a declaration of your own with the same 
 | `timed!("label") { ... }` / `timed! { ... }` | prints the block's duration to stderr (label defaults to the call site) |
 | `track!("label") { ... }` / `track! { ... }` | gives the block a tracking `context.allocator` and prints every allocation still live at its end to stderr (label defaults to the call site); without `-debug` the block runs untracked |
 | `track!(allocator) { ... }` / `track!(allocator, "label") { ... }` | same, tracking allocations made from `allocator`; the label is told apart by being a string literal |
-| `format!("hi {name}, {x:.2f}")` | interpolated temp string; `{expr}` uses `%v`, `{expr:spec}` uses `%spec`, `{{` and `}}` are literal braces |
-| `match!(value) { p => result, ... }` | the result of the first arm whose pattern matches `value`: a value (`==`), a range `lo..<hi` / `lo..=hi`, `p1, p2` for either, or `_` for anything (last arm only); panics when nothing matches. `value` is evaluated once |
-| `match! { cond => result, ... }` | the result of the first arm whose condition holds |
-| `do! { ...; return value }` | evaluates to the returned value; the block runs just before the enclosing statement, and `return` leaves the block, not the procedure |
+| `do! { ...; take value }` | evaluates to the taken value; `return` and `or_return` inside it still leave the procedure. The block runs just before the enclosing statement (a declaration, assignment, expression statement or `return`), so nothing with side effects may come before it there, and it can't be on the right of `&&` / `\|\|` / `or_else` or in a ternary branch. Panics if the block ends without a `take` |
 | `do!(T) { ... }` | same, with the result type given when it can't be inferred |
+| `comptime! { ... }` | compile-time evaluation, see [above](#compile-time-evaluation) |
 | `dbg!(expr)` | prints `[file:line] expr = value` to stderr and evaluates to the value |
 | `check!(cond)` / `check!(cond, "msg")` | panics when `cond` is false, showing the expression and the values of non-literal comparison operands |
 | `todo!()` / `todo!("msg")` | panics with "not yet implemented" |

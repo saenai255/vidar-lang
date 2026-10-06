@@ -1,6 +1,6 @@
 // error: make_scaler: cannot scale a string
 package main
-make_scaler :: comptime proc(T: Type) -> Expr {
+make_scaler :: proc!(T: Type) -> Expr {
 	if type_name(T) == "string" { compile_error("make_scaler: cannot scale a string") }
 	return quote(1)
 }

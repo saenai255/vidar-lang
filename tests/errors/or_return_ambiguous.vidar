@@ -1,0 +1,8 @@
+// error: ambiguous '-' after 'or_return'
+package main
+f :: proc() -> (int, bool) { return 5, true }
+g :: proc() -> (r: int, ok: bool) {
+	x := f() or_return - 1
+	return x, true
+}
+main :: proc() { _, _ = g() }

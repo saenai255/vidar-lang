@@ -1,0 +1,8 @@
+// error: 'square!' cannot run at compile time: 'k' is a runtime value
+package main
+square :: proc(x: int) -> int { return x * x }
+main :: proc() {
+	k := 3
+	x := square!(k)
+	_ = x
+}

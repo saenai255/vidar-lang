@@ -19,22 +19,33 @@ main :: proc() {
 	before := live(&track)
 	outer_temp := context.temp_allocator
 
-	{ arena__1: __vidar.Temp_Arena; context.temp_allocator = __vidar.temp_arena_begin(&arena__1, context.allocator); defer __vidar.temp_arena_end(&arena__1); {
-		words: [dynamic] string;
-		words.allocator = context.temp_allocator;
-		for i in 0..<1000 {
-			append(&words, fmt.tprintf("word-%d", i)); // all of this goes to the block's arena
-		};
-		joined := strings.join(words[:], ",", context.temp_allocator);
-		fmt.println("inside: own temp allocator:", context.temp_allocator.data != outer_temp.data);
-		fmt.println("inside:", len(words), "words,", len(joined), "bytes joined");
-		fmt.println("inside: arena blocks on the heap:", live(&track) > before);
-
-		{ arena__2: __vidar.Temp_Arena; context.temp_allocator = __vidar.temp_arena_begin(&arena__2, context.allocator); defer __vidar.temp_arena_end(&arena__2); {
-			fmt.println("nested: separate arena again:", context.temp_allocator.data != outer_temp.data);
-			_ = fmt.tprintf("%s", joined); // the outer block's data is still valid here
-		}; };
-	}; }
+	// scoped! { ... } — main.vidar:22
+	{
+		arena__1: __vidar.Temp_Arena
+		context.temp_allocator = __vidar.temp_arena_begin(&arena__1, context.allocator)
+		defer __vidar.temp_arena_end(&arena__1)
+		{
+			words: [dynamic]string
+			words.allocator = context.temp_allocator
+			for i in 0..<1000 {
+				append(&words, fmt.tprintf("word-%d", i))
+			}
+			joined := strings.join(words[:], ",", context.temp_allocator)
+			fmt.println("inside: own temp allocator:", context.temp_allocator.data != outer_temp.data)
+			fmt.println("inside:", len(words), "words,", len(joined), "bytes joined")
+			fmt.println("inside: arena blocks on the heap:", live(&track) > before)
+			// scoped! { ... } — main.vidar:33
+			{
+				arena__2: __vidar.Temp_Arena
+				context.temp_allocator = __vidar.temp_arena_begin(&arena__2, context.allocator)
+				defer __vidar.temp_arena_end(&arena__2)
+				{
+					fmt.println("nested: separate arena again:", context.temp_allocator.data != outer_temp.data)
+					_ = fmt.tprintf("%s", joined)
+				}
+			}
+		}
+	}
 
 	fmt.println("after: arena freed:", live(&track) == before)
 	fmt.println("after: temp allocator restored:", context.temp_allocator.data == outer_temp.data)
@@ -43,9 +54,15 @@ main :: proc() {
 	// with an explicit backing allocator: here a second tracker, to show where the memory comes from
 	other: mem.Tracking_Allocator
 	mem.tracking_allocator_init(&other, context.allocator)
-	{ arena__3: __vidar.Temp_Arena; context.temp_allocator = __vidar.temp_arena_begin(&arena__3, mem.tracking_allocator(&other)); defer __vidar.temp_arena_end(&arena__3); {
-		_ = fmt.tprintf("%d", 12345);
-		fmt.println("custom backing: arena allocated from it:", len(other.allocation_map) > 0);
-	}; }
+	// scoped!(mem.tracking_allocator(&other)) { ... } — main.vidar:46
+	{
+		arena__3: __vidar.Temp_Arena
+		context.temp_allocator = __vidar.temp_arena_begin(&arena__3, mem.tracking_allocator(&other))
+		defer __vidar.temp_arena_end(&arena__3)
+		{
+			_ = fmt.tprintf("%d", 12345)
+			fmt.println("custom backing: arena allocated from it:", len(other.allocation_map) > 0)
+		}
+	}
 	fmt.println("custom backing: returned to it:", len(other.allocation_map) == 0)
 }

@@ -1,0 +1,5 @@
+// error: comptime procs are declared as name :: proc!(...) { ... }
+package main
+main :: proc() {
+	f := proc!(n: int) -> int { return n }
+}
