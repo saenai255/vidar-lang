@@ -10,13 +10,11 @@ Color :: enum { Red, Green, Blue }
 paint :: proc(id: int, scale: f64, c: Color, out: sched.Chan(string), wg: ^sched.Wait_Group) {
 	defer sched.done(wg)
 	sched.sleep(time.Duration(10 * (3 - id)) * time.Millisecond)
-	out <- fmt.aprintf("worker %d: %v x%.1f", id, c, scale)
+	sched.send(out, fmt.aprintf("worker %d: %v x%.1f", id, c, scale))
 }
 
 producer :: proc(n: int, out: sched.Chan(int)) {
-	for i in 0..<n {
-		out <- i * i
-	}
+	for i in 0..<n do sched.send(out, i * i)
 	sched.close(out)
 }
 
@@ -24,7 +22,7 @@ echo_server :: proc(listener: net.TCP_Socket) {
 	for {
 		client, _, err := sched.accept(listener)
 		if err != nil do return
-		go proc[client]() {
+		sched.go(proc[client]() {
 			buf: [256]byte
 			for {
 				n, rerr := sched.recv(client, buf[:])
@@ -32,58 +30,60 @@ echo_server :: proc(listener: net.TCP_Socket) {
 				sched.send(client, buf[:n])
 			}
 			sched.close(client)
-		}()
+		})
 	}
 }
 
 main :: proc() {
-	// workers finish in reverse order of their sleeps; untyped args take the parameter types
+	// workers finish in reverse order of their sleeps
 	results := sched.make_chan(string, 3)
 	wg: sched.Wait_Group
 	for i in 0..<3 {
 		sched.add(&wg)
-		go paint(i, 2, .Blue, results, &wg)
+		sched.go(proc[i, results, &wg]() { paint(i, 2, .Blue, results, &wg) })
 	}
 	sched.wait(&wg)
-	for _ in 0..<3 do fmt.println(<-results)
+	for _ in 0..<3 do fmt.println(sched.recv(results))
 
-	// range over a channel until it's closed
+	// receive until the channel is closed
 	squares := sched.make_chan(int)
-	go producer(5, squares)
+	sched.go(proc[squares]() { producer(5, squares) })
 	total := 0
 	for {
-		v, ok := <-squares
+		v, ok := sched.recv(squares)
 		if !ok do break
 		total += v
 	}
 	fmt.println("sum of squares:", total)
 
-	// closures capture by value; each goroutine gets its own copy of i
+	// captures are copies, so each goroutine gets its own i
 	done := sched.make_chan(int, 10)
-	for i in 0..<10 do go proc[i, done]() { done <- i }()
+	for i in 0..<10 do sched.go(proc[i, done]() { sched.send(done, i) })
 	sum := 0
-	for _ in 0..<10 do sum += <-done
+	for _ in 0..<10 do sum += sched.recv(done)
 	fmt.println("closure sum:", sum)
 
 	// select with a timeout
 	slow := sched.make_chan(string)
 	timeout := sched.make_chan(bool, 1)
-	go proc[slow]() { sched.sleep(50 * time.Millisecond); slow <- "too late" }()
-	go proc[timeout]() { sched.sleep(10 * time.Millisecond); timeout <- true }()
-	select {
-	case msg := <-slow:
-		fmt.println(msg)
-	case <-timeout:
-		fmt.println("timed out")
+	sched.go(proc[slow]() { sched.sleep(50 * time.Millisecond); sched.send(slow, "too late") })
+	sched.go(proc[timeout]() { sched.sleep(10 * time.Millisecond); sched.send(timeout, true) })
+	msg: string
+	switch sched.select(sched.on_recv(slow, &msg), sched.on_recv(timeout)) {
+	case 0: fmt.println(msg)
+	case 1: fmt.println("timed out")
 	}
 
-	// non-blocking select
+	// non-blocking select, and a closed channel
 	empty := sched.make_chan(int)
-	select {
-	case v := <-empty:
-		fmt.println("got", v)
-	case:
-		fmt.println("nothing ready")
+	closed := sched.make_chan(int)
+	sched.close(closed)
+	got: bool
+	switch sched.try_select(sched.on_recv(empty)) {
+	case -1: fmt.println("nothing ready")
+	}
+	switch sched.select(sched.on_recv(empty), sched.on_recv(closed, ok = &got)) {
+	case 1: fmt.println("closed channel, ok =", got)
 	}
 
 	// TCP echo over the event loop
@@ -93,13 +93,13 @@ main :: proc() {
 		return
 	}
 	endpoint, _ := net.bound_endpoint(listener)
-	go echo_server(listener)
+	sched.go(proc[listener]() { echo_server(listener) })
 	replies := sched.make_chan(string)
 	for k in 0..<3 {
-		go proc[k, endpoint, replies]() {
+		sched.go(proc[k, endpoint, replies]() {
 			conn, derr := sched.dial(endpoint)
 			if derr != nil {
-				replies <- fmt.aprint("dial failed:", derr)
+				sched.send(replies, fmt.aprint("dial failed:", derr))
 				return
 			}
 			msg := fmt.aprintf("ping %d", k)
@@ -107,10 +107,10 @@ main :: proc() {
 			buf: [64]byte
 			n, _ := sched.recv(conn, buf[:])
 			sched.close(conn)
-			replies <- string(buf[:n])
-		}()
+			sched.send(replies, string(buf[:n]))
+		})
 	}
-	got: [3]string
-	for &r in got do r = <-replies
-	fmt.println("echoed", len(got), "messages")
+	echoed: [3]string
+	for &r in echoed do r = sched.recv(replies)
+	fmt.println("echoed", len(echoed), "messages")
 }

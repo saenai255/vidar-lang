@@ -2,7 +2,7 @@
 
 Everything Vidar adds on top of Odin, in one place. Anything not listed here is plain Odin and passes through unchanged. The [README](README.md) explains how each feature lowers to Odin; [examples/](examples) has a runnable program per feature.
 
-All new keywords are contextual: `closure`, `comptime`, `quote`, `interface`, `impl`, `catch`, `errdefer`, `go` and `select` stay usable as ordinary identifiers.
+All new keywords are contextual: `closure`, `comptime`, `quote`, `interface`, `impl`, `catch` and `errdefer` stay usable as ordinary identifiers.
 
 ## Closures
 
@@ -229,29 +229,19 @@ Example: [examples/macros](examples/macros).
 
 ## Goroutines and channels
 
-| Syntax | Meaning |
-|---|---|
-| `go f(args)` | run the call on a new goroutine; `f` and the arguments are evaluated first |
-| `go proc[x]() { ... }()` | run a closure on a new goroutine |
-| `ch <- v` | send (no space inside `<-`) |
-| `<-ch` / `v := <-ch` / `v, ok := <-ch` | receive; `ok` is false once `ch` is closed and drained |
-| `select { case v := <-a: ... case b <- x: ... case <-c: ... case: ... }` | run the first ready case, or wait; `case:` is the default (non-blocking) |
-| `import "vidar:sched"` | `Chan(T)`, `make_chan(T, cap)`, `close`, `chan_len`, `chan_cap`, `sleep`, `yield`, `Wait_Group` (`add`, `done`, `wait`), TCP: `listen_tcp`, `accept`, `dial`, `recv`, `send` |
+Not syntax: a library, `import "vidar:sched"`. Goroutines are started from closures.
 
 ```odin
 results := sched.make_chan(string)
-go fetch(url, results)
-select {
-case r := <-results: fmt.println(r)
-case <-timeout:      fmt.println("timed out")
+sched.go(proc[url, results]() { fetch(url, results) })
+r: string
+switch sched.select(sched.on_recv(results, &r), sched.on_recv(timeout)) {
+case 0: fmt.println(r)
+case 1: fmt.println("timed out")
 }
 ```
 
-Rules:
-- Goroutines are stackful coroutines on one thread. I/O through `sched` parks only the calling goroutine; plain blocking calls (`os.read`, `time.sleep`) block all of them.
-- `go` takes a call. Arguments get the callee's parameter types when its signature is known.
-- A select case sends or receives; anything else is an error.
-- If every goroutine is blocked and no I/O is pending, the program panics with a deadlock error.
+`go`, `Chan(T)`, `make_chan`, `send`, `recv`, `close`, `select`, `try_select`, `on_recv`, `on_send`, `sleep`, `yield`, `after`, `Wait_Group` (`add`, `done`, `wait`), `Mutex` (`lock`, `unlock`, `try_lock`), `blocking`, TCP (`listen_tcp`, `accept`, `dial`, `send`, `recv`, `send_file`), UDP (`udp_socket`, `bind`, `send_to`, `recv_from`), `wait_ready`, files (`open`, `read_at`, `write_at`, `stat`, `read_entire_file`, `write_entire_file`) and `resolve`. All of them park only the calling goroutine. See the [README](README.md#goroutines-and-channels).
 
 Example: [examples/goroutines](examples/goroutines).
 
@@ -266,6 +256,8 @@ Available in every file with no import; a declaration of your own with the same 
 | `with_allocator!(a) { ... }` | `a` is the block's `context.allocator` |
 | `locked!(&mutex) { ... }` | holds any `core:sync` lock for the block |
 | `timed!("label") { ... }` / `timed! { ... }` | prints the block's duration to stderr (label defaults to the call site) |
+| `track!("label") { ... }` / `track! { ... }` | gives the block a tracking `context.allocator` and prints every allocation still live at its end to stderr (label defaults to the call site); without `-debug` the block runs untracked |
+| `track!(allocator) { ... }` / `track!(allocator, "label") { ... }` | same, tracking allocations made from `allocator`; the label is told apart by being a string literal |
 | `format!("hi {name}, {x:.2f}")` | interpolated temp string; `{expr}` uses `%v`, `{expr:spec}` uses `%spec`, `{{` and `}}` are literal braces |
 | `dbg!(expr)` | prints `[file:line] expr = value` to stderr and evaluates to the value |
 | `check!(cond)` / `check!(cond, "msg")` | panics when `cond` is false, showing the expression and the values of non-literal comparison operands |

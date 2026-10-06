@@ -1,6 +1,0 @@
-// error: 'go' needs a call: go f(args)
-package main
-work :: proc() {}
-main :: proc() {
-	go work
-}

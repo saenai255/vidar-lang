@@ -1,0 +1,10 @@
+ticked while blocked: true
+write: None
+read: None hello from a goroutine
+stat: None Regular 23 read_at: from 
+parallel reads: true
+resolve: nil Endpoint{address = [127, 0, 0, 1], port = 80}
+udp: ping
+mutex order: 0 1 2
+after fired
+total under 1s: true

@@ -40,15 +40,15 @@ main :: proc() {
 	{ __check_lhs := len(name); __check_rhs: type_of(__check_lhs) = 0; if !(__check_lhs > __check_rhs) { __vidar.check_failed_cmp("len(name) > 0", "name is required", "len(name)", __check_lhs, "", __check_rhs) }; }
 
 	// with_allocator!: a block that allocates from a specific allocator
-	track: mem.Tracking_Allocator
-	mem.tracking_allocator_init(&track, context.allocator)
-	{ context.allocator = mem.tracking_allocator(&track); {
+	tracker: mem.Tracking_Allocator
+	mem.tracking_allocator_init(&tracker, context.allocator)
+	{ context.allocator = mem.tracking_allocator(&tracker); {
 		xs := make([dynamic] int);
 		append(&xs, 1, 2, 3);
-		fmt.println("with_allocator: allocations tracked:", len(track.allocation_map));
+		fmt.println("with_allocator: allocations tracked:", len(tracker.allocation_map));
 		delete(xs);
 	}; }
-	fmt.println("with_allocator: all freed:", len(track.allocation_map) == 0)
+	fmt.println("with_allocator: all freed:", len(tracker.allocation_map) == 0)
 
 	// locked!: the lock is held for the block and released on every exit
 	mutex: sync.Mutex
@@ -73,6 +73,16 @@ main :: proc() {
 		for i in 0..<1_000_000 do x += i;
 		_ = x;
 	}; }
+
+	// track!: in -debug builds, prints every allocation the block left live, to stderr
+	kept: []int
+	{ context.allocator = __vidar.track_begin(context.allocator); defer __vidar.track_end(context.allocator, "cache", "main.vidar:79"); {
+		scratch := make([dynamic] int);
+		append(&scratch, 1, 2, 3);
+		delete(scratch);
+		kept = make([] int, 8); // reported: still live when the block ends
+	}; }
+	delete(kept)
 
 	fmt.println("mode:", parse_mode("safe"))
 }

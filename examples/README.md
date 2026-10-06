@@ -10,9 +10,10 @@ Each example is its own directory, and the directory is the program. Run one wit
 | [anon_structs/](anon_structs) | `x := { name = value, ... }`: struct types declared on the spot, nested literals, closure fields, structural compatibility |
 | [errors/](errors) | `or_return <value>`, `catch err { ... }`, `catch { ... }`, `catch unreachable` and `errdefer`, on a small config parser |
 | [macros/](macros) | `comptime proc` macros: `Expr(T)`, `Stmt`, `Type` and `Ident` parameters, `quote` and splicing, hygiene, trailing blocks, defaults, reflection, `compile_error` |
-| [builtins/](builtins) | the built-in macros `format!`, `dbg!`, `check!`, `with_allocator!`, `locked!`, `timed!`, `todo!`, `unimplemented!` |
+| [builtins/](builtins) | the built-in macros `format!`, `dbg!`, `check!`, `with_allocator!`, `locked!`, `timed!`, `track!`, `todo!`, `unimplemented!` |
 | [scoped/](scoped) | the built-in `scoped! { ... }` / `scoped!(allocator) { ... }`: a block with its own temp allocator, freed when the block ends |
-| [goroutines/](goroutines) | `go`, channels (`ch <- v`, `<-ch`, close), `select` with a timeout and a default, wait groups, and a TCP echo server over `core:nbio` |
+| [goroutines/](goroutines) | `import "vidar:sched"`: goroutines from closures, channels, `select` with a timeout, `try_select`, wait groups, and a TCP echo server over `core:nbio` |
+| [sched_io/](sched_io) | I/O that parks only the goroutine: `blocking` on a worker thread, files, DNS, UDP, `sched.Mutex` held across a sleep, and `after` as a `select` timeout |
 | [cyclic/](cyclic) | packages that import each other (`game` and `ui`) plus one outside the cycle (`util`), sharing an interface, closures, a macro and error handling |
 
 See [SYNTAX.md](../SYNTAX.md) for a reference of all the syntax these use.

@@ -1,0 +1,10 @@
+package main
+
+import "core:fmt"
+import "vidar:sched"
+
+main :: proc() {
+	ch := sched.make_chan(int, 1)
+	sched.go(proc[ch]() { sched.send(ch, 42) })
+	fmt.println(sched.recv(ch))
+}

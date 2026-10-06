@@ -1,4 +1,6 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, resolve } from "node:path";
 import { CompileError, lex } from "./lexer";
 import { Parser } from "./parser";
@@ -8,7 +10,7 @@ import { resetGensym } from "./comptime";
 import type { File } from "./ast";
 import { PackageInfo, Scope, Unit } from "./scope";
 import { PRELUDE_PATH, PRELUDE_SOURCE } from "./prelude";
-import { SCHED_FILES } from "./sched";
+import { SCHED_ASM, SCHED_IMPORT, SCHED_SOURCE } from "./sched";
 
 export interface Source {
   path: string;
@@ -36,6 +38,27 @@ export interface LoadOptions {
 
 const SOURCE_EXTS = [".vidar", ".odin"];
 export const RUNTIME_DIR = "vidar_runtime";
+
+let schedPath: string | undefined;
+
+/**
+ * Where the bundled "vidar:sched" source lives. It is written to a real file so editors can
+ * open it from go-to-definition; the directory name is a hash of the source, so versions don't clash.
+ */
+export function schedSourcePath(): string {
+  if (schedPath) return schedPath;
+  const dir = join(tmpdir(), `vidar-sched-${createHash("sha1").update(SCHED_SOURCE).digest("hex").slice(0, 12)}`);
+  schedPath = join(dir, "sched.vidar");
+  try {
+    if (!existsSync(schedPath) || readFileSync(schedPath, "utf8") !== SCHED_SOURCE) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(schedPath, SCHED_SOURCE);
+    }
+  } catch {
+    // unwritable temp dir: the path is still a fine name for the in-memory source
+  }
+  return schedPath;
+}
 
 /** Collection imports (`core:fmt`) are plain Odin; everything else is a path relative to the importing package. */
 export function isRelativeImport(path: string): boolean {
@@ -91,6 +114,11 @@ export function loadProgram(entry: string | Source[], opts: LoadOptions = {}): P
     if (opts.followImports === false) return pkg;
     for (const f of files) {
       for (const s of f.stmts) {
+        if (s.k === "Import" && s.path === SCHED_IMPORT) {
+          const path = schedSourcePath();
+          pkg.deps.add(byDir.get(dirname(path)) ?? loadPackage(dirname(path), [{ path, text: SCHED_SOURCE }]));
+          continue;
+        }
         if (s.k !== "Import" || !isRelativeImport(s.path)) continue;
         const target = resolve(dir, s.path);
         let dep = byDir.get(target);
@@ -121,7 +149,7 @@ export function loadProgram(entry: string | Source[], opts: LoadOptions = {}): P
 
   const packages = [...byDir.values()];
   const units = groupCycles(root, packages);
-  analyzer.resolveImport = (fromDir, path) => (isRelativeImport(path) ? byDir.get(resolve(fromDir, path)) ?? null : null);
+  analyzer.resolveImport = (fromDir, path) => (path === SCHED_IMPORT ? byDir.get(dirname(schedSourcePath())) ?? null : isRelativeImport(path) ? byDir.get(resolve(fromDir, path)) ?? null : null);
   analyzer.run([preludePackage(analyzer), ...packages]);
   return { entry: root, packages, units, analyzer, sources, errors };
 }
@@ -179,7 +207,7 @@ function groupCycles(root: PackageInfo, packages: PackageInfo[]): Unit[] {
     const name = hasRoot ? root.name : comp.map((p) => p.name).join("_");
     let outDir = "";
     if (!hasRoot) {
-      outDir = name;
+      outDir = comp.some((p) => p.dir === dirname(schedSourcePath())) ? "vidar_sched" : name;
       for (let i = 2; usedDirs.has(outDir); i++) outDir = `${name}${i}`;
       usedDirs.add(outDir);
     }
@@ -215,10 +243,10 @@ export function emitProgram(p: Program): Output {
   const files = new Map<string, string>();
   const sourceOf = new Map<string, string>();
   let closures = false;
-  let sched = false;
   for (const unit of p.units) {
     const em = new Emitter(p.analyzer, unit);
     for (const pkg of unit.packages) {
+      if (pkg.dir === dirname(schedSourcePath())) for (const [name, text] of SCHED_ASM) files.set(posix.join(unit.outDir, name), text);
       for (const f of pkg.files) {
         const name = outputName(pkg, f);
         files.set(name, em.emitFile(f, pkg));
@@ -226,10 +254,8 @@ export function emitProgram(p: Program): Output {
       }
     }
     closures ||= em.usesRuntime;
-    sched ||= em.usesSched;
   }
   if (closures) files.set(`${RUNTIME_DIR}/runtime.odin`, CLOSURE_RUNTIME);
-  if (sched) for (const [name, text] of SCHED_FILES) files.set(`${RUNTIME_DIR}/${name}`, text);
   return { files, sourceOf };
 }
 

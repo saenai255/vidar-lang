@@ -1,22 +1,20 @@
-package main; import __vidar "vidar_runtime"; import __vidar_intrinsics "base:intrinsics"
+package main; import __vidar "vidar_runtime"
 
 import "core:fmt"
 import "core:net"
 import "core:time"
-import sched "vidar_runtime"
+import sched "vidar_sched"
 
 Color :: enum { Red, Green, Blue }
 
 paint :: proc(id: int, scale: f64, c: Color, out: sched.Chan(string), wg: ^sched.Wait_Group) {
 	defer sched.done(wg)
 	sched.sleep(time.Duration(10 * (3 - id)) * time.Millisecond)
-	__vidar.chan_send(out, fmt.aprintf("worker %d: %v x%.1f", id, c, scale))
+	sched.send(out, fmt.aprintf("worker %d: %v x%.1f", id, c, scale))
 }
 
 producer :: proc(n: int, out: sched.Chan(int)) {
-	for i in 0..<n {
-		__vidar.chan_send(out, i * i)
-	}
+	for i in 0..<n do sched.send(out, i * i)
 	sched.close(out)
 }
 
@@ -24,67 +22,61 @@ echo_server :: proc(listener: net.TCP_Socket) {
 	for {
 		client, _, err := sched.accept(listener)
 		if err != nil do return
-		{ __go1_f := __closure_0(client); __vidar.go(__go_1(__go1_f)) }
-
-
-
-
-
-
-
-
+		sched.go(__closure_0(client))
 	}
 }
 
 main :: proc() {
-	// workers finish in reverse order of their sleeps; untyped args take the parameter types
+	// workers finish in reverse order of their sleeps
 	results := sched.make_chan(string, 3)
-	wg: sched.Wait_Group
+	wg := new(sched.Wait_Group)
 	for i in 0..<3 {
-		sched.add(&wg)
-		{ __go2_0: __vidar_intrinsics.type_proc_parameter_type(type_of(paint), 0) = i; __go2_1: __vidar_intrinsics.type_proc_parameter_type(type_of(paint), 1) = 2; __go2_2: __vidar_intrinsics.type_proc_parameter_type(type_of(paint), 2) = .Blue; __go2_3: __vidar_intrinsics.type_proc_parameter_type(type_of(paint), 3) = results; __go2_4: __vidar_intrinsics.type_proc_parameter_type(type_of(paint), 4) = &wg; __vidar.go(__go_2(__go2_0, __go2_1, __go2_2, __go2_3, __go2_4)) }
+		sched.add(&wg^)
+		sched.go(__closure_1(i, results, wg))
 	}
-	sched.wait(&wg)
-	for _ in 0..<3 do fmt.println(__vidar.chan_recv(results))
+	sched.wait(&wg^)
+	for _ in 0..<3 do fmt.println(sched.recv(results))
 
-	// range over a channel until it's closed
+	// receive until the channel is closed
 	squares := sched.make_chan(int)
-	{ __go3_0: __vidar_intrinsics.type_proc_parameter_type(type_of(producer), 0) = 5; __go3_1: __vidar_intrinsics.type_proc_parameter_type(type_of(producer), 1) = squares; __vidar.go(__go_3(__go3_0, __go3_1)) }
+	sched.go(__closure_2(squares))
 	total := 0
 	for {
-		v, ok := __vidar.chan_recv(squares)
+		v, ok := sched.recv(squares)
 		if !ok do break
 		total += v
 	}
 	fmt.println("sum of squares:", total)
 
-	// closures capture by value; each goroutine gets its own copy of i
+	// captures are copies, so each goroutine gets its own i
 	done := sched.make_chan(int, 10)
-	for i in 0..<10 { { __go4_f := __closure_1(i, done); __vidar.go(__go_4(__go4_f)) } }
+	for i in 0..<10 do sched.go(__closure_3(i, done))
 	sum := 0
-	for _ in 0..<10 do sum += __vidar.chan_recv(done)
+	for _ in 0..<10 do sum += sched.recv(done)
 	fmt.println("closure sum:", sum)
 
 	// select with a timeout
 	slow := sched.make_chan(string)
 	timeout := sched.make_chan(bool, 1)
-	{ __go5_f := __closure_2(slow); __vidar.go(__go_5(__go5_f)) }
-	{ __go6_f := __closure_3(timeout); __vidar.go(__go_6(__go6_f)) }
-	{ __sel1_c0 := slow; __sel1_0 := __vidar.chan_zero(__sel1_c0); __sel1_c1 := timeout; __sel1_1 := __vidar.chan_zero(__sel1_c1); __sel1 := []__vidar.Select_Case{__vidar.recv_case(__sel1_c0, &__sel1_0), __vidar.recv_case(__sel1_c1, &__sel1_1)}; __sel1_idx, __sel1_ok := __vidar.select_raw(__sel1, false); _ = __sel1_ok; switch __sel1_idx {
-	case 0: msg := __sel1_0;
-		fmt.println(msg)
-	case 1:
-		fmt.println("timed out")
-	}}
+	sched.go(__closure_4(slow))
+	sched.go(__closure_5(timeout))
+	msg: string
+	switch sched.select(sched.on_recv(slow, &msg), sched.on_recv(timeout)) {
+	case 0: fmt.println(msg)
+	case 1: fmt.println("timed out")
+	}
 
-	// non-blocking select
+	// non-blocking select, and a closed channel
 	empty := sched.make_chan(int)
-	{ __sel2_c0 := empty; __sel2_0 := __vidar.chan_zero(__sel2_c0); __sel2 := []__vidar.Select_Case{__vidar.recv_case(__sel2_c0, &__sel2_0)}; __sel2_idx, __sel2_ok := __vidar.select_raw(__sel2, true); _ = __sel2_ok; switch __sel2_idx {
-	case 0: v := __sel2_0;
-		fmt.println("got", v)
-	case:
-		fmt.println("nothing ready")
-	}}
+	closed := sched.make_chan(int)
+	sched.close(closed)
+	got: bool
+	switch sched.try_select(sched.on_recv(empty)) {
+	case -1: fmt.println("nothing ready")
+	}
+	switch sched.select(sched.on_recv(empty), sched.on_recv(closed, ok = &got)) {
+	case 1: fmt.println("closed channel, ok =", got)
+	}
 
 	// TCP echo over the event loop
 	listener, err := sched.listen_tcp({net.IP4_Loopback, 0})
@@ -93,26 +85,14 @@ main :: proc() {
 		return
 	}
 	endpoint, _ := net.bound_endpoint(listener)
-	{ __go7_0: __vidar_intrinsics.type_proc_parameter_type(type_of(echo_server), 0) = listener; __vidar.go(__go_7(__go7_0)) }
+	sched.go(__closure_6(listener))
 	replies := sched.make_chan(string)
 	for k in 0..<3 {
-		{ __go8_f := __closure_4(k, endpoint, replies); __vidar.go(__go_8(__go8_f)) }
-
-
-
-
-
-
-
-
-
-
-
-
+		sched.go(__closure_7(k, endpoint, replies))
 	}
-	got: [3]string
-	for &r in got do r = __vidar.chan_recv(replies)
-	fmt.println("echoed", len(got), "messages")
+	echoed: [3]string
+	for &r in echoed do r = sched.recv(replies)
+	fmt.println("echoed", len(echoed), "messages")
 }
 
 // ---- generated by vidar ----
@@ -135,141 +115,70 @@ __closure_0 :: proc(__c0: $T0) -> __vidar.Closure(proc(rawptr)) {
 	}
 }
 
-__go_1 :: proc(__c0: $T0) -> __vidar.Task {
-	__Go_Env :: struct {
-		c0: T0,
-	}
-	return {
-		call = proc(__env_raw: rawptr) {
-			__genv := cast(^__Go_Env)__env_raw
-			__genv.c0.call(__genv.c0.env)
-			free(__genv)
-		},
-		env = new_clone(__Go_Env{__c0}),
-	}
-}
-
-__go_2 :: proc(__c0: $T0, __c1: $T1, __c2: $T2, __c3: $T3, __c4: $T4) -> __vidar.Task {
-	__Go_Env :: struct {
-		c0: T0,
-		c1: T1,
-		c2: T2,
-		c3: T3,
-		c4: T4,
-	}
-	return {
-		call = proc(__env_raw: rawptr) {
-			__genv := cast(^__Go_Env)__env_raw
-			paint(__genv.c0, __genv.c1, __genv.c2, __genv.c3, __genv.c4)
-			free(__genv)
-		},
-		env = new_clone(__Go_Env{__c0, __c1, __c2, __c3, __c4}),
-	}
-}
-
-__go_3 :: proc(__c0: $T0, __c1: $T1) -> __vidar.Task {
-	__Go_Env :: struct {
-		c0: T0,
-		c1: T1,
-	}
-	return {
-		call = proc(__env_raw: rawptr) {
-			__genv := cast(^__Go_Env)__env_raw
-			producer(__genv.c0, __genv.c1)
-			free(__genv)
-		},
-		env = new_clone(__Go_Env{__c0, __c1}),
-	}
-}
-
-__closure_1 :: proc(__c0: $T0, __c1: $T1) -> __vidar.Closure(proc(rawptr)) {
+__closure_1 :: proc(__c0: $T0, __c1: $T1, __c2: $T2) -> __vidar.Closure(proc(rawptr)) {
 	__Env :: struct {
 		i: T0,
-		done: T1,
+		results: T1,
+		wg: T2,
 	}
 	return __vidar.Closure(proc(rawptr)){
-		call = proc(__env_raw: rawptr) { __env := cast(^__Env)__env_raw; __vidar.chan_send(__env.done, __env.i) },
-		env = new_clone(__Env{__c0, __c1}),
-	}
-}
-
-__go_4 :: proc(__c0: $T0) -> __vidar.Task {
-	__Go_Env :: struct {
-		c0: T0,
-	}
-	return {
-		call = proc(__env_raw: rawptr) {
-			__genv := cast(^__Go_Env)__env_raw
-			__genv.c0.call(__genv.c0.env)
-			free(__genv)
-		},
-		env = new_clone(__Go_Env{__c0}),
+		call = proc(__env_raw: rawptr) { __env := cast(^__Env)__env_raw; paint(__env.i, 2, .Blue, __env.results, &__env.wg^) },
+		env = new_clone(__Env{__c0, __c1, __c2}),
 	}
 }
 
 __closure_2 :: proc(__c0: $T0) -> __vidar.Closure(proc(rawptr)) {
 	__Env :: struct {
-		slow: T0,
+		squares: T0,
 	}
 	return __vidar.Closure(proc(rawptr)){
-		call = proc(__env_raw: rawptr) { __env := cast(^__Env)__env_raw; sched.sleep(50 * time.Millisecond); __vidar.chan_send(__env.slow, "too late") },
+		call = proc(__env_raw: rawptr) { __env := cast(^__Env)__env_raw; producer(5, __env.squares) },
 		env = new_clone(__Env{__c0}),
 	}
 }
 
-__go_5 :: proc(__c0: $T0) -> __vidar.Task {
-	__Go_Env :: struct {
-		c0: T0,
+__closure_3 :: proc(__c0: $T0, __c1: $T1) -> __vidar.Closure(proc(rawptr)) {
+	__Env :: struct {
+		i: T0,
+		done: T1,
 	}
-	return {
-		call = proc(__env_raw: rawptr) {
-			__genv := cast(^__Go_Env)__env_raw
-			__genv.c0.call(__genv.c0.env)
-			free(__genv)
-		},
-		env = new_clone(__Go_Env{__c0}),
+	return __vidar.Closure(proc(rawptr)){
+		call = proc(__env_raw: rawptr) { __env := cast(^__Env)__env_raw; sched.send(__env.done, __env.i) },
+		env = new_clone(__Env{__c0, __c1}),
 	}
 }
 
-__closure_3 :: proc(__c0: $T0) -> __vidar.Closure(proc(rawptr)) {
+__closure_4 :: proc(__c0: $T0) -> __vidar.Closure(proc(rawptr)) {
+	__Env :: struct {
+		slow: T0,
+	}
+	return __vidar.Closure(proc(rawptr)){
+		call = proc(__env_raw: rawptr) { __env := cast(^__Env)__env_raw; sched.sleep(50 * time.Millisecond); sched.send(__env.slow, "too late") },
+		env = new_clone(__Env{__c0}),
+	}
+}
+
+__closure_5 :: proc(__c0: $T0) -> __vidar.Closure(proc(rawptr)) {
 	__Env :: struct {
 		timeout: T0,
 	}
 	return __vidar.Closure(proc(rawptr)){
-		call = proc(__env_raw: rawptr) { __env := cast(^__Env)__env_raw; sched.sleep(10 * time.Millisecond); __vidar.chan_send(__env.timeout, true) },
+		call = proc(__env_raw: rawptr) { __env := cast(^__Env)__env_raw; sched.sleep(10 * time.Millisecond); sched.send(__env.timeout, true) },
 		env = new_clone(__Env{__c0}),
 	}
 }
 
-__go_6 :: proc(__c0: $T0) -> __vidar.Task {
-	__Go_Env :: struct {
-		c0: T0,
+__closure_6 :: proc(__c0: $T0) -> __vidar.Closure(proc(rawptr)) {
+	__Env :: struct {
+		listener: T0,
 	}
-	return {
-		call = proc(__env_raw: rawptr) {
-			__genv := cast(^__Go_Env)__env_raw
-			__genv.c0.call(__genv.c0.env)
-			free(__genv)
-		},
-		env = new_clone(__Go_Env{__c0}),
+	return __vidar.Closure(proc(rawptr)){
+		call = proc(__env_raw: rawptr) { __env := cast(^__Env)__env_raw; echo_server(__env.listener) },
+		env = new_clone(__Env{__c0}),
 	}
 }
 
-__go_7 :: proc(__c0: $T0) -> __vidar.Task {
-	__Go_Env :: struct {
-		c0: T0,
-	}
-	return {
-		call = proc(__env_raw: rawptr) {
-			__genv := cast(^__Go_Env)__env_raw
-			echo_server(__genv.c0)
-			free(__genv)
-		},
-		env = new_clone(__Go_Env{__c0}),
-	}
-}
-
-__closure_4 :: proc(__c0: $T0, __c1: $T1, __c2: $T2) -> __vidar.Closure(proc(rawptr)) {
+__closure_7 :: proc(__c0: $T0, __c1: $T1, __c2: $T2) -> __vidar.Closure(proc(rawptr)) {
 	__Env :: struct {
 		k: T0,
 		endpoint: T1,
@@ -279,7 +188,7 @@ __closure_4 :: proc(__c0: $T0, __c1: $T1, __c2: $T2) -> __vidar.Closure(proc(raw
 		call = proc(__env_raw: rawptr) { __env := cast(^__Env)__env_raw;
 			conn, derr := sched.dial(__env.endpoint)
 			if derr != nil {
-				__vidar.chan_send(__env.replies, fmt.aprint("dial failed:", derr))
+				sched.send(__env.replies, fmt.aprint("dial failed:", derr))
 				return
 			}
 			msg := fmt.aprintf("ping %d", __env.k)
@@ -287,22 +196,8 @@ __closure_4 :: proc(__c0: $T0, __c1: $T1, __c2: $T2) -> __vidar.Closure(proc(raw
 			buf: [64]byte
 			n, _ := sched.recv(conn, buf[:])
 			sched.close(conn)
-			__vidar.chan_send(__env.replies, string(buf[:n]))
+			sched.send(__env.replies, string(buf[:n]))
 		},
 		env = new_clone(__Env{__c0, __c1, __c2}),
-	}
-}
-
-__go_8 :: proc(__c0: $T0) -> __vidar.Task {
-	__Go_Env :: struct {
-		c0: T0,
-	}
-	return {
-		call = proc(__env_raw: rawptr) {
-			__genv := cast(^__Go_Env)__env_raw
-			__genv.c0.call(__genv.c0.env)
-			free(__genv)
-		},
-		env = new_clone(__Go_Env{__c0}),
 	}
 }

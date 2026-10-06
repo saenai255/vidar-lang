@@ -1,6 +1,6 @@
 # Vidar
 
-Odin with **closures**, **interfaces**, **error handling helpers**, **anonymous struct literals**, **goroutines and channels**, **cyclic imports** and **typed compile-time macros**. `vidar` transpiles `.vidar` programs to plain Odin.
+Odin with **closures**, **interfaces**, **error handling helpers**, **anonymous struct literals**, a **goroutine and channel library**, **cyclic imports** and **typed compile-time macros**. `vidar` transpiles `.vidar` programs to plain Odin.
 
 [SYNTAX.md](SYNTAX.md) is a compact reference of every construct Vidar adds; [examples/](examples) has one runnable program per feature.
 
@@ -182,64 +182,71 @@ take(hero)
 
 ## Goroutines and channels
 
-Go-style concurrency: `go` starts a goroutine, channels pass values between goroutines, and `select` waits on several channel operations at once. Blocking calls look like ordinary calls. There is no `async`/`await`, so any proc can block.
+`import "vidar:sched"` gives Go-style concurrency as a library, with no new syntax. `sched.go` runs a closure on a new goroutine, channels pass values between goroutines, and `sched.select` waits on several channel operations at once. Blocking calls look like ordinary calls. There is no `async`/`await`, so any proc can block.
 
 ```odin
 import "vidar:sched"
 
 worker :: proc(id: int, jobs: sched.Chan(int), results: sched.Chan(string)) {
 	for {
-		job, ok := <-jobs                     // blocks this goroutine only
+		job, ok := sched.recv(jobs)           // blocks this goroutine only
 		if !ok do return                      // channel closed
 		sched.sleep(10 * time.Millisecond)
-		results <- fmt.aprintf("worker %d did job %d", id, job)
+		sched.send(results, fmt.aprintf("worker %d did job %d", id, job))
 	}
 }
 
 main :: proc() {
 	jobs    := sched.make_chan(int, 10)       // buffered
 	results := sched.make_chan(string)        // unbuffered
-	for id in 0..<3 do go worker(id, jobs, results)
-	for j in 0..<5 do jobs <- j
+	for id in 0..<3 do sched.go(proc[id, jobs, results]() { worker(id, jobs, results) })
+	for j in 0..<5 do sched.send(jobs, j)
 	sched.close(jobs)
 
 	timeout := sched.make_chan(bool, 1)
-	go proc[timeout]() { sched.sleep(time.Second); timeout <- true }()
+	sched.go(proc[timeout]() { sched.sleep(time.Second); sched.send(timeout, true) })
 	for _ in 0..<5 {
-		select {
-		case r := <-results: fmt.println(r)
-		case <-timeout:      fmt.println("timed out"); return
+		r: string
+		switch sched.select(sched.on_recv(results, &r), sched.on_recv(timeout)) {
+		case 0: fmt.println(r)
+		case 1: fmt.println("timed out"); return
 		}
 	}
 }
 ```
 
-| Syntax | Meaning |
-|---|---|
-| `go f(a, b)` | evaluates `f`, `a` and `b` now and runs the call on a new goroutine. Any call works: procs, `pkg.f`, proc groups, closures, `go proc[x]() { ... }()` |
-| `ch <- v` | sends `v`. Blocks until a receiver takes it, or until there is room in the buffer |
-| `<-ch`, `v := <-ch`, `v, ok := <-ch` | receives. `ok` is false once the channel is closed and drained |
-| `select { case v := <-a: ... case b <- x: ... case: ... }` | runs the first case that can proceed and waits if none can. `case:` is the default, which makes the select non-blocking |
-
-The library is imported as `import "vidar:sched"`:
-
 | Proc | |
 |---|---|
-| `make_chan(T, capacity = 0)`, `Chan(T)` | a channel and its type. Channels are values, so copies share one queue. A zero `Chan(T)` is nil and blocks forever |
+| `go(proc[captures]() { ... })` | runs the closure on a new goroutine. The capture list decides what the goroutine gets: `[x]` copies `x` now, `[&x]` shares it |
+| `make_chan(T, capacity = 0)`, `Chan(T)` | a channel and its type. Channels are handles, so copies share one queue. A zero `Chan(T)` is nil and blocks forever |
+| `send(ch, v)` | blocks until a receiver takes `v`, or until there is room in the buffer |
+| `v := recv(ch)`, `v, ok := recv(ch)` | blocks until a value arrives. `ok` is false once the channel is closed and drained |
 | `close(ch)`, `chan_len(ch)`, `chan_cap(ch)` | close a channel, count buffered values, get the capacity |
-| `sleep(d)`, `yield()` | pause this goroutine, let others run |
+| `select(cases...)`, `try_select(cases...)` | run the first case that can proceed and return its index. `select` waits; `try_select` returns -1 at once when nothing is ready |
+| `on_recv(ch, &v = nil, ok = &b)`, `on_send(ch, v)` | the cases passed to `select` |
+| `sleep(d)`, `yield()`, `after(d)` | pause this goroutine, let the others run; `after` is a channel that fires once `d` has passed, for `select` timeouts |
 | `Wait_Group`, `add(&wg, n = 1)`, `done(&wg)`, `wait(&wg)` | wait for a set of goroutines |
-| `listen_tcp`, `accept`, `dial`, `recv`, `send`, `close(socket)` | TCP that parks the goroutine instead of the thread |
+| `Mutex`, `lock(&m)`, `unlock(&m)`, `try_lock(&m)` | a lock that parks the goroutine, not the thread, so it can be held across blocking calls |
+| `listen_tcp`, `accept`, `dial`, `send(socket, buf)`, `recv(socket, buf)`, `close(socket)`, `send_file(socket, file)` | TCP |
+| `udp_socket()`, `bind`, `send_to`, `recv_from`, `close(socket)` | UDP |
+| `wait_ready(socket, .Receive / .Send)` | wait until a socket is readable or writable |
+| `open(path, mode)`, `read_at`, `write_at`, `stat`, `close(file)`, `read_entire_file`, `write_entire_file` | files |
+| `resolve("host:port")` | DNS lookup |
+| `blocking(proc[captures]() { ... })` | runs the closure on a worker thread and parks this goroutine until it returns, for anything that blocks the thread and has no `sched` version: C libraries, `os` calls, heavy computation |
 
 - **Goroutines are stackful coroutines** on one OS thread, as in Go with `GOMAXPROCS=1`. Each one has its own stack, so `defer`, `scoped!`, `context` and everything else work unchanged inside it. A goroutine inherits the `context` of the code that started it.
 - **Stacks** are 256 KB with a guard page below them. Deep recursion inside a goroutine crashes on the guard page. Set the size with `-define:VIDAR_STACK_SIZE=<bytes>`. Stacks of finished goroutines are reused.
-- **I/O goes through `core:nbio`** (io_uring on Linux, kqueue on macOS). The `sched` procs start the operation and park the goroutine. When no goroutine can run, the scheduler blocks in the event loop until one can. A plain blocking call such as `os.read` or `time.sleep` blocks every goroutine, so use the `sched` versions.
+- **Every `sched` call that waits parks only the calling goroutine.**
+  - Sockets and timers go through `core:nbio` (io_uring on Linux, kqueue on macOS) on the scheduler's thread. When no goroutine can run, the scheduler blocks in the event loop until one can.
+  - Files use io_uring on Linux. On other systems nbio would read regular files synchronously, so file operations go to a worker thread instead.
+  - `blocking(...)` and `resolve` (the DNS resolver blocks) also run on a worker. There are 4 worker threads, each with its own event loop; set the number with `-define:VIDAR_WORKERS=<n>`. A finished operation is handed back to the scheduler's event loop, which wakes the goroutine.
+  - A closure passed to `blocking` runs on another thread, with the goroutine's `context` but that thread's temp allocator. It must not touch state other goroutines use unless it synchronizes, and `context.allocator` must be thread-safe (the default heap allocator is).
+  - Plain blocking calls such as `os.read`, `time.sleep` or `core:sync` locks still block every goroutine. Use the `sched` version, or wrap the call in `blocking`.
 - **Deadlocks are detected**: if every goroutine is blocked on a channel and no I/O is pending, the program panics with `all goroutines are asleep - deadlock!`.
 - **When `main` returns, the program exits**, even if goroutines are still running, as in Go.
-- **Arguments of `go`** are evaluated into temporaries typed like the callee's parameters, so `go f(2, .Blue)` works when `f` takes an `f64` and an enum. This needs a callee with one known, non-polymorphic signature. For proc groups, polymorphic procs and procs from `core:` packages, untyped constants get their default types (`int`, `f64`), as with `$T`.
-- **Lowering:** the runtime lives in the generated `vidar_runtime` package. `go f(a)` becomes `{ t0: <param type> = a; __vidar.go(__go_1(t0)) }`, and a generated helper boxes the values for the new goroutine. `ch <- v` and `<-ch` become `chan_send`/`chan_recv`. `select` becomes a `select_raw` call followed by a `switch` on the chosen case. A 30-line assembly routine per target swaps stacks: darwin/arm64, linux/arm64 and linux/amd64 (assembled with `nasm`). Other targets fail with a compile-time `#panic`.
+- **The package is written in Vidar** ([src/sched.ts](src/sched.ts)) and bundled with the compiler. It is emitted as an ordinary package (`vidar_sched/`) next to your code, together with a 30-line assembly routine per target that swaps stacks: darwin/arm64, linux/arm64 and linux/amd64 (assembled with `nasm`). Other targets fail with a compile-time `#panic`. The language server completes its members, and go-to-definition opens its source.
 
-See [examples/goroutines](examples/goroutines): workers, a closed channel, `select` with a timeout and a default, and a TCP echo server.
+See [examples/goroutines](examples/goroutines) for workers, a closed channel, `select` with a timeout, `try_select` and a TCP echo server. [examples/sched_io](examples/sched_io) covers `blocking`, files, DNS, UDP, `Mutex` and `after`.
 
 ## Built-in library
 
@@ -252,6 +259,7 @@ Some macros come with the language: they're available in every file without an i
 | `with_allocator!(a) { ... }` | makes `a` the block's `context.allocator` |
 | `locked!(&mutex) { ... }` | holds the lock for the block and releases it on every exit (any `core:sync` lock type) |
 | `timed!("label") { ... }` | prints how long the block took to stderr; the label defaults to the source location |
+| `track!(allocator, "label") { ... }` | gives the block a tracking `context.allocator` over `allocator`; at its end, prints every allocation still live (size and location) to stderr. Both arguments are optional (allocator defaults to `context.allocator`, label to the source location); the label must be a string literal. Only active in `-debug` builds; otherwise the block runs on `allocator` untracked |
 | `format!("hi {name}, {x:.2f}")` | string interpolation into a temp-allocated string. `{expr}` prints with `%v`, `{expr:spec}` uses `%spec` (`.2f`, `5d`, `x`, `q`...), and `{{` / `}}` are literal braces. Malformed templates are compile errors. |
 | `dbg!(expr)` | prints `[file:line] expr = value` to stderr and evaluates to the value, so it can wrap any expression |
 | `check!(cond)` / `check!(cond, "msg")` | panics when `cond` is false, showing the expression. For a comparison it also shows each non-literal operand's value, and each operand is evaluated once. |
@@ -423,7 +431,7 @@ VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js   # run the LSP su
 | `src/parser.ts` | Odin parser: every node keeps its token range for lossless re-emission |
 | `src/analyzer.ts` | scopes, imports and package members, capture rules, best-effort type inference, macro expansion |
 | `src/comptime.ts` | interpreter for comptime procs, `quote`/splicing, hygiene |
-| `src/sched.ts` | the goroutine runtime (scheduler, channels, `select`, nbio-backed I/O) and its stack-switching assembly |
+| `src/sched.ts` | the bundled `vidar:sched` package (scheduler, channels, `select`, nbio-backed I/O) and its stack-switching assembly |
 | `src/emitter.ts` | re-emits tokens and lowers closures, interfaces, cross-package references and expansions |
 | `src/project.ts` | loads a program by following imports, groups import cycles (Tarjan's algorithm), and emits the output tree; shared by the CLI and the language server |
 | `src/cli.ts` | `build` / `run` / `check` / `emit` |
@@ -438,6 +446,6 @@ VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js   # run the LSP su
 - **Memory:** closure environments and by-reference boxes are allocated with `context.allocator` and never freed. That is fine for arenas and short programs.
 - **Import cycles merge packages.** Odin sees one package for the whole cycle. Procs declared inside `foreign` blocks of cycle members are not prefixed, so they must not clash across the cycle. Only relative imports are followed; packages reached through collections (`core:`, `shared:`, ...) can't take part in a cycle.
 - **Anonymous struct literals** only work in `:=` declarations inside procedures; not at file scope or in `if`/`for`/`switch` initializers.
-- **Extension keywords are contextual.** `closure`, `comptime`, `quote`, `interface`, `impl`, `catch`, `errdefer`, `go` and `select` remain usable as ordinary identifiers. `ch <- v` and `<-ch` need the `<-` written without a space; `a < -b` with a space is still a comparison, and `a<-b` is too wherever a statement can't start (in conditions and expressions).
-- **Goroutines run on one thread.** There is no parallelism yet, and there are no goroutine-aware mutexes (a `core:sync` lock held across a blocking call can deadlock). Only darwin/arm64, linux/arm64 and linux/amd64 are supported, and only darwin/arm64 is tested so far.
+- **Extension keywords are contextual.** `closure`, `comptime`, `quote`, `interface`, `impl`, `catch` and `errdefer` remain usable as ordinary identifiers.
+- **Goroutines run on one thread.** Goroutines don't run in parallel; only `blocking` work and non-Linux file I/O use other threads. Goroutines aren't preempted: a long loop that never calls into `sched` holds up the others. `core:sync` locks park the whole thread, so use `sched.Mutex` between goroutines. Only darwin/arm64, linux/arm64 and linux/amd64 are supported, and only darwin/arm64 is tested so far.
 - **Interfaces:** no embedding of one interface in another, no generic impls, and impl targets must be named types. Bound procs must be plain procs: no proc groups, polymorphic procs or closures. Method names are package-level names, so two interfaces in one package can't share a method name (`writer_write`, `stream_write`).

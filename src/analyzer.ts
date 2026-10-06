@@ -359,20 +359,6 @@ export class Analyzer {
       case "Catch":
         this.catchStmt(s, scope);
         return;
-      case "Go":
-        this.expr(s.call, scope);
-        return;
-      case "Send":
-        this.expr(s.ch, scope);
-        this.expr(s.value, scope);
-        return;
-      case "Select":
-        for (const c of s.cases) {
-          const caseScope = new Scope(scope);
-          if (c.comm) this.withStmt(c.comm, () => this.stmt(c.comm!, caseScope));
-          for (const b of c.body) this.withStmt(b, () => this.stmt(b, caseScope));
-        }
-        return;
       case "ErrDefer": {
         const top = this.errorResult(s);
         A(s)._errName = top;
@@ -416,7 +402,7 @@ export class Analyzer {
   // ---- expressions ----
 
   node(n: Node, scope: Scope): void {
-    if (n.k === "Case" || n.k === "SelectCase") return;
+    if (n.k === "Case") return;
     if (isStmt(n)) this.stmt(n as Stmt, scope);
     else this.expr(n as Expr, scope);
   }
@@ -688,7 +674,6 @@ export class Analyzer {
         return t?.t === "ptr" ? t.elem : undefined;
       }
       case "Unary": {
-        if (e.op === "<-") return undefined;
         if (e.op !== "&") return e.op === "!" ? { t: "untyped", kind: "bool" } : this.typeOf(e.x, scope, depth + 1);
         const t = this.typeOf(e.x, scope, depth + 1);
         return t && { t: "ptr", elem: t };
@@ -1264,7 +1249,7 @@ function synthIdent(name: string, pos: Pos): Expr {
   return { k: "Ident", name, toks: [{ kind: "ident", text: name, pre: "", pos }], start: 0, end: 1 };
 }
 
-const STMT_KINDS = new Set(["Go", "Send", "Select", "Catch", "ErrDefer", "ImplBlock", "Block", "ValueDecl", "Assign", "ExprStmt", "If", "When", "For", "RangeFor", "Switch", "Return", "Branch", "Defer", "Using", "Labeled", "DirectiveStmt", "Package", "Import", "RawStmt", "Empty"]);
+const STMT_KINDS = new Set(["Catch", "ErrDefer", "ImplBlock", "Block", "ValueDecl", "Assign", "ExprStmt", "If", "When", "For", "RangeFor", "Switch", "Return", "Branch", "Defer", "Using", "Labeled", "DirectiveStmt", "Package", "Import", "RawStmt", "Empty"]);
 
 export function isStmt(n: Node): boolean {
   return STMT_KINDS.has(n.k);

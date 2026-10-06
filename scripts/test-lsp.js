@@ -276,6 +276,29 @@ function change(text) {
   const aLabels = (aComp.result ?? []).map((c) => c.label);
   check("completion across a cycle hides the other package's private members", aLabels.includes("g") && !aLabels.includes("h"), JSON.stringify(aLabels));
 
+  // the bundled "vidar:sched" package: completion, and definitions that open a real file
+  const sch = realpathSync(mkdtempSync(join(tmpdir(), "vidar-lsp-sched-")));
+  cpSync("tests/lsp/sched", sch, { recursive: true });
+  const sMainPath = join(sch, "main.vidar");
+  const sMain = pathToFileURL(sMainPath).toString();
+  const sText = readFileSync(sMainPath, "utf8");
+  const sLines = sText.split("\n");
+  const sDiag = nextDiagnostics((d) => d.uri === sMain);
+  notify("textDocument/didOpen", { textDocument: { uri: sMain, languageId: "vidar", version: 1, text: sText } });
+  const sd = await sDiag;
+  check("a program importing vidar:sched has no errors", sd.diagnostics.length === 0, JSON.stringify(sd.diagnostics));
+  const goLine = sLines.findIndex((l) => l.includes("sched.go("));
+  const defGo = await request("textDocument/definition", { textDocument: { uri: sMain }, position: { line: goLine, character: sLines[goLine].indexOf("go(") } });
+  const defPath = defGo.result?.uri?.startsWith("file:") ? require("node:url").fileURLToPath(defGo.result.uri) : "";
+  check("definition of a vidar:sched member opens the bundled source", defPath.endsWith("sched.vidar") && readFileSync(defPath, "utf8").includes("go :: proc(task: closure())"), JSON.stringify(defGo.result));
+  const sEdited = sText.replace("fmt.println(sched.recv(ch))", "sched.");
+  notify("textDocument/didChange", { textDocument: { uri: sMain, version: 2 }, contentChanges: [{ text: sEdited }] });
+  await new Promise((r) => setTimeout(r, 300));
+  const eLine = sEdited.split("\n").findIndex((l) => l.trim() === "sched.");
+  const sComp = await request("textDocument/completion", { textDocument: { uri: sMain }, position: { line: eLine, character: sEdited.split("\n")[eLine].indexOf("sched.") + 6 } });
+  const sLabels = (sComp.result ?? []).map((c) => c.label);
+  check("completion after sched. lists the public API only", ["go", "make_chan", "select", "on_recv", "Chan", "sleep"].every((x) => sLabels.includes(x)) && !sLabels.includes("park"), JSON.stringify(sLabels));
+
   console.log(`\n${pass} passed, ${fail} failed`);
   await request("shutdown", null);
   notify("exit", null);

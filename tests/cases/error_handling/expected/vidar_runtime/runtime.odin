@@ -4,6 +4,9 @@ package vidar_runtime
 import "base:intrinsics"
 import "base:runtime"
 import "core:fmt"
+import "core:mem"
+import "core:path/filepath"
+import "core:slice"
 import "core:sync"
 import "core:time"
 
@@ -25,7 +28,7 @@ temp_arena_end :: proc(arena: ^Temp_Arena) {
 	runtime.default_temp_allocator_destroy(arena)
 }
 
-// built-in macros: with_allocator!, locked!, timed!, dbg!, check!, todo!, unimplemented!, format!
+// built-in macros: with_allocator!, locked!, timed!, track!, dbg!, check!, todo!, unimplemented!, format!
 lock :: proc(m: ^$T) { sync.lock(m) }
 unlock :: proc(m: ^$T) { sync.unlock(m) }
 
@@ -33,6 +36,62 @@ timer_start :: proc() -> time.Tick { return time.tick_now() }
 
 timer_report :: proc(label, site: string, start: time.Tick) {
 	fmt.eprintf("[timed] %s: %v\n", label if label != "" else site, time.tick_since(start))
+}
+
+// track!: allocations that outlive a block
+Tracker :: mem.Tracking_Allocator
+
+// release builds (no -debug) keep the allocator and skip tracking
+track_begin :: proc(backing: runtime.Allocator, internals := context.allocator) -> runtime.Allocator {
+	when !ODIN_DEBUG {
+		return backing
+	} else {
+		t := new(Tracker, internals)
+		mem.tracking_allocator_init(t, backing, internals)
+		t.bad_free_callback = track_foreign_free
+		return mem.tracking_allocator(t)
+	}
+}
+
+// a free of memory allocated before the block
+track_foreign_free :: proc(t: ^Tracker, memory: rawptr, loc: runtime.Source_Code_Location) {
+	runtime.mem_free(memory, t.backing, loc)
+}
+
+track_end :: proc(a: runtime.Allocator, label, site: string) {
+	when ODIN_DEBUG do track_report(a, label, site)
+}
+
+track_report :: proc(a: runtime.Allocator, label, site: string) {
+	t := (^Tracker)(a.data)
+	name := label if label != "" else site
+	sync.mutex_lock(&t.mutex)
+	n := len(t.allocation_map)
+	if n == 0 {
+		fmt.eprintf("[track] %s: nothing escaped\n", name)
+		internals := t.allocation_map.allocator
+		mem.tracking_allocator_destroy(t)
+		free(t, internals)
+		return
+	}
+	// t stays alive: escaped memory may still be freed through it
+	defer sync.mutex_unlock(&t.mutex)
+	entries := make([]mem.Tracking_Allocator_Entry, n, t.allocation_map.allocator)
+	defer delete(entries, t.allocation_map.allocator)
+	i, bytes := 0, 0
+	for _, e in t.allocation_map {
+		entries[i] = e
+		i += 1
+		bytes += e.size
+	}
+	slice.sort_by(entries, proc(x, y: mem.Tracking_Allocator_Entry) -> bool {
+		if x.location.file_path != y.location.file_path do return x.location.file_path < y.location.file_path
+		return x.location.line < y.location.line
+	})
+	fmt.eprintf("[track] %s: %d allocation%s escaped (%d bytes)\n", name, n, "" if n == 1 else "s", bytes)
+	for e in entries {
+		fmt.eprintf("\t%d bytes at %s:%d\n", e.size, filepath.base(e.location.file_path), e.location.line)
+	}
 }
 
 dbg :: proc(value: $T, text, site: string) -> T {

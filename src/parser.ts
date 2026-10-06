@@ -1,5 +1,5 @@
 import { CompileError, Pos, Token } from "./lexer";
-import type { Block, Capture, Case, Expr, File, Param, ProcSig, SelectCase, Stmt } from "./ast";
+import type { Block, Capture, Case, Expr, File, Param, ProcSig, Stmt } from "./ast";
 
 const BINARY_PREC: Record<string, number> = {
   "..=": 2, "..<": 2,
@@ -32,8 +32,6 @@ type NodeOf<K extends string> = Extract<Expr | Stmt, { k: K }>;
 export class Parser {
   private i = 0;
   private noLit = false;
-  /** token index of the `<-` in `ch <- value`, where the channel expression ends */
-  private arrowStop = -1;
   private typeCtx = false;
   private comptime: number;
 
@@ -305,19 +303,12 @@ export class Parser {
       const stmt = this.parseStmtNoSemi();
       return this.node("Labeled", start, { label: t.text, stmt });
     }
-    if (this.isGo()) {
-      this.i++;
-      const call = this.parseExpr();
-      if (call.k !== "Call") throw new CompileError("'go' needs a call: go f(args)", call.toks[call.start].pos);
-      return this.node("Go", start, { call });
-    }
-    if (this.isSelect()) return this.parseSelect();
     if (this.isErrDefer()) {
       this.i++;
       const stmt = this.parseStmtNoSemi();
       return this.node("ErrDefer", start, { stmt });
     }
-    const simple = this.parseSimpleStmt(true);
+    const simple = this.parseSimpleStmt();
     return this.cur.kind === "ident" && this.cur.text === "catch" ? this.parseCatch(start, simple) : simple;
   }
 
@@ -370,46 +361,8 @@ export class Parser {
     return parseTail();
   }
 
-  /** `<` immediately followed by `-`: a channel arrow (`a < -b` needs no space in Odin, so it stays a comparison only there) */
-  private isArrow(at = this.i): boolean {
-    const lt = this.toks[at];
-    const minus = this.toks[at + 1];
-    return lt.kind === "op" && lt.text === "<" && minus?.kind === "op" && minus.text === "-" && minus.pre === "";
-  }
-
-  /** The `<-` of a send statement `ch <- value`: the first top-level arrow before any assignment. */
-  private findSendArrow(): number {
-    let depth = 0;
-    for (let j = this.i; j < this.toks.length; j++) {
-      const t = this.toks[j];
-      if (t.kind === "semi" || t.kind === "eof") return -1;
-      if (t.kind !== "op") continue;
-      if (t.text === "(" || t.text === "[" || t.text === "{") depth++;
-      else if (t.text === ")" || t.text === "]" || t.text === "}") {
-        if (--depth < 0) return -1;
-      } else if (depth === 0 && (t.text === ":" || t.text === "::" || t.text === ":=" || ASSIGN_OPS.has(t.text))) return -1;
-      else if (depth === 0 && j > this.i && this.isArrow(j)) return j;
-    }
-    return -1;
-  }
-
-  /** With `allowSend`, a statement of the form `ch <- value` is a channel send. */
-  parseSimpleStmt(allowSend = false): Stmt {
+  parseSimpleStmt(): Stmt {
     const start = this.i;
-    const arrow = allowSend ? this.findSendArrow() : -1;
-    if (arrow >= 0) {
-      this.arrowStop = arrow;
-      let ch: Expr;
-      try {
-        ch = this.parseExpr();
-      } finally {
-        this.arrowStop = -1;
-      }
-      if (this.i !== arrow) throw this.err("expected '<-' in send statement");
-      this.i += 2;
-      const value = this.parseExpr();
-      return this.node("Send", start, { ch, value });
-    }
     const lhs = this.parseExprList();
     const t = this.cur;
     if (t.kind === "op" && (t.text === ":" || t.text === "::" || t.text === ":=")) {
@@ -438,58 +391,6 @@ export class Parser {
     }
     if (lhs.length !== 1) throw this.err("expected ':=', '=' or ':' after expression list");
     return this.node("ExprStmt", start, { x: lhs[0] });
-  }
-
-  private isGo(): boolean {
-    if (this.cur.kind !== "ident" || this.cur.text !== "go") return false;
-    const n = this.peek();
-    return n.pos.line === this.cur.pos.line && (n.kind === "ident" || (n.kind === "kw" && n.text === "proc"));
-  }
-
-  private isSelect(): boolean {
-    return this.cur.kind === "ident" && this.cur.text === "select" && this.isOp("{", this.peek()) && this.peek().pos.line === this.cur.pos.line;
-  }
-
-  private parseSelect(): Stmt {
-    const start = this.i++;
-    this.expectOp("{");
-    const cases: SelectCase[] = [];
-    this.skipSemis();
-    while (!this.isOp("}")) {
-      const cStart = this.i;
-      if (!this.isKw("case")) throw this.err("expected 'case'");
-      this.i++;
-      const commStart = this.i;
-      const comm = this.isOp(":") ? null : this.withLit(true, () => (this.caseHasStmt() ? this.parseSimpleStmt(true) : this.node("ExprStmt", commStart, { x: this.parseExpr() })));
-      if (comm && !isSelectComm(comm)) throw new CompileError("a select case must send (case ch <- v:) or receive (case <-ch:, case v := <-ch:, case v, ok := <-ch:)", comm.toks[comm.start].pos);
-      this.expectOp(":");
-      const body: Stmt[] = [];
-      this.withLit(true, () => {
-        this.skipSemis();
-        while (!this.isKw("case") && !this.isOp("}")) {
-          body.push(this.parseStmt());
-          this.skipSemis();
-        }
-      });
-      cases.push({ k: "SelectCase", toks: this.toks, start: cStart, end: this.i, comm, body });
-    }
-    this.i++;
-    return this.node("Select", start, { cases });
-  }
-
-  /** A select case written as a statement (`v := <-ch`, `v = <-ch`, `ch <- v`) rather than a bare `<-ch`. */
-  private caseHasStmt(): boolean {
-    let depth = 0;
-    for (let j = this.i; j < this.toks.length; j++) {
-      const t = this.toks[j];
-      if (t.kind === "semi" || t.kind === "eof") return false;
-      if (t.kind !== "op") continue;
-      if (t.text === "(" || t.text === "[" || t.text === "{") depth++;
-      else if (t.text === ")" || t.text === "]" || t.text === "}") depth--;
-      else if (depth === 0 && (t.text === ":=" || t.text === "=" || (j > this.i && this.isArrow(j)))) return true;
-      else if (depth === 0 && t.text === ":") return false;
-    }
-    return false;
   }
 
   private isImplDecl(): boolean {
@@ -701,7 +602,6 @@ export class Parser {
     const start = this.i;
     let x = this.parseUnary();
     for (;;) {
-      if (this.i === this.arrowStop) return x;
       const op = this.binaryOp();
       if (!op || BINARY_PREC[op] < minPrec) return x;
       this.i++;
@@ -736,11 +636,6 @@ export class Parser {
   private parseUnary(): Expr {
     const start = this.i;
     const t = this.cur;
-    if (this.isArrow() && !this.typeCtx) {
-      this.i += 2;
-      const x = this.parseUnary();
-      return this.node("Unary", start, { op: "<-", x });
-    }
     if (t.kind === "op" && ["-", "+", "!", "~", "&", "^"].includes(t.text)) {
       this.i++;
       const x = this.parseUnary();
@@ -1289,17 +1184,4 @@ export class Parser {
 
 function macroPath(x: Expr): string[] {
   return x.k === "Ident" ? [x.name] : x.k === "Selector" && x.x.k === "Ident" ? [x.x.name, x.name] : [];
-}
-
-function isRecv(e: Expr): boolean {
-  return e.k === "Unary" && e.op === "<-";
-}
-
-/** `ch <- v`, `<-ch`, `v := <-ch`, `v, ok := <-ch`, `v = <-ch`, `v, ok = <-ch` */
-export function isSelectComm(s: Stmt): boolean {
-  if (s.k === "Send") return true;
-  if (s.k === "ExprStmt") return isRecv(s.x);
-  if (s.k === "ValueDecl") return !s.isConst && !s.type && s.names.length <= 2 && s.values.length === 1 && isRecv(s.values[0]);
-  if (s.k === "Assign") return s.op === "=" && s.lhs.length <= 2 && s.rhs.length === 1 && isRecv(s.rhs[0]);
-  return false;
 }

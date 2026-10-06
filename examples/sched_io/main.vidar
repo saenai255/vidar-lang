@@ -1,0 +1,83 @@
+package main
+
+import "core:fmt"
+import "core:net"
+import "core:time"
+import "vidar:sched"
+
+main :: proc() {
+	start := time.tick_now()
+
+	// a goroutine ticking while another blocks a worker thread for 100ms
+	ticks := 0
+	stop := false
+	sched.go(proc[&ticks, &stop]() {
+		for !stop {
+			sched.sleep(5 * time.Millisecond)
+			ticks += 1
+		}
+	})
+	sched.blocking(proc[]() { time.sleep(100 * time.Millisecond) })
+	stop = true
+	fmt.println("ticked while blocked:", ticks >= 10)
+
+	// files
+	path := "/tmp/vidar-sched-test.txt"
+	err := sched.write_entire_file(path, transmute([]byte)string("hello from a goroutine\n"))
+	fmt.println("write:", err)
+	data, rerr := sched.read_entire_file(path)
+	fmt.print("read:", rerr, string(data))
+	f, oerr := sched.open(path)
+	kind, size, _ := sched.stat(f)
+	buf: [5]byte
+	n, _ := sched.read_at(f, 6, buf[:])
+	fmt.println("stat:", oerr, kind, size, "read_at:", string(buf[:n]))
+	sched.close(f)
+
+	// many file reads in parallel goroutines
+	done := sched.make_chan(int, 50)
+	for i in 0..<50 do sched.go(proc[path, done]() {
+		d, _ := sched.read_entire_file(path)
+		sched.send(done, len(d))
+	})
+	total := 0
+	for _ in 0..<50 do total += sched.recv(done)
+	fmt.println("parallel reads:", total == 50 * 23)
+
+	// DNS on a worker
+	ep4, _, derr := sched.resolve("localhost:80")
+	fmt.println("resolve:", derr, ep4)
+
+	// UDP echo
+	server, _ := sched.udp_socket()
+	sched.bind(server, {net.IP4_Loopback, 0})
+	addr, _ := net.bound_endpoint(server)
+	sched.go(proc[server]() {
+		b: [64]byte
+		n, from, _ := sched.recv_from(server, b[:])
+		sched.send_to(server, b[:n], from)
+	})
+	client, _ := sched.udp_socket()
+	sched.send_to(client, transmute([]byte)string("ping"), addr)
+	b: [64]byte
+	m, _, _ := sched.recv_from(client, b[:])
+	fmt.println("udp:", string(b[:m]))
+
+	// mutex held across a sleep: goroutines take turns without blocking the thread
+	mu: sched.Mutex
+	order := sched.make_chan(int, 3)
+	for i in 0..<3 do sched.go(proc[i, &mu, order]() {
+		sched.lock(&mu)
+		defer sched.unlock(&mu)
+		sched.sleep(5 * time.Millisecond)
+		sched.send(order, i)
+	})
+	fmt.println("mutex order:", sched.recv(order), sched.recv(order), sched.recv(order))
+
+	// after() as a select timeout
+	never := sched.make_chan(int)
+	switch sched.select(sched.on_recv(never), sched.on_recv(sched.after(10 * time.Millisecond))) {
+	case 1: fmt.println("after fired")
+	}
+	fmt.println("total under 1s:", time.tick_since(start) < time.Second)
+}

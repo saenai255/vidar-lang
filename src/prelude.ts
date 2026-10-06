@@ -55,6 +55,37 @@ timed :: comptime proc(label: Expr = "", body: Stmt) -> Stmt {
 	}
 }
 
+// track!("label") { ... } runs the block with a tracking context.allocator and, when it ends, prints
+// every allocation that is still live (to stderr). The label defaults to the call site.
+// Only in -debug builds; otherwise the block runs untracked.
+// track!(allocator) / track!(allocator, "label") tracks allocations made from ${"`"}allocator${"`"} instead.
+track :: comptime proc(a: Expr = "", b: Expr = "", body: Stmt) -> Stmt {
+	site := call_site()
+	a_text := stringify(a)
+	b_text := stringify(b)
+	a_is_label := len(a_text) > 0 && (a_text[0] == '"' || a_text[0] == '${"`"}')
+	b_is_label := len(b_text) > 0 && (b_text[0] == '"' || b_text[0] == '${"`"}')
+	label := a
+	allocator := quote(context.allocator)
+	if a_is_label && !b_is_label {
+		allocator = b
+	} else if !a_is_label && b_is_label {
+		label = b
+		allocator = a
+	} else if !a_is_label {
+		compile_error("track!: takes an allocator and a string literal label")
+	} else if b_text != "\"\"" {
+		compile_error("track!: takes at most one label")
+	}
+	return quote {
+		{
+			context.allocator = __vidar.track_begin($allocator)
+			defer __vidar.track_end(context.allocator, $label, $site)
+			$body
+		}
+	}
+}
+
 // dbg!(expr) prints "file:line: expr = value" (to stderr) and evaluates to the value.
 dbg :: comptime proc(value: Expr) -> Expr {
 	return quote(__vidar.dbg($value, $(stringify(value)), $(call_site())))

@@ -5,4 +5,5 @@ sum of squares: 30
 closure sum: 45
 timed out
 nothing ready
+closed channel, ok = false
 echoed 3 messages
