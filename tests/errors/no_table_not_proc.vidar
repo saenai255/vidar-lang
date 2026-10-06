@@ -1,0 +1,5 @@
+// error: @(no_table) goes on a proc declaration with a body: name :: proc(...) { ... }
+package main
+@(no_table)
+X :: 3
+main :: proc() {}

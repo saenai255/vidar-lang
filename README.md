@@ -1,10 +1,10 @@
 # Vidar
 
-Odin with **closures**, **interfaces**, **error handling helpers**, **anonymous struct literals**, a **goroutine and channel library**, **cyclic imports** and **typed compile-time macros**. `vidar` transpiles `.vidar` programs to plain Odin.
+Odin with **closures**, **interfaces**, **error handling helpers**, **anonymous struct literals**, a **goroutine and channel library**, **cyclic imports**, **typed compile-time macros** and **optimizations Odin can't do on its own** (lookup tables, specialized copies, pools, compiled `fmt` formats). `vidar` transpiles `.vidar` programs to plain Odin.
 
 [SYNTAX.md](SYNTAX.md) is a compact reference of every construct Vidar adds; [examples/](examples) has one runnable program per feature.
 
-Everything that is already Odin passes through **byte-for-byte**: comments, formatting and line numbers are kept. Only the new constructs are rewritten. As a check, 1313 of the 1317 `.odin` files in Odin's `core`, `base` and `vendor` libraries come out of the full pipeline unchanged. Macro expansions get lines of their own, and vidar keeps a map from generated lines to source lines, so errors Odin reports in generated code point at the right line of your `.vidar` file.
+Everything that is already Odin passes through **byte-for-byte** (unless you ask for `-opt`): comments, formatting and line numbers are kept. Only the new constructs are rewritten. As a check, 1313 of the 1317 `.odin` files in Odin's `core`, `base` and `vendor` libraries come out of the full pipeline unchanged. Macro expansions get lines of their own, and vidar keeps a map from generated lines to source lines, so errors Odin reports in generated code point at the right line of your `.vidar` file.
 
 ```bash
 npm install && npm run build
@@ -13,6 +13,7 @@ node dist/cli.js check examples/macros              # transpile + odin check
 node dist/cli.js run   examples/cyclic              # a program whose packages import each other
 node dist/cli.js emit  examples/cyclic              # print the generated Odin
 node dist/cli.js build examples/cyclic -o out/game  # write the generated Odin tree
+node dist/cli.js run   examples/negative_cost -opt  # with the -opt rewrites
 npm test
 ```
 
@@ -389,6 +390,92 @@ d := square!(k)                              // error: 'k' is a runtime value
 
 See [examples/comptime](examples/comptime): lookup tables, struct configs, static assertions and `comptime! { ... }` blocks.
 
+## Faster code: `-opt`, pools, tables and specialization
+
+Vidar can write some code more specifically than you would by hand, because it sees the whole program. Some of this is opt-in syntax (`Pool`, `@(table)`, `@(specialize)`); the rest happens under the `-opt` flag, which also rewrites plain Odin where the result is provably the same program, only faster. Without `-opt`, plain Odin still passes through byte-for-byte.
+
+```bash
+node dist/cli.js run examples/negative_cost -opt          # same output, faster
+node dist/cli.js emit examples/negative_cost -opt-report  # -opt, plus what it decided per proc and why
+```
+
+### `-opt` on plain Odin
+
+- **fmt calls with a literal format** (`fmt.printf`, `fmt.println`, `fmt.sbprintf`, `fmt.tprintf`, `fmt.wprintf`, the `e`/`a` variants, ...) compile to a proc that writes each piece directly: no format parsing at run time, no `any` boxing, no type switch. `%v %d %s %x %t %c` on basic types are written directly; other verbs and flags still go through `fmt`, one argument at a time. A format vidar can't read (`{}` arguments, `*` widths, explicit argument indexes) is left alone.
+- **Bounds checks a loop already guarantees** are dropped (`#no_bounds_check` on the statement) when the index comes from `for i in 0..<len(a)`, `for x, i in a` or `for i := 0; i < len(a); i += 1`, and nothing in the loop can change `a`'s length: `a` is a local or parameter that isn't reassigned, appended to, or reachable through a pointer.
+- **Allocations freed together:** adjacent `x := make([]E, n)` / `p := new(T)` that are only freed by a `defer delete(x)` / `defer free(p)` in the same block become one allocation, sliced up, and freed by the defer that runs last.
+- **Lookup tables, chosen automatically:** a proc taking one `bool`, `u8` or `i8` and returning an integer or `bool` becomes a table when its body is pure integer code (locals, constants, arithmetic, `if`/`for`/`switch`, calls to procs that pass the same check), has a loop or at least 24 operations, and finishes at compile time for every input. Floats, strings, globals, pointers and macros rule a proc out, because the compile-time interpreter can't promise to compute them exactly as the compiled program does.
+- **Specialization, chosen automatically:** a proc gets a copy per constant argument when that parameter bounds a loop, or divides, shifts or branches inside one, and the calls pass constants to it. It is skipped when every call passes the same constant (LLVM already folds that) and when it would take more than 4 copies.
+
+`@(no_table)` and `@(no_specialize)` keep a proc out of the automatic choices, e.g. a baseline you benchmark against. `-opt-report` lists each proc that was tabulated or specialized, and each one that nearly was, with the reason:
+
+```
+main.vidar:9: collatz: table of 256 results, has a loop, pure integer code
+main.vidar:45: noisy: no table: it reads 'counter', which isn't a local or a constant (line 47)
+main.vidar:66: blur: specialized: radius bounds a loop; one copy for each of radius = 1 | radius = 2
+main.vidar:73: sum_to: not specialized: every call passes n = 10, which LLVM folds without a copy
+```
+
+### `@(table)`
+
+`@(table)` on a proc with one parameter of type `bool`, `u8`, `i8` or an enum turns it into a lookup: the result for every value is stored, and the proc becomes `return table[x]`. For `bool`, `u8` and `i8`, vidar runs the body at compile time and writes the table as a `@(rodata)` literal. For an enum (whose members must not have explicit values), or a body that can't run at compile time, the table is filled once at startup from the original body. The body must not depend on anything but its argument; vidar can't check that for a table you ask for, which is why only the automatic tables are restricted to code it can check.
+
+```odin
+@(table)
+collatz :: proc(b: u8) -> int {         // collatz :: #force_inline proc(b: u8) -> int { return __collatz_table[b] }
+	n := int(b) + 1
+	steps := 0
+	for n != 1 {
+		n = n / 2 if n % 2 == 0 else 3 * n + 1
+		steps += 1
+	}
+	return steps
+}
+```
+
+### `@(specialize)`
+
+`@(specialize)` on a proc gives each call that passes constants a copy where those parameters are compile-time (`$radius`), so Odin builds one version per value and LLVM can unroll loops, turn divisions into shifts and drop branches. Parameters of basic types and enums qualify; calls with run-time values call the original.
+
+```odin
+@(specialize)
+box_blur :: proc(dst, src: []int, radius: int) { ... }
+
+box_blur(dst, src, 1)       // box_blur__radius(dst, src, 1), with `$radius: int`
+box_blur(dst, src, r)       // the original
+```
+
+### `Pool(I)`
+
+`Pool(I)` holds values of every type implementing the interface `I`, stored by type: one `[dynamic]T` per implementation instead of one array of interface values. `for s in pool` becomes one loop per type, in which `s` is a `^T`, so method calls are direct calls Odin can inline. `s` converts to `I` like any pointer to an implementation.
+
+```odin
+shapes: Pool(Shape)
+append(&shapes, Rect{2, 3}, Circle{2})   // copies each value into its type's array
+for s in shapes do total += area(s)      // a Circle loop, then a Rect loop, ...
+len(shapes); clear(&shapes); delete(shapes)
+```
+
+- Values of one type keep their order; types are visited in the order of their `impl` blocks.
+- `break`, `continue` and labels act on the whole loop, as written.
+- Every implementation of `I` must be known: `I` must not be extended by an interface in another package.
+- `append` takes values, not pointers, and is a statement of its own. `for s, i in pool` (an index) is an error.
+
+### What it buys
+
+`examples/negative_cost` measures each feature against the plain version (`--bench`, built with `-o:speed` on an M3 Pro):
+
+| | plain | vidar |
+|---|---|---|
+| `fmt.sbprintf` with a literal format | 210 ms | 68 ms |
+| three scratch allocations freed together | 115 ms | 45 ms |
+| loop with proven indexes | 24.2 ms | 24.2 ms |
+| box blur, radius 1 and 3 (`@(specialize)`) | 33 ms | 11 ms |
+| Collatz steps over bytes (`@(table)`) | 282 ms | 1.4 ms |
+| sum of areas over shapes (`Pool` vs `[dynamic]Shape`) | 3.5 ms | 3.2 ms |
+
+Bounds checks rarely matter: LLVM already removes most of them in loops like these. The table wins only when the body costs more than a memory load; a bit count, which LLVM turns into one instruction, gains nothing. On the slime_mud server simulation, `-opt` took a run from 980 ms to 760 ms; the hand-written Odin version takes 905 ms.
+
 ## Language server
 
 `vidar-lsp` speaks standard LSP over stdio, so any editor can use it. Put the standalone binaries on your PATH, or run `npm link` in this repo.
@@ -444,7 +531,7 @@ VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js   # run the LSP su
 ```
 
 - **Unit tests** (`tests/unit/*.test.js`, `node:test`): lexer semicolon insertion and trivia, parser round-trips of tricky Odin syntax, parsing of the extension syntax and error recovery, compile-time evaluation, hygiene, spacing of generated code, and the import-cycle grouping (Tarjan's algorithm, merged units, prefixes, output layout).
-- **Sample programs with fixtures** (`tests/cases/<name>/`): one feature area each. The sample is `input.vidar`, or an `input/` directory for multi-package programs. `expected/` holds the transpiled Odin tree, and `stdout.txt` is the program's expected output, checked by running it with `odin run`. Cases named `plain_*` must come out byte-identical to their input. They cover:
+- **Sample programs with fixtures** (`tests/cases/<name>/`): one feature area each. The sample is `input.vidar`, or an `input/` directory for multi-package programs. `expected/` holds the transpiled Odin tree, and `stdout.txt` is the program's expected output, checked by running it with `odin run`. Cases named `plain_*` must come out byte-identical to their input. Cases named `opt_*` are transpiled with `-opt`. Every case is also transpiled the other way; if `-opt` changes its output, that version is run too and must print the same. They cover:
   - closures: capture modes, loops, every declaration form, multiple results, variadics, nesting, closure types
   - interfaces: dispatch, static calls across packages, decorators, multiple results, variadic methods
   - macros: hygiene, code generation, reflection, the typecheck fallback
@@ -472,6 +559,9 @@ VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js   # run the LSP su
 | `src/comptime.ts` | interpreter for comptime procs, `quote`/splicing, hygiene |
 | `src/sched.ts` | the bundled `vidar:sched` package (scheduler, channels, `select`, nbio-backed I/O) and its stack-switching assembly |
 | `src/emitter.ts` | re-emits tokens and lowers closures, interfaces, cross-package references and expansions |
+| `src/optimize.ts` | `-opt` rewrites inside a proc: proven bounds checks, allocations freed together |
+| `src/autoopt.ts` | `-opt` after analysis: which procs become tables or specialized copies, and the `-opt-report` notes |
+| `src/fmtspec.ts` | reads `fmt` format strings for `-opt` |
 | `src/project.ts` | loads a program by following imports, groups import cycles (Tarjan's algorithm), and emits the output tree; shared by the CLI and the language server |
 | `src/cli.ts` | `build` / `run` / `check` / `emit` |
 | `src/bin.ts` | entry point of the standalone binary (`vidar`, `vidar-lsp`) |
@@ -487,4 +577,5 @@ VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js   # run the LSP su
 - **Anonymous struct literals** only work in `:=` declarations inside procedures; not at file scope or in `if`/`for`/`switch` initializers.
 - **Extension keywords are contextual.** `closure`, `quote`, `interface`, `impl`, `catch` and `errdefer` remain usable as ordinary identifiers, and `take` is only a keyword inside `do!` and `comptime!` blocks.
 - **Goroutines run on one thread.** Goroutines don't run in parallel; only `blocking` work and non-Linux file I/O use other threads. Goroutines aren't preempted: a long loop that never calls into `sched` holds up the others. `core:sync` locks park the whole thread, so use `sched.Mutex` between goroutines. Only darwin/arm64, linux/arm64 and linux/amd64 are supported, and only darwin/arm64 is tested so far.
+- **`-opt` and `@(table)`** trust the compile-time interpreter. Automatic tables use only integer code it runs exactly; a `@(table)` you write yourself must be pure, which vidar does not check.
 - **Interfaces:** no generic impls, and impl targets must be named types. Bound procs must be plain procs: no proc groups, polymorphic procs or closures. Method names are package-level names, so two interfaces in one package can't share a method name (`writer_write`, `stream_write`).

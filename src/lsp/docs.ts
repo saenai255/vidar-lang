@@ -78,6 +78,7 @@ export const BUILTIN_TYPE_DOCS: Record<string, string> = {
   any: "Any value, as a pointer to its data and its `typeid`.",
   complex64: "Complex number of two `f32`.", complex128: "Complex number of two `f64`.",
   quaternion256: "Quaternion of four `f64`.",
+  Pool: "Vidar: `Pool(I)` holds values of every implementation of interface `I`, one array per type. `for s in pool` loops over each type in turn with `s: ^T`, so method calls are direct. Supports `append` (values), `len`, `clear` and `delete`.",
 };
 
 const b = (sig: string, text: string): Doc => ({ sig, text });
@@ -188,4 +189,8 @@ export const ATTRIBUTE_DOCS: Record<string, string> = {
   disabled: "Removes calls to the procedure when the condition is true.",
   thread_local: "Gives each thread its own copy of a global.",
   static: "Makes a local variable live for the whole program.",
+  table: "Vidar: stores the result for every value of the one `bool`, `u8`, `i8` or enum parameter, and turns calls into a table lookup. The body must depend only on its argument.",
+  specialize: "Vidar: calls passing constants to basic or enum parameters call a copy where those parameters are compile-time (`$p`).",
+  no_table: "Vidar: `-opt` won't turn this procedure into a lookup table on its own.",
+  no_specialize: "Vidar: `-opt` won't make specialized copies of this procedure on its own.",
 };

@@ -1,0 +1,103 @@
+package main
+
+import "core:fmt"
+
+counter := 0
+SHIFT :: 3
+
+// loops over integers only: -opt makes it a table
+collatz :: proc(b: u8) -> int {
+	n := int(b) + 1
+	steps := 0
+	for n != 1 {
+		n = n / 2 if n % 2 == 0 else 3 * n + 1
+		steps += 1
+	}
+	return steps
+}
+
+// a default case written first still runs last
+bucket :: proc(b: u8) -> u8 {
+	r: u8 = 0
+	for i in 0..<int(b % 4) {
+		switch i {
+		case:
+			r += 1
+		case 2:
+			r += 10
+		}
+	}
+	return r ~ (b << SHIFT)
+}
+
+parity :: proc(x: i8) -> bool { return odd(int(x)) }
+
+odd :: proc(n: int) -> bool {
+	m := n
+	for m >= 2 || m <= -2 do m -= 2 if m > 0 else -2
+	return m != 0
+}
+
+// too cheap to beat a load
+twice :: proc(b: u8) -> u8 { return b * 2 }
+
+// reads a variable
+noisy :: proc(b: u8) -> int {
+	total := 0
+	for i in 0..<int(b) do total += counter
+	return total
+}
+
+// floats aren't run at compile time exactly as compiled
+halves :: proc(b: u8) -> int {
+	f := f32(b)
+	for f > 1 do f /= 3
+	return int(f * 100)
+}
+
+@(no_table)
+kept :: proc(b: u8) -> int {
+	n := 0
+	for i in 0..<int(b) do n += i
+	return n
+}
+
+// radius bounds the loop and calls pass two constants: a copy for each
+blur :: proc(xs: []int, radius: int) -> int {
+	s := 0
+	for i in radius..<len(xs) - radius do for k in -radius..=radius do s += xs[i + k]
+	return s
+}
+
+// every call passes the same constant: left to LLVM
+sum_to :: proc(n: int) -> int {
+	s := 0
+	for i in 0..<n do s += i
+	return s
+}
+
+// the divisor is a constant inside a loop
+@(no_specialize)
+div_all :: proc(xs: []int, d: int) -> int {
+	s := 0
+	for x in xs do s += x / d
+	return s
+}
+
+step :: proc(xs: []int, d: int) -> int {
+	s := 0
+	for x in xs do s += x / d
+	return s
+}
+
+main :: proc() {
+	counter = 2
+	r := 2
+	xs := []int{5, 1, 4, 1, 5, 9, 2, 6, 5, 3}
+	fmt.println(collatz(0), collatz(26), collatz(255))
+	fmt.println(bucket(3), bucket(7), bucket(200))
+	fmt.println(parity(-7), parity(12), twice(200), noisy(3), halves(200), kept(10))
+	fmt.println(blur(xs, 1), blur(xs, 2), blur(xs, r))
+	fmt.println(sum_to(10), sum_to(10))
+	fmt.println(div_all(xs, 2), div_all(xs, 3), step(xs, 2), step(xs, 3))
+}

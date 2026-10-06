@@ -113,8 +113,11 @@ export class Interp {
     }
   }
 
+  /** steps one evaluation may take */
+  stepLimit = MAX_STEPS;
+
   private tick(pos: Pos): void {
-    if (++this.steps > MAX_STEPS) throw new CompileError("compile-time evaluation exceeded the step limit (infinite loop?)", pos);
+    if (++this.steps > this.stepLimit) throw new CompileError("compile-time evaluation exceeded the step limit (infinite loop?)", pos);
   }
 
   private invoke(p: Extract<Val, { k: "proc" }>, args: Val[], pos: Pos): Val {
@@ -239,14 +242,11 @@ export class Interp {
         const inner = new Env(env, env.scope);
         if (s.init) this.exec(s.init, inner);
         const tag = s.tag ? this.eval(s.tag, inner) : { k: "bool" as const, v: true };
-        for (const c of s.cases) {
-          const hit = c.exprs.length === 0 || c.exprs.some((e) => valEq(this.eval(e, inner), tag));
-          if (hit) {
-            const r = this.block({ k: "Block", toks: c.toks, start: c.start, end: c.end, stmts: c.body }, inner);
-            return r.k === "break" ? NORMAL : r;
-          }
-        }
-        return NORMAL;
+        // default runs only when no other case matches, wherever it is written
+        const hit = s.cases.find((c) => c.exprs.some((e) => valEq(this.eval(e, inner), tag))) ?? s.cases.find((c) => !c.exprs.length);
+        if (!hit) return NORMAL;
+        const r = this.block({ k: "Block", toks: hit.toks, start: hit.start, end: hit.end, stmts: hit.body }, inner);
+        return r.k === "break" ? NORMAL : r;
       }
       case "Return":
         if (s.results.length > 1) throw new CompileError("comptime procs return a single value", posOf(s));
@@ -271,7 +271,10 @@ export class Interp {
       const ty = (loV.k === "int" && loV.ty) || (hiV.k === "int" && hiV.ty) || "int";
       const lo = num(loV, posOf(s));
       const hi = num(hiV, posOf(s)) + (s.x.op === "..=" ? 1 : 0);
-      for (let i = lo; i < hi; i++) items.push([{ k: "int", v: BigInt(i), ty }, index(i - lo)]);
+      for (let i = lo; i < hi; i++) {
+        this.tick(posOf(s));
+        items.push([{ k: "int", v: BigInt(i), ty }, index(i - lo)]);
+      }
     } else {
       const it = this.eval(s.x, env);
       if (it.k === "array") it.items.forEach((v, i) => items.push([v, index(i)]));

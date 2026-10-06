@@ -152,7 +152,7 @@ function change(text) {
   let renameOk = false;
   try {
     const out = [...transpile([{ path: file, text: renamed.join("\n") }]).values()][0];
-    renameOk = !/\bcount\b/.test(renamed.join("\n")) && out.includes("clicks := new_clone(0)");
+    renameOk = !/\bcount\b/.test(renamed.join("\n")) && out.includes("clicks := 0");
   } catch (e) {
     renameOk = false;
   }

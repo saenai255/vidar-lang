@@ -153,6 +153,7 @@ box_blur :: #force_no_inline proc(dst, src: []int, radius: int) {
 	}
 }
 
+@(no_specialize)
 box_blur_plain :: #force_no_inline proc(dst, src: []int, radius: int) {
 	for i in radius..<len(src) - radius {
 		s := 0
@@ -196,6 +197,7 @@ collatz :: proc(b: u8) -> int {
 	return steps
 }
 
+@(no_table)
 collatz_plain :: proc(b: u8) -> int {
 	n := int(b) + 1
 	steps := 0

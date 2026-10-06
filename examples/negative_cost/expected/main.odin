@@ -161,6 +161,7 @@ box_blur :: #force_no_inline proc(dst, src: []int, radius: int) {
 	}
 }
 
+
 box_blur_plain :: #force_no_inline proc(dst, src: []int, radius: int) {
 	for i in radius..<len(src) - radius {
 		s := 0
@@ -195,6 +196,7 @@ blur :: proc(n, reps: int) {
 // steps the Collatz sequence takes from b + 1 down to 1
 
 collatz :: #force_inline proc(b: u8) -> int { return __collatz_table[b] }
+
 
 
 

@@ -1,0 +1,5 @@
+// error: @(specialize) and @(no_specialize) contradict each other
+package main
+@(specialize, no_specialize)
+f :: proc(n: int) -> int { return n }
+main :: proc() {}

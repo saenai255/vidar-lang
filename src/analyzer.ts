@@ -2,12 +2,14 @@ import { CompileError, Pos, Token } from "./lexer";
 import { Block, Expr, File, Node, Param, ProcSig, Stmt, children } from "./ast";
 import { Parser } from "./parser";
 import { CaptureSym, Ctx, GlobalSym, LocalSym, PackageInfo, PkgSym, Scope, Sym, Ty } from "./scope";
+import { autoOptimize } from "./autoopt";
 import { CallSpan, Interp, NotConstant, Val, joinTokens, repeatable, respace, valueToTokens, tokensOf } from "./comptime";
 
 /** Annotation accessor: analysis results live in `_`-prefixed fields on nodes. */
 export const A = (n: object) => n as Record<string, any>;
 
 type ProcLit = Extract<Expr, { k: "ProcLit" }>;
+type Call = Extract<Expr, { k: "Call" }>;
 type ValueDecl = Extract<Stmt, { k: "ValueDecl" }>;
 type MacroCall = Extract<Expr, { k: "MacroCall" }>;
 type ImplBlock = Extract<Stmt, { k: "ImplBlock" }>;
@@ -54,6 +56,12 @@ export interface ImplInfo {
   implied?: boolean;
 }
 
+/** A direct call, with the scope it is made in. */
+export interface CallSite {
+  call: Call;
+  scope: Scope;
+}
+
 /** A @(specialize) proc. */
 export interface SpecInfo {
   lit: ProcLit;
@@ -84,7 +92,7 @@ export interface IfaceMethod {
   rest: ProcSig;
 }
 
-const INT_TYPES = new Set(["int", "uint", "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "uintptr", "byte",
+export const INT_TYPES = new Set(["int", "uint", "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64", "u128", "uintptr", "byte",
   "i16le", "i32le", "i64le", "u16le", "u32le", "u64le", "i16be", "i32be", "i64be", "u16be", "u32be", "u64be"]);
 const FLOAT_TYPES = new Set(["f16", "f32", "f64", "f16le", "f32le", "f64le", "f16be", "f32be", "f64be"]);
 const MAX_EXPANSION_DEPTH = 64;
@@ -165,6 +173,7 @@ export class Analyzer {
         for (const s of f.stmts) this.guard(() => this.topStmt(s, fileScope));
       }
     }
+    if (this.optimize) this.guard(() => autoOptimize(this));
   }
 
   // ---- declarations ----
@@ -207,14 +216,19 @@ export class Analyzer {
           return sym;
         });
         A(s)._syms = syms;
-        const attrs = this.takeAttrs(s, ["specialize", "table"]);
+        if (inWhen) for (const sym of syms) this.whenDeclared.add(sym);
+        const attrs = this.takeAttrs(s, ["specialize", "table", "no_specialize", "no_table"]);
         if (attrs.size) {
           const lit = s.values.length === 1 && s.isConst ? unwrapProc(s.values[0]) : undefined;
           const which = [...attrs].map((a) => `@(${a})`).join(" and ");
-          if (attrs.size > 1) throw new CompileError("a proc is either @(specialize) or @(table), not both", posOf(s));
+          if (attrs.has("specialize") && attrs.has("table")) throw new CompileError("a proc is either @(specialize) or @(table), not both", posOf(s));
+          for (const a of ["specialize", "table"])
+            if (attrs.has(a) && attrs.has(`no_${a}`)) throw new CompileError(`@(${a}) and @(no_${a}) contradict each other`, posOf(s));
           if (!lit || !lit.body || lit.comptime || lit.captures) throw new CompileError(`${which} goes on a proc declaration with a body: name :: proc(...) { ... }`, posOf(s));
           if (attrs.has("specialize")) this.specialized.set(syms[0], { lit, scope: fileScope, clones: new Map() });
-          else this.tables.set(syms[0], { lit } as TableInfo);
+          else if (attrs.has("table")) this.tables.set(syms[0], { lit } as TableInfo);
+          const out = [...attrs].filter((a) => a.startsWith("no_")).map((a) => a.slice(3));
+          if (out.length) this.optOut.set(syms[0], new Set(out));
         }
         s.values.forEach((v, i) => {
           if (v.k === "InterfaceType") {
@@ -543,6 +557,10 @@ export class Analyzer {
         }
         const spec = fnSym?.kind === "global" ? this.specialized.get(fnSym) : undefined;
         if (spec) this.specializeCall(e, fnSym as GlobalSym, spec, scope);
+        else if (this.optimize && fnSym?.kind === "global" && !this.synthetic) {
+          const sites = this.callSites.get(fnSym) ?? [];
+          if (!sites.some((x) => x.call === e)) this.callSites.set(fnSym, [...sites, { call: e, scope }]);
+        }
         const method = fnSym?.kind === "global" ? this.ifaceMethods.get(fnSym) : undefined;
         if (method && e.args[0] && this.poolVar(e.args[0]) && this.upcast(e.args[0], method.iface)) A(e.args[0])._wrapIface = this.poolVar(e.args[0]);
         else if (method && e.args[0] && this.upcast(e.args[0], method.iface)) {
@@ -1038,6 +1056,20 @@ export class Analyzer {
   readonly specialized = new Map<GlobalSym, SpecInfo>();
   /** @(table) procs: a lookup table over every value of the parameter */
   readonly tables = new Map<GlobalSym, TableInfo>();
+  /** declared inside a top-level `when`, so maybe not compiled at all */
+  readonly whenDeclared = new Set<GlobalSym>();
+  /** what `@(no_specialize)` / `@(no_table)` keep -opt from doing on its own */
+  readonly optOut = new Map<GlobalSym, Set<string>>();
+  /** -opt: the direct calls to each proc that isn't @(specialize), to decide on it after analysis */
+  readonly callSites = new Map<GlobalSym, CallSite[]>();
+  /** -opt-report: what was specialized or tabulated, and why not elsewhere */
+  report: { pos: Pos; name: string; text: string }[] | null = null;
+  /** analyzing a call vidar made up, which isn't a call site */
+  private synthetic = false;
+
+  note(sym: GlobalSym, text: string): void {
+    this.report?.push({ pos: posOf(sym.decl), name: sym.name, text });
+  }
 
   /** Removes vidar's own attributes from a declaration (Odin rejects unknown ones) and returns those found. */
   private takeAttrs(s: ValueDecl, names: string[]): Set<string> {
@@ -1080,7 +1112,7 @@ export class Analyzer {
   }
 
   /** Parameters a constant can be passed to as a compile-time parameter: basic types and enums. */
-  specParams(info: SpecInfo): Set<string> {
+  specParams(info: Pick<SpecInfo, "lit" | "scope" | "eligible">): Set<string> {
     if (info.eligible) return info.eligible;
     const out = new Set<string>();
     for (const p of info.lit.sig.params) {
@@ -1095,7 +1127,7 @@ export class Analyzer {
   }
 
   /** A call passing constants to some of a @(specialize) proc's parameters calls the copy where they are compile-time. */
-  private specializeCall(e: Extract<Expr, { k: "Call" }>, sym: GlobalSym, info: SpecInfo, scope: Scope): void {
+  private specializeCall(e: Call, sym: GlobalSym, info: SpecInfo, scope: Scope): void {
     if (e.args.some((a) => a.k === "FieldValue" || a.k === "Spread")) return;
     const eligible = this.specParams(info);
     const names = info.lit.sig.params.flatMap((p) => p.names.map((n) => n.name));
@@ -1166,17 +1198,28 @@ export class Analyzer {
     } else if (["bool", "u8", "byte", "i8"].includes(this.typeName({ t: "node", node: type, scope }) ?? "")) domain = this.typeName({ t: "node", node: type, scope }) === "bool" ? "bool" : name === "i8" ? "i8" : "u8";
     else throw new CompileError(`@(table) needs a parameter of type bool, u8, i8 or an enum, not ${name}`, posOf(type));
     Object.assign(info, { domain, param: params[0].name.name, type, result: res[0].type });
-    if (domain === "enum") return;
+    if (domain !== "enum") info.values = this.tabulate(sym, domain);
+    this.note(sym, info.values ? "@(table): computed at compile time" : "@(table): filled at startup");
+  }
+
+  /** `sym(x)` for every x of a bool, u8 or i8 parameter, run at compile time; undefined when the body can't run there. */
+  tabulate(sym: GlobalSym, domain: "bool" | "u8" | "i8", stepLimit?: number): string[] | undefined {
+    const pos = posOf(sym.decl);
     const inputs = domain === "bool" ? ["false", "true"] : Array.from({ length: 256 }, (_, i) => (domain === "i8" ? `i8(${i - 128})` : `u8(${i})`));
+    const outer = [this.synthetic, this.interp.stepLimit];
+    this.synthetic = true;
+    if (stepLimit) this.interp.stepLimit = stepLimit;
     try {
-      info.values = inputs.map((x) => {
+      return inputs.map((x) => {
         const call = this.parseTokens([...tokensOf(`${sym.name}(${x})`, pos).filter((k) => k.kind !== "semi"), eofTok(pos)], (p) => p.parseExpr());
         this.expr(call, sym.scope);
         return joinTokens(this.comptimeTokens(this.interp.evalAt(call, sym.scope, pos), pos));
       });
     } catch (err) {
       if (!(err instanceof CompileError)) throw err;
-      // filled in at startup instead
+      return undefined;
+    } finally {
+      [this.synthetic, this.interp.stepLimit] = outer as [boolean, number];
     }
   }
 

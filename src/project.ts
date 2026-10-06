@@ -34,8 +34,10 @@ export interface LoadOptions {
   followImports?: boolean;
   /** unsaved editor contents, by absolute path */
   overrides?: Map<string, string>;
-  /** rewrite plain Odin for speed: specialized fmt calls, proven bounds checks, grouped allocations */
+  /** rewrite plain Odin for speed: specialized fmt calls, proven bounds checks, grouped allocations, tables and specialized procs */
   optimize?: boolean;
+  /** with optimize: collect what it decided per proc in `analyzer.report` */
+  report?: boolean;
 }
 
 const SOURCE_EXTS = [".vidar", ".odin"];
@@ -101,6 +103,7 @@ export function loadProgram(entry: string | Source[], opts: LoadOptions = {}): P
   const analyzer = new Analyzer();
   if (tolerant) analyzer.errors = errors;
   analyzer.optimize = !!opts.optimize;
+  if (opts.optimize && opts.report) analyzer.report = [];
   const byDir = new Map<string, PackageInfo>();
   const sources: Source[] = [];
   const read = (path: string) => opts.overrides?.get(path) ?? readFileSync(path, "utf8");
