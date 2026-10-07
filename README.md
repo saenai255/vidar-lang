@@ -246,6 +246,7 @@ main :: proc() {
   - Sockets and timers go through `core:nbio` (io_uring on Linux, kqueue on macOS) on the scheduler's thread. When no goroutine can run, the scheduler blocks in the event loop until one can.
   - Files use io_uring on Linux. On other systems nbio would read regular files synchronously, so file operations go to a worker thread instead.
   - `blocking(...)` and `resolve` (the DNS resolver blocks) also run on a worker. There are 4 worker threads, each with its own event loop; set the number with `-define:VIDAR_WORKERS=<n>`. A finished operation is handed back to the scheduler's event loop, which wakes the goroutine.
+  - When no other goroutine is runnable or waiting on I/O, `blocking` runs the closure inline instead, since nothing could run in the meantime; a program that calls it only at startup never starts the workers.
   - A closure passed to `blocking` runs on another thread, with the goroutine's `context` but that thread's temp allocator. It must not touch state other goroutines use unless it synchronizes, and `context.allocator` must be thread-safe (the default heap allocator is).
   - Plain blocking calls such as `os.read`, `time.sleep` or `core:sync` locks still block every goroutine. Use the `sched` version, or wrap the call in `blocking`.
 - **Deadlocks are detected**: if every goroutine is blocked on a channel and no I/O is pending, the program panics with `all goroutines are asleep - deadlock!`.

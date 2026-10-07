@@ -303,6 +303,11 @@ run_blocking :: proc(op: ^nbio.Operation) {
 // The task runs on another thread, so it must not touch goroutine state without synchronizing.
 blocking :: proc(task: __vidar.Closure(proc(__vidar.Env))) {
 	sched_init()
+	// nothing else could run meanwhile, so skip starting the workers
+	if sched.head == nil && sched.io_waiting == 0 {
+		task.call(task.env)
+		return
+	}
 	w := Io_Wait{g = sched.cur, task = task, ctx = context}
 	op := nbio.prep_timeout(0, run_blocking, worker_loop())
 	op.user_data[0] = &w
@@ -815,7 +820,7 @@ __closure_0 :: proc(__c0: $T0, __c1: $T1) -> __vidar.Closure(proc(__vidar.Env)) 
 		d: T0,
 		c: T1,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at sched.vidar:347: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at sched.vidar:352: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env)){
 		call = proc(__env_raw: __vidar.Env) { __env := transmute(__Env)__env_raw;
@@ -831,7 +836,7 @@ __closure_1 :: proc(__c0: $T0, __c1: $T1) -> __vidar.Closure(proc(__vidar.Env)) 
 		hostname_and_maybe_port: T0,
 		r: T1,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at sched.vidar:442: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at sched.vidar:447: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env)){
 		call = proc(__env_raw: __vidar.Env) { __env := transmute(__Env)__env_raw;

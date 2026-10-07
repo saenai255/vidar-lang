@@ -313,6 +313,11 @@ run_blocking :: proc(op: ^nbio.Operation) {
 // The task runs on another thread, so it must not touch goroutine state without synchronizing.
 blocking :: proc(task: closure()) {
 	sched_init()
+	// nothing else could run meanwhile, so skip starting the workers
+	if sched.head == nil && sched.io_waiting == 0 {
+		task()
+		return
+	}
 	w := Io_Wait{g = sched.cur, task = task, ctx = context}
 	op := nbio.prep_timeout(0, run_blocking, worker_loop())
 	op.user_data[0] = &w
