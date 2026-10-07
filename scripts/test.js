@@ -206,7 +206,8 @@ async function testCommand() {
   if (picked(failing)) {
     const file = "tests/vidar_test/failing/main.vidar";
     const marked = readFileSync(file, "utf8").split("\n").flatMap((l, i) => (l.trimEnd().endsWith("// fails here") ? [i + 1] : []));
-    const r = await run("node", [cli, "test", "tests/vidar_test/failing"], 120_000);
+    // one test thread: with several, a panic's location and another test's log line can share a line of output
+    const r = await run("node", [cli, "test", "tests/vidar_test/failing", "--", "-define:ODIN_TEST_THREADS=1"], 120_000);
     const output = r.stdout + r.stderr;
     const missing = marked.filter((n) => !output.includes(`main.vidar:${n}:`) && !output.includes(`main.vidar(${n}:`));
     const ok = r.status !== 0 && marked.length === 3 && !missing.length && !/main\.odin[:(]/.test(output);

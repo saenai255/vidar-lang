@@ -564,7 +564,7 @@ eval_errors :: proc(t: ^testing.T) {
 }
 ```
 
-- `--run eval_errors` runs only that test; it is `-define:ODIN_TEST_NAMES=main.eval_errors` with the package filled in, and a name that already has a package (`main.eval_errors`) is used as is. Flags after `--`, such as `-define:ODIN_TEST_THREADS=1`, go to `odin test`.
+- `--run eval_errors` runs only that test; it is `-define:ODIN_TEST_NAMES=main.eval_errors` with the package filled in, and a name that already has a package (`main.eval_errors`) is used as is. Flags after `--`, such as `-define:ODIN_TEST_THREADS=1`, go to `odin test`. With several test threads, a panic's location and another test's log line can land on one line of output, and that location isn't mapped; `-define:ODIN_TEST_THREADS=1` avoids it.
 - Failed `testing.expect`s, failed `assert`s and panics are reported at their `.vidar` file and line, on both stdout and stderr: `[examples/testing/tests.vidar:19:eval_arithmetic()] expected got to be 15, got 14`.
 - The exit status is `odin test`'s: 0 when every test passed.
 

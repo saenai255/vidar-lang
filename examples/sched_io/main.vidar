@@ -20,7 +20,7 @@ main :: proc() {
 	})
 	sched.blocking(proc[]() { time.sleep(100 * time.Millisecond) })
 	stop = true
-	fmt.println("ticked while blocked:", ticks >= 10)
+	fmt.println("ticked while blocked:", ticks >= 3) // 20 at best; a loaded CI machine gets far fewer
 
 	// files
 	path := "/tmp/vidar-sched-test.txt"

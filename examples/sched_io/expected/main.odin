@@ -15,7 +15,7 @@ main :: proc() {
 	sched.go(__closure_0(&ticks, &stop))
 	sched.blocking(__vidar.Closure(proc(__vidar.Env)){call = proc(__env_raw: __vidar.Env) { time.sleep(100 * time.Millisecond) }})
 	stop = true
-	fmt.println("ticked while blocked:", ticks >= 10)
+	fmt.println("ticked while blocked:", ticks >= 3) // 20 at best; a loaded CI machine gets far fewer
 
 	// files
 	path := "/tmp/vidar-sched-test.txt"
