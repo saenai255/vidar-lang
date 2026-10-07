@@ -9,6 +9,8 @@
 //   - the stdout of running it with `odin run`
 // Cases named opt_* are transpiled with -opt. Every case whose output -opt changes is also run the
 // other way, and must print the same.
+// tests/sched_debug/<name>/ are vidar:sched debugging checks (deadlocks, trace files, races), each
+// built with its own odin flags; see testSchedDebug.
 const { readdirSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, statSync } = require("node:fs");
 const { join } = require("node:path");
 const { tmpdir, availableParallelism } = require("node:os");
@@ -77,9 +79,9 @@ const cases = [
 const work = mkdtempSync(join(tmpdir(), "vidar-test-"));
 
 /** Runs `cmd` and resolves with its exit and output; a run past `ms` is killed. */
-function run(cmd, args, ms) {
+function run(cmd, args, ms, env) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], env: env ? { ...process.env, ...env } : undefined });
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -215,9 +217,82 @@ async function testCommand() {
   }
 }
 
+/**
+ * `vidar:sched` debugging: each `tests/sched_debug/<name>/` is a program and a `check.json` with
+ * runs, each built with its own odin flags, that may fail (a deadlock panics) and whose stderr,
+ * mapped to .vidar lines, must hold every `stderr` text (`{main.vidar}` stands for that file's
+ * path). A run's `env` is set for the program (`{dir}` is the build directory), and `json` names a
+ * file the program writes that must be valid JSON holding every `jsonHas` text.
+ */
+async function testSchedDebug() {
+  const { locationMapper, runMapOf } = require("../dist/runmap.js");
+  const root = "tests/sched_debug";
+  if (!existsSync(root)) return;
+  const pattern = (text) => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\{main\\\.vidar\\\}/g, "\\S*main\\.vidar"));
+  const jobs = [];
+  for (const name of readdirSync(root)) {
+    const entry = join(root, name);
+    const check = JSON.parse(readFileSync(join(entry, "check.json"), "utf8"));
+    for (const r of check.runs) {
+      const label = `${entry} (${r.name})`;
+      if (picked(label)) jobs.push({ entry, check, r, label });
+    }
+  }
+  const logs = new Array(jobs.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < jobs.length) {
+      const i = next++;
+      const { entry, check, r, label } = jobs[i];
+      const log = (logs[i] = []);
+      let out;
+      try {
+        out = emitProgram(loadProgram(entry, { optimize: !!r.opt }));
+      } catch (err) {
+        report(false, label, `  transpile error: ${err.message}`, log);
+        continue;
+      }
+      const dir = join(work, `sched_debug_${i}`);
+      writeTree(dir, out.files);
+      const prog = join(dir, "prog");
+      // each run sets its own thread count; its defines win over VIDAR_ODIN_FLAGS
+      const own = new Set([...r.flags.map((f) => f.split("=")[0]), "-define:VIDAR_THREADS"]);
+      const extra = EXTRA.filter((f) => !own.has(f.split("=")[0]) && !(f.startsWith("-o:") && r.flags.some((g) => g.startsWith("-o:"))));
+      const b = await run("odin", ["build", dir, `-out:${prog}`, ...r.flags, ...extra], 120_000);
+      if (b.status !== 0) {
+        report(false, label, `  odin build failed\n${b.stderr}`, log);
+        continue;
+      }
+      const env = Object.fromEntries(Object.entries(r.env ?? {}).map(([k, v]) => [k, v.replace("{dir}", dir)]));
+      const p = await run(prog, [], 30_000, env);
+      const stderr = locationMapper(runMapOf(out), [dir])(p.stderr);
+      const problems = [];
+      if (p.timedOut) problems.push("timed out after 30s");
+      else if (r.fails ? p.status === 0 : p.status !== 0) problems.push(`exit ${p.status}`);
+      if (check.stdout !== undefined && p.stdout !== check.stdout) problems.push(`stdout:\n${p.stdout}`);
+      for (const t of r.stderr ?? []) if (!pattern(t).test(stderr)) problems.push(`stderr lacks: ${JSON.stringify(t)}`);
+      for (const t of r.notStderr ?? []) if (pattern(t).test(stderr)) problems.push(`stderr has: ${JSON.stringify(t)}`);
+      if (r.json) {
+        const file = r.json.replace("{dir}", dir);
+        try {
+          const text = readFileSync(file, "utf8");
+          JSON.parse(text);
+          for (const t of r.jsonHas ?? []) if (!text.includes(t)) problems.push(`${r.json} lacks: ${JSON.stringify(t)}`);
+        } catch (err) {
+          problems.push(`${r.json}: ${err.message}`);
+        }
+      }
+      report(!problems.length, label, problems.length ? `  ${problems.join("\n  ")}\n--- stderr\n${stderr}` : "", log);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(JOBS, jobs.length) }, worker));
+  for (const log of logs) for (const line of log) console.log(line);
+}
+
 (async () => {
   await runCases();
   await testCommand();
+  await testSchedDebug();
 
   for (const f of readdirSync("tests/errors").filter((f) => f.endsWith(".vidar") && picked(join("tests/errors", f)))) {
     const path = join("tests/errors", f);

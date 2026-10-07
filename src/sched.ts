@@ -11,6 +11,7 @@ export const SCHED_IMPORT = "vidar:sched";
 export const SCHED_SOURCE = String.raw`package sched
 
 import "base:runtime"
+import "core:c/libc"
 import "core:mem"
 import "core:mem/virtual"
 import "core:nbio"
@@ -50,6 +51,9 @@ MULTI :: THREADS > 1
 // how long an idle thread waits before looking for goroutines to take from the others
 @(private)
 IDLE_POLL :: 10 * time.Millisecond
+// where each goroutine started and what it waits on, printed on a deadlock and on SIGQUIT; on
+// unless built with -o:speed (-define:VIDAR_SCHED_DEBUG=true turns it on there, false turns it off)
+SCHED_DEBUG :: #config(VIDAR_SCHED_DEBUG, ODIN_OPTIMIZATION_MODE < .Speed)
 
 @(private)
 G :: struct {
@@ -61,6 +65,15 @@ G :: struct {
 	// with several threads: the scheduler it runs on (set when it first runs), and whether it has
 	owner:   ^Scheduler,
 	started: bool,
+	// with SCHED_DEBUG: its number, where sched.go started it, what it waits on ("" while it can
+	// run), where it parked, and the list of every goroutine
+	id:         int,
+	go_loc:     runtime.Source_Code_Location,
+	wait:       string,
+	wait_on:    rawptr,
+	wait_cases: []Select_Case,
+	wait_loc:   runtime.Source_Code_Location,
+	all_prev, all_next: ^G,
 }
 
 @(private)
@@ -78,6 +91,7 @@ Scheduler :: struct {
 	q_lock:      sync.Mutex,
 	wake:        sync.Sema,
 	is_proc:     bool,
+	index:       int,
 }
 
 @(private, thread_local)
@@ -92,6 +106,24 @@ next_proc: int
 procs_once: sync.Once
 @(private)
 procs_up: sync.Sema
+// with several threads: how many have nothing to run and no I/O pending, and how many times one
+// has stopped being idle; a deadlock is every thread idle with every run queue empty
+@(private)
+idle_threads: int
+@(private)
+idle_epoch: int
+@(private)
+dead: bool
+
+// with SCHED_DEBUG: every goroutine that hasn't finished, for the dump
+@(private)
+all_gs: ^G
+@(private)
+all_lock: sync.Mutex
+@(private)
+next_gid: int
+@(private)
+sigquit_once: sync.Once
 
 // locks that exist only with several threads
 @(private)
@@ -111,6 +143,13 @@ sched_init :: proc() {
 	err := nbio.acquire_thread_event_loop()
 	assert(err == nil, "vidar:sched: could not start the I/O event loop")
 	sched.loop = nbio.current_thread_event_loop()
+	when SCHED_DEBUG {
+		// the program's main goroutine; scheduler threads' own stacks aren't goroutines
+		if !sched.is_proc {
+			track(&sched.main)
+			sync.once_do(&sigquit_once, install_sigquit)
+		}
+	}
 	when MULTI {
 		// the first thread to get here is thread 0; it starts the others, which skip this
 		if sched.is_proc do return
@@ -119,6 +158,8 @@ sched_init :: proc() {
 			for i in 1..<THREADS do thread.create_and_start_with_poly_data(i, proc_main, self_cleanup = true)
 			for _ in 1..<THREADS do sync.sema_wait(&procs_up)
 		})
+	} else {
+		procs[0] = &sched
 	}
 }
 
@@ -126,6 +167,7 @@ sched_init :: proc() {
 @(private)
 proc_main :: proc(i: int) {
 	sched.is_proc = true
+	sched.index = i
 	sched_init()
 	procs[i] = &sched
 	sync.sema_post(&procs_up)
@@ -207,19 +249,49 @@ pick :: proc() -> ^G {
 				if g := pop_ready(); g != nil do return g
 				nbio.tick(IDLE_POLL)
 			} else {
+				// the thread that makes them all idle looks for a deadlock
+				if sync.atomic_add(&idle_threads, 1) + 1 == THREADS do check_deadlock()
 				sync.sema_wait_with_timeout(&sched.wake, IDLE_POLL)
+				sync.atomic_add(&idle_epoch, 1)
+				sync.atomic_sub(&idle_threads, 1)
 			}
 		}
 	} else {
 		for {
 			if g := pop_ready(); g != nil do return g
-			if sched.io_waiting == 0 do panic("all goroutines are asleep - deadlock!")
+			if sched.io_waiting == 0 {
+				when SCHED_DEBUG do dump_goroutines("all goroutines are asleep - deadlock!")
+				panic("all goroutines are asleep - deadlock!")
+			}
 			sched.since_poll = 0
 			// ops done without the kernel complete at tick start, then the tick blocks anyway
 			nbio.tick(0)
 			if g := pop_ready(); g != nil do return g
 			nbio.tick()
 		}
+	}
+}
+
+// With several threads: panics when every thread is idle and every run queue is empty. An idle
+// thread has no I/O pending and runs nothing, so nothing can make a goroutine runnable again. No
+// thread may stop being idle while the queues are read (the epoch doesn't move), or it may have
+// taken a goroutine from a queue already read.
+@(private)
+check_deadlock :: proc() {
+	when MULTI {
+		epoch := sync.atomic_load(&idle_epoch)
+		if sync.atomic_load(&idle_threads) != THREADS do return
+		for p in procs {
+			if p == nil do return
+			sync.mutex_lock(&p.q_lock)
+			empty := p.head == nil
+			sync.mutex_unlock(&p.q_lock)
+			if !empty do return
+		}
+		if sync.atomic_load(&idle_threads) != THREADS || sync.atomic_load(&idle_epoch) != epoch do return
+		if _, first := sync.atomic_compare_exchange_strong(&dead, false, true); !first do return
+		when SCHED_DEBUG do dump_goroutines("all goroutines are asleep - deadlock!")
+		panic("all goroutines are asleep - deadlock!")
 	}
 }
 
@@ -238,16 +310,28 @@ reap :: proc() {
 park :: proc() {
 	from := sched.cur
 	next := pick()
-	if next == from do return
-	sched.cur = next
-	vidar_switch(&from.sp, next.sp)
-	reap()
+	if next != from {
+		sched.cur = next
+		vidar_switch(&from.sp, next.sp)
+		reap()
+	}
+	when SCHED_DEBUG do from.wait = ""
+}
+
+// With SCHED_DEBUG, records what the current goroutine is about to park on, for the dump.
+@(private)
+waiting :: #force_inline proc(what: string, on: rawptr, loc: runtime.Source_Code_Location) {
+	when SCHED_DEBUG {
+		g := sched.cur
+		g.wait, g.wait_on, g.wait_loc = what, on, loc
+	}
 }
 
 @(private)
-block_forever :: proc() -> ! {
+block_forever :: proc(what := "forever", loc := #caller_location) -> ! {
 	sched_init()
 	for {
+		waiting(what, nil, loc)
 		park()
 	}
 }
@@ -269,9 +353,13 @@ new_stack :: proc() -> []byte {
 }
 
 // Runs the closure on a new goroutine, with the caller's context.
-go :: proc(task: closure()) {
+go :: proc(task: closure(), loc := #caller_location) {
 	sched_init()
 	g := new(G, runtime.heap_allocator())
+	when SCHED_DEBUG {
+		g.go_loc = loc
+		track(g)
+	}
 	g.stack = new_stack()
 	g.task = task
 	g.ctx = context
@@ -319,11 +407,152 @@ go_start :: proc "c" (g: ^G) {
 	}
 	reap()
 	g.task()
+	when SCHED_DEBUG do untrack(g)
 	sched.zombie = g
 	next := pick()
 	sched.cur = next
 	vidar_switch(&g.sp, next.sp)
 	unreachable()
+}
+
+// ---- debugging: the goroutine dump ----
+
+@(private)
+all_tail: ^G
+
+@(private)
+track :: proc(g: ^G) {
+	when SCHED_DEBUG {
+		g.id = sync.atomic_add(&next_gid, 1) + 1
+		mlock(&all_lock)
+		g.all_prev, g.all_next = all_tail, nil
+		if all_tail == nil do all_gs = g
+		else do all_tail.all_next = g
+		all_tail = g
+		munlock(&all_lock)
+	}
+}
+
+@(private)
+untrack :: proc(g: ^G) {
+	when SCHED_DEBUG {
+		mlock(&all_lock)
+		if g.all_prev == nil do all_gs = g.all_next
+		else do g.all_prev.all_next = g.all_next
+		if g.all_next == nil do all_tail = g.all_prev
+		else do g.all_next.all_prev = g.all_prev
+		munlock(&all_lock)
+	}
+}
+
+@(private)
+print_hex :: proc "contextless" (p: rawptr) {
+	digits := "0123456789abcdef"
+	buf: [2 + 2 * size_of(uintptr)]byte
+	x := uintptr(p)
+	i := len(buf)
+	for {
+		i -= 1
+		buf[i] = digits[x & 15]
+		x >>= 4
+		if x == 0 do break
+	}
+	buf[i - 1], buf[i - 2] = 'x', '0'
+	runtime.print_string(string(buf[i - 2:]))
+}
+
+// Prints every goroutine to stderr: its number, what it waits on and where, and where it started.
+// Generated locations are .odin lines; vidar run (or vidar map) shows them as .vidar lines.
+@(private)
+dump_goroutines :: proc "contextless" (title: string) {
+	when SCHED_DEBUG {
+		// a SIGQUIT may arrive while the list is being changed; print it anyway
+		locked := sync.mutex_try_lock(&all_lock)
+		defer if locked do sync.mutex_unlock(&all_lock)
+		runtime.print_strings("\nvidar:sched: ", title, "\n")
+		for g := all_gs; g != nil; g = g.all_next {
+			runtime.print_string("\ngoroutine ")
+			runtime.print_int(g.id)
+			runtime.print_string(" [")
+			if g.wait != "" {
+				runtime.print_string(g.wait)
+				if g.wait_on != nil {
+					runtime.print_byte(' ')
+					print_hex(g.wait_on)
+				}
+			} else {
+				running := false
+				for p in procs do if p != nil && p.cur == g do running = true
+				runtime.print_string("running" if running else "runnable")
+			}
+			runtime.print_byte(']')
+			when MULTI do if g.owner != nil && g.started {
+				runtime.print_string(" on thread ")
+				runtime.print_int(g.owner.index)
+			}
+			if g.go_loc.file_path == "" do runtime.print_string(" (main)")
+			runtime.print_string(":\n")
+			if g.wait != "" {
+				runtime.print_string("\tparked at ")
+				runtime.print_caller_location(g.wait_loc)
+				runtime.print_byte('\n')
+			}
+			if g.wait == "select" {
+				for c, i in g.wait_cases {
+					if c.ch == nil do continue
+					runtime.print_string("\t\tcase ")
+					runtime.print_int(i)
+					runtime.print_string(": send on " if c.is_send else ": receive on ")
+					print_hex(c.ch)
+					runtime.print_byte('\n')
+				}
+			}
+			if g.go_loc.file_path != "" {
+				runtime.print_string("\tstarted at ")
+				runtime.print_caller_location(g.go_loc)
+				runtime.print_byte('\n')
+			}
+		}
+		runtime.print_byte('\n')
+	}
+}
+
+// SIGQUIT (Ctrl-\) prints the goroutines, then ends the program as it would have without the handler.
+@(private)
+install_sigquit :: proc() {
+	when ODIN_OS == .Linux || ODIN_OS == .Darwin {
+		libc.signal(SIGQUIT, on_sigquit)
+	}
+}
+
+@(private)
+SIGQUIT :: 3
+
+@(private)
+on_sigquit :: proc "c" (sig: libc.int) {
+	dump_goroutines("SIGQUIT")
+	libc.signal(sig, auto_cast libc.SIG_DFL)
+	libc.raise(sig)
+}
+
+// What a goroutine waiting on op waits on, for the dump.
+@(private)
+io_what :: proc(op: ^nbio.Operation) -> string {
+	#partial switch op.type {
+	case .Accept:    return "I/O accept"
+	case .Close:     return "I/O close"
+	case .Dial:      return "I/O dial"
+	case .Read:      return "I/O read"
+	case .Recv:      return "I/O receive"
+	case .Send:      return "I/O send"
+	case .Write:     return "I/O write"
+	case .Timeout:   return "sleep"
+	case .Poll:      return "I/O poll"
+	case .Send_File: return "I/O send file"
+	case .Open:      return "I/O open"
+	case .Stat:      return "I/O stat"
+	}
+	return "I/O"
 }
 
 // ---- I/O: start an nbio operation, park, resume from its callback ----
@@ -346,10 +575,11 @@ io_done :: proc(op: ^nbio.Operation) {
 
 // Starts op and parks until its callback (on this thread's loop, or a worker's) resumes us.
 @(private)
-await_op :: proc(op: ^nbio.Operation) -> nbio.Operation {
+await_op :: proc(op: ^nbio.Operation, loc: runtime.Source_Code_Location) -> nbio.Operation {
 	w := Io_Wait{g = sched.cur}
 	op.user_data[0] = &w
 	sched.io_waiting += 1
+	waiting(io_what(op), nil, loc)
 	nbio.exec(op)
 	park()
 	return w.result
@@ -416,11 +646,12 @@ sched_loop_of :: proc(op: ^nbio.Operation) -> ^nbio.Event_Loop {
 
 // Like await_op, for an operation prepared on a worker's loop with worker_done as its callback.
 @(private)
-await_on_worker :: proc(op: ^nbio.Operation) -> nbio.Operation {
+await_on_worker :: proc(op: ^nbio.Operation, loc: runtime.Source_Code_Location) -> nbio.Operation {
 	w := Io_Wait{g = sched.cur}
 	op.user_data[0] = &w
 	op.user_data[1] = sched.loop
 	sched.io_waiting += 1
+	waiting(io_what(op), nil, loc)
 	nbio.exec(op)
 	park()
 	return w.result
@@ -439,7 +670,7 @@ run_blocking :: proc(op: ^nbio.Operation) {
 // Runs task on a worker thread and parks this goroutine until it returns; the other goroutines keep running.
 // Use it for calls that block the thread: DNS, C libraries, anything without a sched version.
 // The task runs on another thread, so it must not touch goroutine state without synchronizing.
-blocking :: proc(task: closure()) {
+blocking :: proc(task: closure(), loc := #caller_location) {
 	sched_init()
 	// nothing else could run meanwhile, so skip starting the workers
 	if sched.head == nil && sched.io_waiting == 0 {
@@ -451,6 +682,7 @@ blocking :: proc(task: closure()) {
 	op.user_data[0] = &w
 	op.user_data[1] = sched.loop
 	sched.io_waiting += 1
+	waiting("sched.blocking", nil, loc)
 	nbio.exec(op)
 	park()
 }
@@ -473,25 +705,25 @@ file_cb :: proc() -> nbio.Callback {
 }
 
 @(private)
-await_file :: proc(op: ^nbio.Operation) -> nbio.Operation {
-	when FILES_ON_WORKERS do return await_on_worker(op)
-	else do return await_op(op)
+await_file :: proc(op: ^nbio.Operation, loc: runtime.Source_Code_Location) -> nbio.Operation {
+	when FILES_ON_WORKERS do return await_on_worker(op, loc)
+	else do return await_op(op, loc)
 }
 
 // ---- timers ----
 
-sleep :: proc(d: time.Duration) {
+sleep :: proc(d: time.Duration, loc := #caller_location) {
 	sched_init()
-	await_op(nbio.prep_timeout(d, io_done))
+	await_op(nbio.prep_timeout(d, io_done), loc)
 }
 
 // A channel that receives true once d has passed, for select timeouts.
-after :: proc(d: time.Duration) -> Chan(bool) {
+after :: proc(d: time.Duration, loc := #caller_location) -> Chan(bool) {
 	c := make_chan(bool, 1)
-	go(proc[d, c]() {
-		sleep(d)
-		chan_send(c, true)
-	})
+	go(proc[d, c, loc]() {
+		sleep(d, loc)
+		chan_send(c, true, loc)
+	}, loc)
 	return c
 }
 
@@ -502,48 +734,48 @@ listen_tcp :: proc(endpoint: nbio.Endpoint, backlog := 1000) -> (nbio.TCP_Socket
 	return nbio.listen_tcp(endpoint, backlog)
 }
 
-accept :: proc(socket: nbio.TCP_Socket, timeout := nbio.NO_TIMEOUT) -> (nbio.TCP_Socket, nbio.Endpoint, nbio.Accept_Error) {
+accept :: proc(socket: nbio.TCP_Socket, timeout := nbio.NO_TIMEOUT, loc := #caller_location) -> (nbio.TCP_Socket, nbio.Endpoint, nbio.Accept_Error) {
 	sched_init()
-	r := await_op(nbio.prep_accept(socket, io_done, timeout))
+	r := await_op(nbio.prep_accept(socket, io_done, timeout), loc)
 	return r.accept.client, r.accept.client_endpoint, r.accept.err
 }
 
-dial :: proc(endpoint: nbio.Endpoint, timeout := nbio.NO_TIMEOUT) -> (nbio.TCP_Socket, nbio.Network_Error) {
+dial :: proc(endpoint: nbio.Endpoint, timeout := nbio.NO_TIMEOUT, loc := #caller_location) -> (nbio.TCP_Socket, nbio.Network_Error) {
 	sched_init()
-	r := await_op(nbio.prep_dial(endpoint, io_done, timeout))
+	r := await_op(nbio.prep_dial(endpoint, io_done, timeout), loc)
 	return r.dial.socket, r.dial.err
 }
 
-socket_recv :: proc(socket: nbio.TCP_Socket, buf: []byte, all := false, timeout := nbio.NO_TIMEOUT) -> (int, nbio.Recv_Error) {
+socket_recv :: proc(socket: nbio.TCP_Socket, buf: []byte, all := false, timeout := nbio.NO_TIMEOUT, loc := #caller_location) -> (int, nbio.Recv_Error) {
 	sched_init()
 	bufs := [1][]byte{buf}
-	r := await_op(nbio.prep_recv(socket, bufs[:], io_done, all, timeout))
+	r := await_op(nbio.prep_recv(socket, bufs[:], io_done, all, timeout), loc)
 	return r.recv.received, r.recv.err
 }
 
-socket_send :: proc(socket: nbio.TCP_Socket, buf: []byte, timeout := nbio.NO_TIMEOUT) -> (int, nbio.Send_Error) {
+socket_send :: proc(socket: nbio.TCP_Socket, buf: []byte, timeout := nbio.NO_TIMEOUT, loc := #caller_location) -> (int, nbio.Send_Error) {
 	sched_init()
 	bufs := [1][]byte{buf}
-	r := await_op(nbio.prep_send(socket, bufs[:], io_done, timeout = timeout))
+	r := await_op(nbio.prep_send(socket, bufs[:], io_done, timeout = timeout), loc)
 	return r.send.sent, r.send.err
 }
 
-socket_close :: proc(socket: nbio.TCP_Socket) {
+socket_close :: proc(socket: nbio.TCP_Socket, loc := #caller_location) {
 	sched_init()
-	await_op(nbio.prep_close(socket, io_done))
+	await_op(nbio.prep_close(socket, io_done), loc)
 }
 
 // Sends nbytes of file (all of it by default) over the socket, without copying it through user space.
-send_file :: proc(socket: nbio.TCP_Socket, file: File, offset := 0, nbytes := nbio.SEND_ENTIRE_FILE, timeout := nbio.NO_TIMEOUT) -> (int, nbio.Send_File_Error) {
+send_file :: proc(socket: nbio.TCP_Socket, file: File, offset := 0, nbytes := nbio.SEND_ENTIRE_FILE, timeout := nbio.NO_TIMEOUT, loc := #caller_location) -> (int, nbio.Send_File_Error) {
 	sched_init()
-	r := await_op(nbio.prep_sendfile(socket, file, io_done, offset, nbytes, timeout = timeout))
+	r := await_op(nbio.prep_sendfile(socket, file, io_done, offset, nbytes, timeout = timeout), loc)
 	return r.sendfile.sent, r.sendfile.err
 }
 
 // Waits until the socket can be read from (.Receive) or written to (.Send) without blocking.
-wait_ready :: proc(socket: nbio.Any_Socket, event: nbio.Poll_Event, timeout := nbio.NO_TIMEOUT) -> nbio.Poll_Result {
+wait_ready :: proc(socket: nbio.Any_Socket, event: nbio.Poll_Event, timeout := nbio.NO_TIMEOUT, loc := #caller_location) -> nbio.Poll_Result {
 	sched_init()
-	r := await_op(nbio.prep_poll(socket, event, io_done, timeout))
+	r := await_op(nbio.prep_poll(socket, event, io_done, timeout), loc)
 	return r.poll.result
 }
 
@@ -558,34 +790,34 @@ bind :: proc(socket: nbio.UDP_Socket, endpoint: nbio.Endpoint) -> net.Bind_Error
 	return net.bind(socket, endpoint)
 }
 
-send_to :: proc(socket: nbio.UDP_Socket, buf: []byte, to: nbio.Endpoint, timeout := nbio.NO_TIMEOUT) -> (int, nbio.Send_Error) {
+send_to :: proc(socket: nbio.UDP_Socket, buf: []byte, to: nbio.Endpoint, timeout := nbio.NO_TIMEOUT, loc := #caller_location) -> (int, nbio.Send_Error) {
 	sched_init()
 	bufs := [1][]byte{buf}
-	r := await_op(nbio.prep_send(socket, bufs[:], io_done, to, timeout = timeout))
+	r := await_op(nbio.prep_send(socket, bufs[:], io_done, to, timeout = timeout), loc)
 	return r.send.sent, r.send.err
 }
 
-recv_from :: proc(socket: nbio.UDP_Socket, buf: []byte, timeout := nbio.NO_TIMEOUT) -> (int, nbio.Endpoint, nbio.Recv_Error) {
+recv_from :: proc(socket: nbio.UDP_Socket, buf: []byte, timeout := nbio.NO_TIMEOUT, loc := #caller_location) -> (int, nbio.Endpoint, nbio.Recv_Error) {
 	sched_init()
 	bufs := [1][]byte{buf}
-	r := await_op(nbio.prep_recv(socket, bufs[:], io_done, timeout = timeout))
+	r := await_op(nbio.prep_recv(socket, bufs[:], io_done, timeout = timeout), loc)
 	return r.recv.received, r.recv.source, r.recv.err
 }
 
-udp_close :: proc(socket: nbio.UDP_Socket) {
+udp_close :: proc(socket: nbio.UDP_Socket, loc := #caller_location) {
 	sched_init()
-	await_op(nbio.prep_close(socket, io_done))
+	await_op(nbio.prep_close(socket, io_done), loc)
 }
 
 // ---- DNS (on a worker thread: the resolver blocks) ----
 
-resolve :: proc(hostname_and_maybe_port: string) -> (ep4, ep6: nbio.Endpoint, err: net.Network_Error) {
+resolve :: proc(hostname_and_maybe_port: string, loc := #caller_location) -> (ep4, ep6: nbio.Endpoint, err: net.Network_Error) {
 	Result :: struct { ep4, ep6: nbio.Endpoint, err: net.Network_Error }
 	r := new(Result)
 	defer free(r)
 	blocking(proc[hostname_and_maybe_port, r]() {
 		r.ep4, r.ep6, r.err = net.resolve(hostname_and_maybe_port)
-	})
+	}, loc)
 	return r.ep4, r.ep6, r.err
 }
 
@@ -593,54 +825,54 @@ resolve :: proc(hostname_and_maybe_port: string) -> (ep4, ep6: nbio.Endpoint, er
 
 File :: nbio.Handle
 
-open :: proc(path: string, mode: nbio.File_Flags = {.Read}, perm := nbio.Permissions_Default_File) -> (File, nbio.FS_Error) {
+open :: proc(path: string, mode: nbio.File_Flags = {.Read}, perm := nbio.Permissions_Default_File, loc := #caller_location) -> (File, nbio.FS_Error) {
 	sched_init()
-	r := await_file(nbio.prep_open(path, file_cb(), mode, perm, l = file_loop()))
+	r := await_file(nbio.prep_open(path, file_cb(), mode, perm, l = file_loop()), loc)
 	return r.open.handle, r.open.err
 }
 
 // Reads at offset (the file position is not used); with all, keeps reading until buf is full or the file ends.
-read_at :: proc(file: File, offset: int, buf: []byte, all := false) -> (int, nbio.FS_Error) {
+read_at :: proc(file: File, offset: int, buf: []byte, all := false, loc := #caller_location) -> (int, nbio.FS_Error) {
 	sched_init()
-	r := await_file(nbio.prep_read(file, offset, buf, file_cb(), all, l = file_loop()))
+	r := await_file(nbio.prep_read(file, offset, buf, file_cb(), all, l = file_loop()), loc)
 	return r.read.read, r.read.err
 }
 
-write_at :: proc(file: File, offset: int, buf: []byte, all := true) -> (int, nbio.FS_Error) {
+write_at :: proc(file: File, offset: int, buf: []byte, all := true, loc := #caller_location) -> (int, nbio.FS_Error) {
 	sched_init()
-	r := await_file(nbio.prep_write(file, offset, buf, file_cb(), all, l = file_loop()))
+	r := await_file(nbio.prep_write(file, offset, buf, file_cb(), all, l = file_loop()), loc)
 	return r.write.written, r.write.err
 }
 
-stat :: proc(file: File) -> (type: nbio.File_Type, size: i64, err: nbio.FS_Error) {
+stat :: proc(file: File, loc := #caller_location) -> (type: nbio.File_Type, size: i64, err: nbio.FS_Error) {
 	sched_init()
-	r := await_file(nbio.prep_stat(file, file_cb(), l = file_loop()))
+	r := await_file(nbio.prep_stat(file, file_cb(), l = file_loop()), loc)
 	return r.stat.type, r.stat.size, r.stat.err
 }
 
-file_close :: proc(file: File) -> nbio.FS_Error {
+file_close :: proc(file: File, loc := #caller_location) -> nbio.FS_Error {
 	sched_init()
-	r := await_file(nbio.prep_close(file, file_cb(), l = file_loop()))
+	r := await_file(nbio.prep_close(file, file_cb(), l = file_loop()), loc)
 	return r.close.err
 }
 
-read_entire_file :: proc(path: string, allocator := context.allocator) -> (data: []byte, err: nbio.FS_Error) {
-	f := open(path) or_return
-	defer file_close(f)
-	_, size := stat(f) or_return
+read_entire_file :: proc(path: string, allocator := context.allocator, loc := #caller_location) -> (data: []byte, err: nbio.FS_Error) {
+	f := open(path, loc = loc) or_return
+	defer file_close(f, loc)
+	_, size := stat(f, loc) or_return
 	data = make([]byte, int(size), allocator)
 	n: int
-	n, err = read_at(f, 0, data, all = true)
+	n, err = read_at(f, 0, data, all = true, loc = loc)
 	if err == .EOF do err = nil
 	return data[:n], err
 }
 
-write_entire_file :: proc(path: string, data: []byte, truncate := true) -> nbio.FS_Error {
+write_entire_file :: proc(path: string, data: []byte, truncate := true, loc := #caller_location) -> nbio.FS_Error {
 	mode: nbio.File_Flags = {.Write, .Create}
 	if truncate do mode += {.Trunc}
-	f := open(path, mode) or_return
-	defer file_close(f)
-	_, err := write_at(f, 0, data)
+	f := open(path, mode, loc = loc) or_return
+	defer file_close(f, loc)
+	_, err := write_at(f, 0, data, loc = loc)
 	return err
 }
 
@@ -658,7 +890,7 @@ Mutex :: struct {
 
 // Parking after the guard is released is safe: only the goroutine's own thread runs it, so a
 // wakeup that comes first just queues it there.
-lock :: proc(m: ^Mutex) {
+lock :: proc(m: ^Mutex, loc := #caller_location) {
 	sched_init()
 	mlock(&m.guard)
 	if !m.locked {
@@ -668,6 +900,7 @@ lock :: proc(m: ^Mutex) {
 	}
 	w := Waiter{g = sched.cur}
 	enqueue(&m.waiters, &w)
+	waiting("sched.Mutex", m, loc)
 	munlock(&m.guard)
 	park()
 }
@@ -823,10 +1056,10 @@ try_recv_raw :: proc(c: ^Raw_Chan, out: rawptr) -> (done, ok: bool) {
 }
 
 // Blocks until a receiver takes v, or until there is room in the buffer.
-chan_send :: proc(c: Chan($T), v: T) {
+chan_send :: proc(c: Chan($T), v: T, loc := #caller_location) {
 	sched_init()
 	v := v
-	if c.raw == nil do block_forever()
+	if c.raw == nil do block_forever("chan send (nil chan)", loc)
 	mlock(&c.raw.guard)
 	if try_send_raw(c.raw, &v) {
 		munlock(&c.raw.guard)
@@ -834,15 +1067,16 @@ chan_send :: proc(c: Chan($T), v: T) {
 	}
 	w := Waiter{g = sched.cur, elem = &v}
 	enqueue(&c.raw.sendq, &w)
+	waiting("chan send", c.raw, loc)
 	munlock(&c.raw.guard)
 	park()
 	if !w.ok do panic("send on closed channel")
 }
 
 // Blocks until a value arrives; ok is false once the channel is closed and drained.
-chan_recv :: proc(c: Chan($T)) -> (v: T, ok: bool) #optional_ok {
+chan_recv :: proc(c: Chan($T), loc := #caller_location) -> (v: T, ok: bool) #optional_ok {
 	sched_init()
-	if c.raw == nil do block_forever()
+	if c.raw == nil do block_forever("chan receive (nil chan)", loc)
 	mlock(&c.raw.guard)
 	if done, got := try_recv_raw(c.raw, &v); done {
 		munlock(&c.raw.guard)
@@ -850,6 +1084,7 @@ chan_recv :: proc(c: Chan($T)) -> (v: T, ok: bool) #optional_ok {
 	}
 	w := Waiter{g = sched.cur, elem = &v}
 	enqueue(&c.raw.recvq, &w)
+	waiting("chan receive", c.raw, loc)
 	munlock(&c.raw.guard)
 	park()
 	return v, w.ok
@@ -896,17 +1131,17 @@ on_send :: proc(c: Chan($T), v: T) -> Select_Case {
 }
 
 // Waits until one case can proceed, runs it and returns its index.
-select :: proc(cases: ..Select_Case) -> int {
-	return select_cases(cases, false)
+select :: proc(cases: ..Select_Case, loc := #caller_location) -> int {
+	return select_cases(cases, false, loc)
 }
 
 // Like select, but returns -1 at once when no case is ready.
-try_select :: proc(cases: ..Select_Case) -> int {
-	return select_cases(cases, true)
+try_select :: proc(cases: ..Select_Case, loc := #caller_location) -> int {
+	return select_cases(cases, true, loc)
 }
 
 @(private)
-select_cases :: proc(cases: []Select_Case, nonblocking: bool) -> int {
+select_cases :: proc(cases: []Select_Case, nonblocking: bool, loc: runtime.Source_Code_Location) -> int {
 	sched_init()
 	scratch := make([][]byte, len(cases), runtime.heap_allocator())
 	for &c, i in cases {
@@ -915,7 +1150,7 @@ select_cases :: proc(cases: []Select_Case, nonblocking: bool) -> int {
 			c.elem = raw_data(scratch[i])
 		}
 	}
-	index, ok := select_raw(cases, nonblocking)
+	index, ok := select_raw(cases, nonblocking, loc)
 	if index >= 0 && cases[index].ok != nil do cases[index].ok^ = ok
 	for c, i in cases {
 		if c.is_send do free(c.elem, runtime.heap_allocator())
@@ -948,7 +1183,7 @@ select_lock :: proc(cases: []Select_Case, take: bool) {
 }
 
 @(private)
-select_raw :: proc(cases: []Select_Case, nonblocking: bool) -> (index: int, ok: bool) {
+select_raw :: proc(cases: []Select_Case, nonblocking: bool, loc: runtime.Source_Code_Location) -> (index: int, ok: bool) {
 	select_lock(cases, true)
 	locked := true
 	defer if locked do select_lock(cases, false)
@@ -970,6 +1205,8 @@ select_raw :: proc(cases: []Select_Case, nonblocking: bool) -> (index: int, ok: 
 		waiters[i] = Waiter{g = sched.cur, elem = c.elem, sel = &sel, case_index = i}
 		enqueue(&c.ch.sendq if c.is_send else &c.ch.recvq, &waiters[i])
 	}
+	waiting("select", nil, loc)
+	when SCHED_DEBUG do sched.cur.wait_cases = cases
 	select_lock(cases, false)
 	locked = false
 	park()
@@ -1008,7 +1245,7 @@ add :: proc(wg: ^Wait_Group, n := 1) {
 
 done :: proc(wg: ^Wait_Group) { add(wg, -1) }
 
-wait :: proc(wg: ^Wait_Group) {
+wait :: proc(wg: ^Wait_Group, loc := #caller_location) {
 	sched_init()
 	mlock(&wg.guard)
 	if wg.count == 0 {
@@ -1017,6 +1254,7 @@ wait :: proc(wg: ^Wait_Group) {
 	}
 	w := Waiter{g = sched.cur}
 	enqueue(&wg.waiters, &w)
+	waiting("sched.Wait_Group", wg, loc)
 	munlock(&wg.guard)
 	park()
 }

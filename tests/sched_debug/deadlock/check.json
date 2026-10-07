@@ -1,0 +1,52 @@
+{
+  "stdout": "got 1\n",
+  "runs": [
+    {
+      "name": "1 thread",
+      "flags": [],
+      "fails": true,
+      "stderr": [
+        "vidar:sched: all goroutines are asleep - deadlock!",
+        "goroutine 1 [chan receive 0x",
+        "] (main):\n\tparked at {main.vidar}(26:",
+        "goroutine 2 [chan send 0x",
+        "started at {main.vidar}(16:",
+        "goroutine 3 [sched.Mutex 0x",
+        "started at {main.vidar}(17:",
+        "goroutine 4 [select]",
+        "case 0: receive on 0x",
+        "case 1: send on 0x",
+        "started at {main.vidar}(18:",
+        "goroutine 5 [sched.Wait_Group 0x",
+        "started at {main.vidar}(24:",
+        "panic: all goroutines are asleep - deadlock!"
+      ]
+    },
+    {
+      "name": "4 threads",
+      "flags": ["-define:VIDAR_THREADS=4"],
+      "fails": true,
+      "stderr": [
+        "vidar:sched: all goroutines are asleep - deadlock!",
+        "goroutine 1 [chan receive 0x",
+        "] on thread 0 (main):\n\tparked at {main.vidar}(26:",
+        "goroutine 4 [select] on thread",
+        "goroutine 5 [sched.Wait_Group 0x",
+        "panic: all goroutines are asleep - deadlock!"
+      ]
+    },
+    {
+      "name": "2 threads, -o:speed",
+      "flags": ["-define:VIDAR_THREADS=2", "-o:speed"],
+      "fails": true,
+      "stderr": ["panic: all goroutines are asleep - deadlock!"],
+      "notStderr": ["goroutine 1"]
+    },
+    {
+      "name": "1 thread, -o:speed, VIDAR_SCHED_DEBUG",
+      "flags": ["-o:speed", "-define:VIDAR_SCHED_DEBUG=true"],
+      "fails": true,
+      "stderr": ["goroutine 5 [sched.Wait_Group 0x", "panic: all goroutines are asleep - deadlock!"]
+    }
+  ]
+}

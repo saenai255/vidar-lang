@@ -313,7 +313,7 @@ function change(text) {
   const goLine = sLines.findIndex((l) => l.includes("sched.go("));
   const defGo = await request("textDocument/definition", { textDocument: { uri: sMain }, position: { line: goLine, character: sLines[goLine].indexOf("go(") } });
   const defPath = defGo.result?.uri?.startsWith("file:") ? require("node:url").fileURLToPath(defGo.result.uri) : "";
-  check("definition of a vidar:sched member opens the bundled source", defPath.endsWith("sched.vidar") && readFileSync(defPath, "utf8").includes("go :: proc(task: closure())"), JSON.stringify(defGo.result));
+  check("definition of a vidar:sched member opens the bundled source", defPath.endsWith("sched.vidar") && readFileSync(defPath, "utf8").includes("go :: proc(task: closure()"), JSON.stringify(defGo.result));
   const sEdited = sText.replace("fmt.println(sched.recv(ch))", "sched.");
   notify("textDocument/didChange", { textDocument: { uri: sMain, version: 2 }, contentChanges: [{ text: sEdited }] });
   await new Promise((r) => setTimeout(r, 300));

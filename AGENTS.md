@@ -79,6 +79,10 @@ Notes on `scripts/test.js`:
 
 **Other flags:** `VIDAR_ODIN_FLAGS` adds flags to every `odin build` of the runner (and of the slime_mud bench), e.g. `VIDAR_ODIN_FLAGS="-define:VIDAR_THREADS=4" node scripts/test.js` runs the suite with goroutines on 4 threads. `npm run stress -- <case> -define:VIDAR_THREADS=4` does the same for a stress run; use `-j1` for `examples/sched_io`, which writes a fixed file in `/tmp`.
 
+**Scheduler debugging** (all in `src/sched.ts`, behind `when` on a `#config`):
+- **Goroutine dump:** `VIDAR_SCHED_DEBUG` (default: on unless `-o:speed`). On a deadlock, and on `kill -QUIT <pid>`, every goroutine is printed to stderr with what it waits on, where it parked and where it started. A hung `vidar:sched` program can be asked where it is stuck: `kill -QUIT` it, then pipe its stderr through `node dist/cli.js map <out>` for `.vidar` lines. At `VIDAR_THREADS>1` a deadlock now panics too (before, it waited forever), so a hang there is no longer a deadlock.
+- **Checks:** `tests/sched_debug/<name>/` holds a program and a `check.json` with runs at fixed flags (they ignore `VIDAR_THREADS` from `VIDAR_ODIN_FLAGS`); `node scripts/test.js --only sched_debug` runs them.
+
 **Running one case:** `node scripts/test.js --only closure_values` (after `npm run build`). It combines with `--update` and `-jN`. To look at a case's output by hand, add `-opt` to the build line for `opt_*` cases, and use `input/` for multi-package cases or `examples/<name>` for an example:
 ```bash
 rm -rf "$TMPDIR/case" && node dist/cli.js build tests/cases/<name>/input.vidar -o "$TMPDIR/case"

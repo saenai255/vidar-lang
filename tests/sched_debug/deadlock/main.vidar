@@ -1,0 +1,27 @@
+package main
+
+import "core:fmt"
+import "vidar:sched"
+
+// Every goroutine ends up parked on something nobody will ever do: the scheduler must notice,
+// print each goroutine (what it waits on, where it parked, where it started), and panic.
+
+main :: proc() {
+	a := sched.make_chan(int)
+	b := sched.make_chan(int)
+	mu: sched.Mutex
+	wg: sched.Wait_Group
+	sched.add(&wg, 1)
+	sched.lock(&mu)
+	sched.go(proc[a]() { sched.send(a, 1); sched.send(a, 2) })
+	sched.go(proc[&mu]() { sched.lock(&mu) })
+	sched.go(proc[]() {
+		c := sched.make_chan(int)
+		d := sched.make_chan(string)
+		x: int
+		sched.select(sched.on_recv(c, &x), sched.on_send(d, "hi"))
+	})
+	sched.go(proc[&wg]() { sched.wait(&wg) })
+	fmt.println("got", sched.recv(a))
+	sched.recv(b)
+}
