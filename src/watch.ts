@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { loadProgram, schedSourcePath } from "./project";
 
 /** The commands `--watch` works with. */
-export const WATCH_COMMANDS = ["run", "check"];
+export const WATCH_COMMANDS = ["run", "check", "test"];
 
 export interface WatchOptions {
   /**
