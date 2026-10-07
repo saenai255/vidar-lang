@@ -6,6 +6,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { Analyzer, posOf } from "./analyzer";
 import { hotWarnings } from "./checks";
 import { fmtMain } from "./format";
+import { newMain } from "./scaffold";
 import { CompileError } from "./lexer";
 import { Output, Program, emitProgram, loadProgram, transpile } from "./project";
 import { wantsWatch, watchCommand } from "./watch";
@@ -36,6 +37,7 @@ function usage(): never {
   -opt-report in place of -opt also prints what -opt decided, where, and why
   --watch (run, check, test) reruns when a .vidar file of the program changes; --clear clears the screen first
   vidar fmt   <files|dirs> [--check|--write]        format .vidar files (default: print to stdout)
+  vidar new   <dir> [--lib]                         start a program (or a library package with a test) in an empty dir
   -define:NAME=value is passed on to odin; run and test print panics, failed asserts and test
   messages at .vidar locations
   vidar lsp                                     run the language server on stdio (same as vidar-lsp)
@@ -81,6 +83,7 @@ export function main(argv: string[]): number | Promise<number> {
     return 0;
   }
   if (argv[0] === "fmt") return fmtMain(argv.slice(1));
+  if (argv[0] === "new") return newMain(argv.slice(1));
   const [cmd, input, ...args] = argv;
   if (cmd === "map" && input) return mapCommand(input);
   const end = args.indexOf("--");

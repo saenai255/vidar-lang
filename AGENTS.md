@@ -41,7 +41,7 @@ Times are from a 12-core M3 Pro.
 | Command | What it runs | Time |
 |---|---|---|
 | `npm test` | build, then the unit, case and LSP suites; exits non-zero on any failure | about 1 minute |
-| `npm run test:unit` | `node:test` unit tests in `tests/unit/` | 1 s |
+| `npm run test:unit` | `node:test` unit tests in `tests/unit/`; `scaffold.test.js` runs `vidar run` and `vidar test` on a new project | a few seconds |
 | `node scripts/test.js [-jN]` | fixture cases, error cases, passthrough | 43 s at the default `-j6`, 49 s at `-j1` |
 | `node scripts/test.js --only <text>` | only the cases and error tests whose name contains `<text>` (skips the `core` passthrough) | seconds |
 | `npm run test:update` | build, then regenerate every fixture (see below) | as above |

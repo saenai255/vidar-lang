@@ -18,8 +18,11 @@ node dist/cli.js run   examples/closures --watch    # rerun whenever a .vidar fi
 node dist/cli.js fmt   examples/closures --check    # list files vidar fmt would change
 node dist/cli.js test  examples/testing             # transpile + odin test: run the @(test) procs
 node dist/cli.js build examples/cyclic -debug       # also build it with debug info, for lldb or gdb
+node dist/cli.js new   hello                        # start a program in a new directory (--lib: a library package)
 npm test
 ```
+
+`vidar new <dir> [--lib]` writes a `main.vidar` (a hello world, or with `--lib` a library package with a `@(test)` proc, for `vidar test`), a `.gitignore` with `out/`, a `.vscode/launch.json` with the `vidar` debug configuration (see "Debugging") and a README stub. The package is named after the directory. It refuses a directory that isn't empty.
 
 `--watch` works with `run`, `check` and `test`. It watches every package of the program in the project (the entry package and every package it imports by relative path, not `core:` or `vidar:sched`), recomputed before each run since imports change, and reruns about 100 ms after the last change. A program still running is killed, together with anything it started, before the rerun. Output is kept unless you add `--clear`, which clears the screen before each rerun. It uses `fs.watch` on each package directory and falls back to polling where that fails. Ctrl-C stops it.
 
@@ -647,7 +650,7 @@ npm run bench          # examples/negative_cost timed against HEAD; --against <r
 npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many times; saves a stack on a hang
 ```
 
-- **Unit tests** (`tests/unit/*.test.js`, `node:test`): lexer semicolon insertion and trivia, parser round-trips of tricky Odin syntax, parsing of the extension syntax and error recovery, compile-time evaluation, hygiene, spacing of generated code, the import-cycle grouping (Tarjan's algorithm, merged units, prefixes, output layout), the run-time location mapping (`runmap.test.js`: both location shapes, what passes through, the line filter, `vidar.map.json`), `--watch` (the file set, debouncing, reruns on change, polling, and killing a running child with what it started), the missing-import fix's package index (`actions.test.js`: a fake `odin root`, shared names, the fallback table), and `vidar fmt`: over every `.vidar` file in the repository it must be idempotent and indent from the tokens alone, and every case and example (and the prelude), with its whitespace scrambled and then formatted, must transpile to the same tokens as before, with and without `-opt`.
+- **Unit tests** (`tests/unit/*.test.js`, `node:test`): lexer semicolon insertion and trivia, parser round-trips of tricky Odin syntax, parsing of the extension syntax and error recovery, compile-time evaluation, hygiene, spacing of generated code, the import-cycle grouping (Tarjan's algorithm, merged units, prefixes, output layout), the run-time location mapping (`runmap.test.js`: both location shapes, what passes through, the line filter, `vidar.map.json`), `--watch` (the file set, debouncing, reruns on change, polling, and killing a running child with what it started), the missing-import fix's package index (`actions.test.js`: a fake `odin root`, shared names, the fallback table), `vidar new` (`scaffold.test.js`: the files, package names, refusing a non-empty directory, and that the program runs and the library's test passes, skipped without `odin`), and `vidar fmt`: over every `.vidar` file in the repository it must be idempotent and indent from the tokens alone, and every case and example (and the prelude), with its whitespace scrambled and then formatted, must transpile to the same tokens as before, with and without `-opt`.
 - **`vidar test`** (in `scripts/test.js`, named `testing: ...`): `vidar test examples/testing` must pass, and `vidar test tests/vidar_test/failing` must fail, reporting a failed `testing.expect`, a failed `assert` and a bounds-check panic at the `.vidar` lines marked `// fails here`.
 - **Sample programs with fixtures** (`tests/cases/<name>/`): one feature area each. The sample is `input.vidar`, or an `input/` directory for multi-package programs. `expected/` holds the transpiled Odin tree, and `stdout.txt` is the program's expected output, checked by running it with `odin run`. Cases named `plain_*` must come out byte-identical to their input. Cases named `opt_*` are transpiled with `-opt`. Every case is also transpiled the other way; if `-opt` changes its output, that version is run too and must print the same. They cover:
   - closures: capture modes, loops, every declaration form, multiple results, variadics, nesting, closure types
@@ -699,7 +702,8 @@ npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many tim
 | `src/checks.ts` | `@(no_alloc)` (what a proc can allocate through) and `@(hot)` (warnings from the `-opt` decisions inside it) |
 | `src/fmtspec.ts` | reads `fmt` format strings for `-opt` |
 | `src/project.ts` | loads a program by following imports, groups import cycles (Tarjan's algorithm), and emits the output tree; shared by the CLI and the language server |
-| `src/cli.ts` | `build` / `run` / `test` / `check` / `emit` / `fmt` / `map` |
+| `src/cli.ts` | `build` / `run` / `test` / `check` / `emit` / `fmt` / `map` / `new` |
+| `src/scaffold.ts` | `vidar new`: the files of a new program or library package |
 | `src/runmap.ts` | generated `.odin` locations mapped back to `.vidar` lines: compile errors, the line filter on `run` / `test` output, `vidar.map.json` and `vidar map`, and the reverse lookup for *Show Generated Odin* |
 | `src/watch.ts` | `--watch`: the files of a program, the watch loop (`fs.watch` on each package directory, polling as the fallback, debounced), and rerunning the command in a child process that is killed on change |
 | `src/format.ts` | `vidar fmt`: token-based formatter (indentation, spacing, trailing whitespace), its per-line edits for the language server, and the `fmt` command |
