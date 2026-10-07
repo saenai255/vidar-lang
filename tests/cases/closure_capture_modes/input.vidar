@@ -9,9 +9,11 @@ main :: proc() {
 	n = 2
 	fmt.println(by_value(), by_ref())
 
-	// mutating a by-value capture changes only the closure's own copy
-	counter := proc[n]() -> int { n += 1; return n }
-	fmt.println(counter(), counter(), n)
+	// state that changes lives behind a pointer; copies of the closure share it
+	count := new_clone(n)
+	counter := proc[count]() -> int { count^ += 1; return count^ }
+	again := counter
+	fmt.println(counter(), again(), count^, n)
 
 	// params can be captured by reference too
 	bump := proc(x: int) -> int {

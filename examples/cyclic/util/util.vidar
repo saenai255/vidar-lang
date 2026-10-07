@@ -3,5 +3,6 @@ package util
 // Not part of the cycle, so it stays its own Odin package.
 // Closures still cross the package boundary: they share one runtime type.
 every :: proc(n: int, f: closure(frame: int)) -> closure(frame: int) {
-	return proc[n, f](frame: int) { if frame % n == 0 do f(frame) }
+	fp := new_clone(f)
+	return proc[n, fp](frame: int) { if frame % n == 0 do fp^(frame) }
 }

@@ -1,0 +1,52 @@
+package main
+
+import "core:fmt"
+import "vidar:sched"
+
+Point :: struct { x, y: int }
+
+make_adder :: proc(k: int) -> closure(int) -> int {
+	return proc[k](x: int) -> int { return x + k }
+}
+
+main :: proc() {
+	// captures are copied into the closure value, so a returned closure keeps them
+	add := make_adder(10)
+	fmt.println(add(1))
+
+	// each closure made in a loop has its own copy
+	prints: [dynamic]closure() -> int
+	defer delete(prints)
+	for i in 0..<3 do append(&prints, proc[i]() -> int { return i * 10 })
+	for f in prints do fmt.print(f(), "")
+	fmt.println()
+
+	// copying a closure copies its captures; a pointer capture is shared
+	p := Point{1, 2}
+	hits := 0
+	show := proc[p, &hits]() -> int { hits += 1; return p.x + p.y }
+	p.x = 100
+	copy := show
+	fmt.println(show(), copy(), hits, p.x)
+
+	// writes through a captured pointer reach the original
+	q := new_clone(Point{3, 4})
+	defer free(q)
+	shift := proc[q](d: int) { q.x += d }
+	shift(5)
+	fmt.println(q.x)
+
+	// a closure holding another closure keeps a pointer to it
+	inner := make_adder(1)
+	outer := proc[&inner](x: int) -> int { return inner(x) * 2 }
+	fmt.println(outer(4))
+
+	// goroutines get their captures by value too
+	done := sched.make_chan(int, 3)
+	for id in 0..<3 do sched.go(proc[id, done]() { sched.send(done, id * id) })
+	sum := 0
+	for _ in 0..<3 do sum += sched.recv(done)
+	fmt.println("goroutines:", sum)
+
+	fmt.println("closure size:", size_of(add))
+}

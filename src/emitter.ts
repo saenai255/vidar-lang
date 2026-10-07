@@ -28,10 +28,13 @@ import "core:strings"
 import "core:sync"
 import "core:time"
 
-// a closure: a proc plus its captured environment
+// a closure: a proc plus a copy of its captures, inline; -define:VIDAR_CLOSURE_ENV=<bytes> sets the room
+CLOSURE_ENV :: (#config(VIDAR_CLOSURE_ENV, 128) + 7) / 8 * 8
+Env :: [CLOSURE_ENV / 8]u64
+
 Closure :: struct($P: typeid) {
 	call: P,
-	env:  rawptr,
+	env:  Env,
 }
 
 // scoped!: a block's own temp allocator
@@ -1215,7 +1218,7 @@ export class Emitter {
       return sig.unnamed ? [t] : p.names.map(() => t);
     });
     this.fileUsesRuntime = true;
-    return `${RUNTIME_ALIAS}.Closure(proc(rawptr${params.map((t) => ", " + t).join("")})${this.results(sig)})`;
+    return `${RUNTIME_ALIAS}.Closure(proc(${RUNTIME_ALIAS}.Env${params.map((t) => ", " + t).join("")})${this.results(sig)})`;
   }
 
   private results(sig: ProcSig): string {
@@ -1257,36 +1260,25 @@ export class Emitter {
     while (!(p.toks[paren].kind === "op" && p.toks[paren].text === "]")) paren++;
     paren++;
     const signature = this.generic(p, paren, p.body.start);
-    const withEnv = /^\(\s*\)/.test(signature)
-      ? signature.replace(/^\(\s*\)/, "(__env_raw: rawptr)")
-      : signature.replace(/^\(/, "(__env_raw: rawptr, ");
-    const inPtr = !!A(p)._envInPtr;
-    const envLine = inPtr ? "__env := __Env{cast(T0)__env_raw}" : "__env := cast(^__Env)__env_raw";
-    this.prologue.set(p.body, [...(caps.length ? [envLine] : []), ...shadowedParams]);
+    const envParam = `__env_raw: ${RUNTIME_ALIAS}.Env`;
+    const withEnv = /^\(\s*\)/.test(signature) ? signature.replace(/^\(\s*\)/, `(${envParam})`) : signature.replace(/^\(/, `(${envParam}, `);
+    this.prologue.set(p.body, [...(caps.length ? ["__env := transmute(__Env)__env_raw"] : []), ...shadowedParams]);
     const body = this.emit(p.body);
     const procText = `proc${withEnv} ${body}`;
-    if (!caps.length) return `${sigText}{call = ${procText}, env = nil}`;
+    if (!caps.length) return `${sigText}{call = ${procText}}`;
 
-    const id = this.closureCount++;
-    const helper = `__closure_${id}`;
-    const ret = (env: string) => `\treturn ${sigText}{\n\t\tcall = ${procText},\n\t\tenv = ${env},\n\t}\n}`;
-    const args = caps.map((c) => this.captureArg(c));
-    if (A(p)._envOnStack) {
-      const envType = `${helper}_Env`;
-      const polys = caps.map((_, i) => `T${i}`);
-      this.helpers.push(
-        `${envType} :: struct(${polys.map((t) => `$${t}: typeid`).join(", ")}) {\n${caps.map((c, i) => `\t${c.name}: T${i},\n`).join("")}}\n\n` +
-          `${helper} :: proc(__env_ptr: ^${envType}(${polys.map((t) => "$" + t).join(", ")})) -> ${sigText} {\n` +
-          `\t__Env :: ${envType}(${polys.join(", ")})\n` + ret("__env_ptr"),
-      );
-      return `${helper}(&${envType}(${args.map((a) => `type_of(${a})`).join(", ")}){${args.join(", ")}})` + this.skipLines(p);
-    }
+    const helper = `__closure_${this.closureCount++}`;
+    const { file, line } = posOf(p);
+    const room = `${RUNTIME_ALIAS}.CLOSURE_ENV`;
+    const fits = `closure at ${posix.basename(file)}:${line}: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>`;
     this.helpers.push(
       `${helper} :: proc(${caps.map((c, i) => `__c${i}: $T${i}`).join(", ")}) -> ${sigText} {\n` +
-        `\t__Env :: struct {\n${caps.map((c, i) => `\t\t${c.name}: T${i},\n`).join("")}\t}\n` +
-        ret(inPtr ? "rawptr(__c0)" : `new_clone(__Env{${caps.map((_, i) => `__c${i}`).join(", ")}})`),
+        `\t__Caps :: struct {\n${caps.map((c, i) => `\t\t${c.name}: T${i},\n`).join("")}\t}\n` +
+        `\t#assert(size_of(__Caps) <= ${room}, ${JSON.stringify(fits)})\n` +
+        `\t__Env :: struct { using __caps: __Caps, __pad: [${room} - size_of(__Caps)]byte }\n` +
+        `\treturn ${sigText}{\n\t\tcall = ${procText},\n\t\tenv = transmute(${RUNTIME_ALIAS}.Env)__Env{__caps = {${caps.map((_, i) => `__c${i}`).join(", ")}}},\n\t}\n}`,
     );
-    return `${helper}(${args.join(", ")})` + this.skipLines(p);
+    return `${helper}(${caps.map((c) => this.captureArg(c)).join(", ")})` + this.skipLines(p);
   }
 
   /** The value handed to a closure constructor for one capture, as seen at the creation site. */

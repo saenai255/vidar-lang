@@ -3,7 +3,6 @@ import { Block, Expr, File, Node, Param, ProcSig, Stmt, children } from "./ast";
 import { Parser } from "./parser";
 import { CaptureSym, Ctx, GlobalSym, LocalSym, PackageInfo, PkgSym, Scope, Sym, Ty } from "./scope";
 import { autoOptimize } from "./autoopt";
-import { closureEnvs } from "./escape";
 import { CallSpan, Interp, NotConstant, Val, joinTokens, repeatable, respace, valueToTokens, tokensOf } from "./comptime";
 
 /** Annotation accessor: analysis results live in `_`-prefixed fields on nodes. */
@@ -74,10 +73,13 @@ export interface SpecInfo {
 }
 
 /** A call passing closure literals: it calls a copy of `sym` that calls their bodies directly. */
-/** Closure literals a copy of `callee` calls directly: they get no env of their own. */
-export function markInlined(callee: Node, closures: Map<string, Node>): void {
+/** Marks `callee` as having a copy that calls closure literals directly. */
+export function markInlined(callee: Node): void {
   A(callee)._closureCopies = true;
-  for (const l of closures.values()) A(l)._inlined = true;
+}
+
+function isFixedArray(type: string | undefined): boolean {
+  return !!type && /^\[[^\]^]/.test(type) && !type.startsWith("[dynamic]");
 }
 
 export interface ClosureSpec {
@@ -205,7 +207,6 @@ export class Analyzer {
     }
     for (const p of this.closureCalls) this.guard(() => this.specializeClosures(p.e, p.sym, p.info, p.consts));
     if (this.optimize) this.guard(() => autoOptimize(this));
-    if (this.optimize) this.guard(() => closureEnvs(this, packages));
   }
 
   // ---- declarations ----
@@ -448,6 +449,7 @@ export class Analyzer {
       case "Assign":
         if (s.rhs.length === 1 && s.rhs[0].k === "Postfix" && s.rhs[0].value) this.hostOrReturn(s, s.rhs[0], scope);
         s.lhs.forEach((e) => this.expr(e, scope));
+        s.lhs.forEach((e) => this.captureWrite(e, scope));
         s.rhs.forEach((e) => this.expr(e, scope));
         if (s.op === "=" && s.lhs.length === s.rhs.length) s.rhs.forEach((r, i) => this.convertTo(r, this.typeOf(s.lhs[i], scope)));
         return;
@@ -659,6 +661,8 @@ export class Analyzer {
           if (target.declKind === "other") throw new CompileError(`'${c.name}' cannot be captured by reference`, p.toks[c.tok].pos);
           target.refCaptured = true;
         }
+        if (!c.byRef && this.capturesClosure(target))
+          throw new CompileError(`'${c.name}' is a closure, and a closure can't hold a copy of another one (it would need more room than it has). Capture &${c.name}, or a pointer from new_clone(${c.name}) if it must outlive this frame`, p.toks[c.tok].pos);
         const sym: CaptureSym = { kind: "capture", name: c.name, byRef: c.byRef, target, ctx, declTok: p.toks[c.tok] };
         root.syms.set(c.name, sym);
         return sym;
@@ -673,6 +677,12 @@ export class Analyzer {
         this.resultStack.pop();
       }
     }
+  }
+
+  private capturesClosure(target: Sym): boolean {
+    while (target.kind === "capture" && !target.byRef) target = target.target;
+    const ty = target.kind === "local" ? this.normalize(target.ty) : undefined;
+    return ty?.t === "sig" && ty.closure;
   }
 
   private sig(sig: ProcSig, scope: Scope, declare: boolean, toks?: Token[], onResults?: (results: LocalSym[]) => void): LocalSym[] {
@@ -1133,6 +1143,21 @@ export class Analyzer {
     this.hint(sym, i < 0 ? text : text.slice(0, i), i < 0 ? undefined : text.slice(i + 2));
   }
 
+  /** A by-value capture is a fresh copy on each call, so a write to it would be lost. */
+  private captureWrite(e: Expr, scope: Scope): void {
+    const through = (x: Expr) => this.typeName(this.typeOf(x, scope));
+    let root = e;
+    for (;;) {
+      if (root.k === "Paren") root = root.x;
+      else if (root.k === "Selector" && !through(root.x)?.startsWith("^")) root = root.x;
+      else if (root.k === "Index" && !root.slice && isFixedArray(through(root.x))) root = root.x;
+      else break;
+    }
+    const sym: Sym | undefined = root.k === "Ident" ? A(root)._sym : undefined;
+    if (sym?.kind === "capture" && !sym.byRef)
+      throw new CompileError(`'${sym.name}' is captured by value: each call gets a fresh copy, so a change would be lost. Capture &${sym.name}, or a pointer, to change it`, posOf(e));
+  }
+
   /** Removes vidar's own attributes from a declaration (Odin rejects unknown ones) and returns those found. */
   private takeAttrs(s: ValueDecl, names: string[]): Set<string> {
     const found = new Set<string>();
@@ -1213,7 +1238,7 @@ export class Analyzer {
       return this.specializeConsts(e, sym, info, consts);
     }
     A(e)._closureSpec = { sym, lit: info.lit, consts, closures } satisfies ClosureSpec;
-    markInlined(info.lit, closures);
+    markInlined(info.lit);
     this.hint(e, "closure inlined", `@(specialize): a copy of ${sym.name} ${consts.length ? `with ${consts.join(", ")} known at compile time, ` : ""}calling the closure passed to ${[...closures.keys()].join(", ")} directly`);
   }
 

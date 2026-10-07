@@ -51,7 +51,7 @@ main :: proc() {
 	fmt.println("picked:", speak(pick(&z, 1)))
 
 	// the same function value works for any Animal
-	shout := __vidar.Closure(proc(rawptr, Animal) -> string){call = proc(__env_raw: rawptr, a: Animal) -> string { return speak(a) }, env = nil}
+	shout := __vidar.Closure(proc(__vidar.Env, Animal) -> string){call = proc(__env_raw: __vidar.Env, a: Animal) -> string { return speak(a) }}
 	fmt.println(shout.call(shout.env, z.star), shout.call(shout.env, __Animal_from(&rex)))
 
 	// static calls on concrete values

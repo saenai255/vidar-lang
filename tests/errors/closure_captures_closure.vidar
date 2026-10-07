@@ -1,0 +1,6 @@
+// error: 'f' is a closure, and a closure can't hold a copy of another one
+package main
+twice :: proc(f: closure(int) -> int) -> closure(int) -> int {
+	return proc[f](x: int) -> int { return f(f(x)) }
+}
+main :: proc() {}

@@ -34,7 +34,9 @@ Rules:
 - Each name may appear once in a capture list. Only locals can be captured: globals and constants are visible without capturing, and listing one is an error.
 - A nested closure can capture what its enclosing closure captured.
 - Closure bodies are lifted to file scope, so they cannot use the enclosing proc's local constants, local types or `$T` parameters.
-- Closure environments and by-reference boxes are allocated with `context.allocator` and never freed (`-opt` keeps non-escaping ones on the stack).
+- A closure is a value: its captures are copied into it (room for 128 bytes, `-define:VIDAR_CLOSURE_ENV=<bytes>` to change), so it can be returned, stored and copied freely and never allocates. Captures that don't fit are a compile error.
+- By-value captures are read-only (each call gets a fresh copy); capture `&x` or a pointer to change state.
+- A closure can't capture another closure by value: capture `&f`, or `new_clone(f)` if it outlives the frame.
 
 Example: [examples/closures](examples/closures).
 
@@ -290,7 +292,6 @@ for s in shapes do total += area(s)        // a direct call per type
 `-opt` (on `build`, `run`, `check` and `emit`) also rewrites plain Odin where the result is provably the same:
 - `fmt` print calls with a literal format write each piece directly, with no format parsing or `any` boxing
 - indexes proven in bounds by their loop (`for i in 0..<len(a)`, `for x, i in a`, `for i := 0; i < len(a); i += 1`) get `#no_bounds_check`
-- closures with one by-reference capture keep the pointer as their environment; closures only called (directly or through parameters that are only called) get their environment on the stack
 - adjacent `make`/`new` freed only by `defer delete`/`defer free` in the same block become one allocation
 - procs over `bool`/`u8`/`i8` that are pure integer code and loop become tables; procs whose constant arguments bound a loop, or divide, shift or branch inside one, are specialized (at most 4 copies, not when every call passes the same constant); a call passing a closure literal (`proc[...]`) to a closure parameter the callee only calls gets a copy calling the literal's body directly, with its captures on the stack (at most 4 copies per proc, callee in the same file)
 

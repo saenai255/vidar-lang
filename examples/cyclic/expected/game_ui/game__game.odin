@@ -17,7 +17,7 @@ game__Error :: enum { None, Empty_Label, Too_Many }
 game__World :: struct {
 	entities: [dynamic]game__Entity,
 	frame:    int,
-	on_frame: [dynamic]__vidar.Closure(proc(rawptr, int)),
+	on_frame: [dynamic]__vidar.Closure(proc(__vidar.Env, int)),
 }
 
 game__Sprite :: struct { label: string }
@@ -48,7 +48,7 @@ game__spawn :: proc(w: ^game__World, label: string) -> game__Error {
 game__run :: proc(w: ^game__World, frames: int) -> string {
 	ticks := 0
 	append(&w.on_frame, __closure_0(&ticks))
-	append(&w.on_frame, util.every(2, __vidar.Closure(proc(rawptr, int)){call = proc(__env_raw: rawptr, frame: int) { fmt.println("[game] even frame", frame) }, env = nil}))
+	append(&w.on_frame, util.every(2, __vidar.Closure(proc(__vidar.Env, int)){call = proc(__env_raw: __vidar.Env, frame: int) { fmt.println("[game] even frame", frame) }}))
 	for _ in 0..<frames {
 		w.frame += 1
 		for cb in w.on_frame do cb.call(cb.env, w.frame)
@@ -87,12 +87,14 @@ __game__Entity_vtable_game_Sprite := __game__Entity_VTable{
 
 __game__Entity_from_game_Sprite :: proc(p: ^game__Sprite) -> game__Entity { return {data = p, __vtable = &__game__Entity_vtable_game_Sprite} }
 
-__closure_0 :: proc(__c0: $T0) -> __vidar.Closure(proc(rawptr, int)) {
-	__Env :: struct {
+__closure_0 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env, int)) {
+	__Caps :: struct {
 		ticks: T0,
 	}
-	return __vidar.Closure(proc(rawptr, int)){
-		call = proc(__env_raw: rawptr, frame: int) { __env := cast(^__Env)__env_raw; __env.ticks^ += 1 },
-		env = new_clone(__Env{__c0}),
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at game.vidar:50: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
+	return __vidar.Closure(proc(__vidar.Env, int)){
+		call = proc(__env_raw: __vidar.Env, frame: int) { __env := transmute(__Env)__env_raw; __env.ticks^ += 1 },
+		env = transmute(__vidar.Env)__Env{__caps = {__c0}},
 	}
 }

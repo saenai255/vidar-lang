@@ -31,7 +31,7 @@ A directory is a package: all its `.vidar` (and plain `.odin`) files are transpi
 
 ## Closures
 
-A proc literal with a capture list is a closure. `[x]` copies `x` into the closure; `[&x]` captures it by reference: the closure holds `&x` and nothing is moved, so keeping `x` alive while the closure runs is up to you. For state that outlives the frame, capture a heap pointer by value: `count := new(int)` with `proc[count]`. `proc[]` is a closure with no captures. A plain `proc(...)` with no brackets is an ordinary Odin proc.
+A proc literal with a capture list is a closure. `[x]` copies `x` into the closure; `[&x]` captures it by reference: the closure holds `&x` and nothing is moved, so keeping `x` alive while the closure runs is up to you. A closure is a plain value: its captures are stored inside it, so copying, returning or appending a closure copies them, and nothing is ever allocated. For state that changes, or that outlives the frame, capture a pointer: `count := new_clone(0)` with `proc[count]`. `proc[]` is a closure with no captures. A plain `proc(...)` with no brackets is an ordinary Odin proc.
 
 ```odin
 make_counter :: proc(start: int) -> closure() -> int {
@@ -51,9 +51,11 @@ main :: proc() {
 - Closure types are written `closure(params) -> results`. They work anywhere a type does: struct fields, `[dynamic]closure(int) -> int`, parameters, return types, aliases.
 - Closures are called like procs: `f(x)`, `s.handler(x)`, `make_adder(1)(2)`.
 - A closure can capture another closure's captures (nested closures).
+- By-value captures are read-only: each call gets a fresh copy, so assigning to one is a compile error. Capture `&x` or a pointer to change state.
+- Captures must fit in the closure: 128 bytes by default, set with `-define:VIDAR_CLOSURE_ENV=<bytes>`. A closure that doesn't fit is a compile error naming it. A closure can't capture another closure by value (it would need more room than it has); capture `&f`, or `new_clone(f)` if it outlives the frame.
 - Using an outer local without capturing it is a compile error that suggests the fix.
 
-**How it lowers:** a closure value is `Closure(proc(rawptr, A...) -> R)`, a two-field struct holding the proc and its environment. The struct is declared once, in a generated `vidar_runtime` package, so closures can be passed between packages. Each closure literal becomes a call to a generated parapoly constructor, `__closure_N(captures...)`, so Odin infers the capture types itself.
+**How it lowers:** a closure value is `Closure(proc(Env, A...) -> R)`, a struct holding the proc and `env: Env`, a fixed `[N]u64` buffer the captures are copied into (136 bytes in all by default). The proc gets the buffer and reads its captures from it. The struct is declared once, in a generated `vidar_runtime` package, so closures can be passed between packages. Each closure literal becomes a call to a generated parapoly constructor, `__closure_N(captures...)`, so Odin infers the capture types itself.
 
 ## Interfaces
 
@@ -407,7 +409,6 @@ node dist/cli.js emit examples/negative_cost -opt-report  # -opt, plus what it d
 - **Allocations freed together:** adjacent `x := make([]E, n)` / `p := new(T)` that are only freed by a `defer delete(x)` / `defer free(p)` in the same block become one allocation, sliced up, and freed by the defer that runs last.
 - **`#soa` layout:** a local `a: [dynamic]T`, `a: [N]T`, `a := make([dynamic]T, ...)` or `a := make([]T, n)` of a plain struct `T` (no `using`, tags, directives or parameters) becomes `#soa`, each field in an array of its own, when `T` has at least 3 fields or about 32 bytes and some loop touches only some of its fields. Every use of `a` must mean the same on an `#soa` container: `a[i].f` (read, write, `+=`, `a[i].f[j]`), `a[i]` as a whole value (copied, assigned, compared, passed), `len`, `cap`, `for x in a`, `for &x in a` using only `x.f`, `append(&a, ...)`, `clear`, `reserve`, `resize` and `delete`. Anything else keeps the layout: `&a[i]` or `&a[i].f`, slicing, passing `a` to a proc, returning, reassigning or capturing it.
 - **Lookup tables, chosen automatically:** a proc taking one `bool`, `u8` or `i8` and returning an integer or `bool` becomes a table when its body is pure integer code (locals, constants, arithmetic, `if`/`for`/`switch`, calls to procs that pass the same check), has a loop or at least 24 operations, and finishes at compile time for every input. Floats, strings, globals, pointers and macros rule a proc out, because the compile-time interpreter can't promise to compute them exactly as the compiled program does.
-- **Closure environments off the heap:** a closure whose one capture is by reference (`proc[&x]`) stores that pointer as its environment, with no allocation. A closure that provably doesn't outlive the statement creating it gets its environment on the creating proc's stack: it is only called, bound with `:=` to a local that is only called, or passed to procs whose parameter is itself only called or passed on that way. Anything else (returned, assigned, stored in a literal or struct, appended, captured by another closure, given to `sched.go` or `blocking`, or a body that takes the address of a capture) keeps the heap environment. `-opt-report` gives the reason per closure.
 - **Specialization, chosen automatically:** a proc gets a copy per constant argument when that parameter bounds a loop, or divides, shifts or branches inside one, and the calls pass constants to it. It is skipped when every call passes the same constant (LLVM already folds that) and when it would take more than 4 copies.
 - **Closures passed as literals**, like Rust monomorphizing closures: `for_each(xs, proc[&total, k](x: int) { total += x * k })` calls `for_each__closure0(xs, &total, k)`, a copy of `for_each` in which `f(x)` is a direct call to the closure's body, lifted to a proc of its own, with the captures in an environment on the copy's stack. LLVM can then inline it, and nothing is allocated. This applies when the callee is a plain proc with a body in the same file, and its body only calls the parameter: storing it, passing it on, returning it, comparing it, or capturing it in another closure keeps the call as it was. Each call passing a literal gets its own copy, at most 4 per proc; the calls past that call the original. Closure values held in variables (`g := proc[k]...; for_each(xs, g)`) aren't specialized.
 
@@ -542,6 +543,7 @@ Options (LSP `initializationOptions`): `odinCheckOnSave` (default `true`), `odin
 ```bash
 npm test               # unit tests, fixture tests, language server tests
 npm run test:update    # regenerate fixtures after an intended output change, then review the diff
+node scripts/test.js --only closure    # only the cases and error tests whose name contains "closure"
 VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js   # run the LSP suite against a built binary
 ```
 
@@ -577,7 +579,6 @@ VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js   # run the LSP su
 | `src/emitter.ts` | re-emits tokens and lowers closures, interfaces, cross-package references and expansions |
 | `src/optimize.ts` | `-opt` rewrites inside a proc: proven bounds checks, allocations freed together, `reserve` before append loops |
 | `src/soa.ts` | `-opt`: which local arrays of structs become `#soa` |
-| `src/escape.ts` | `-opt` after analysis: which closure environments go on the stack or in the env pointer |
 | `src/autoopt.ts` | `-opt` after analysis: which procs become tables or specialized copies, and the `-opt-report` notes |
 | `src/fmtspec.ts` | reads `fmt` format strings for `-opt` |
 | `src/project.ts` | loads a program by following imports, groups import cycles (Tarjan's algorithm), and emits the output tree; shared by the CLI and the language server |
@@ -590,7 +591,7 @@ VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js   # run the LSP su
 
 - **Calling closures relies on type inference.** vidar finds a closure's type through annotations, `:=` from closure literals or proc results, struct fields, indexing and captures. If it can't tell that a callee is a closure, the call is left as is and Odin reports it as a call to a non-procedure.
 - **Closure bodies are lifted to file scope.** They can't use the enclosing proc's local constants or types, or its polymorphic parameters (`$T`). vidar reports this as an error.
-- **Memory:** closure environments and by-reference boxes are allocated with `context.allocator` and never freed. That is fine for arenas and short programs. Under `-opt`, closures that don't escape and closures with one by-reference capture allocate nothing; the escape analysis is conservative and only follows calls to procs it can see.
+- **Closure size:** every closure value carries room for `VIDAR_CLOSURE_ENV` bytes of captures (128 by default), whether it uses them or not. Arrays of closures and channels of closures are that much bigger.
 - **Import cycles merge packages.** Odin sees one package for the whole cycle. Procs declared inside `foreign` blocks of cycle members are not prefixed, so they must not clash across the cycle. Only relative imports are followed; packages reached through collections (`core:`, `shared:`, ...) can't take part in a cycle.
 - **Anonymous struct literals** only work in `:=` declarations inside procedures; not at file scope or in `if`/`for`/`switch` initializers.
 - **Extension keywords are contextual.** `closure`, `quote`, `interface`, `impl`, `catch` and `errdefer` remain usable as ordinary identifiers, and `take` is only a keyword inside `do!` and `comptime!` blocks.

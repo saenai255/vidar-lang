@@ -1,0 +1,7 @@
+// error: 'n' is captured by value: each call gets a fresh copy
+package main
+main :: proc() {
+	n := 1
+	counter := proc[n]() -> int { n += 1; return n }
+	_ = counter
+}

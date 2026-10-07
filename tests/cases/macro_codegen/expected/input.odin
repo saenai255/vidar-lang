@@ -27,8 +27,8 @@ main :: proc() {
 	// sum_of!(4) — input.vidar:40
 	fmt.println((((0 + 1) + 2) + 3) + 4)
 	// scaler!(f32, 2) — input.vidar:41
-	double := __vidar.Closure(proc(rawptr, f32) -> f32){call = proc(__env_raw: rawptr, x: f32) -> f32 {
+	double := __vidar.Closure(proc(__vidar.Env, f32) -> f32){call = proc(__env_raw: __vidar.Env, x: f32) -> f32 {
 		return x * 2
-	}, env = nil}
+	}}
 	fmt.println(double.call(double.env, 1.25))
 }

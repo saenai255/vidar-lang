@@ -14,10 +14,13 @@ import "core:strings"
 import "core:sync"
 import "core:time"
 
-// a closure: a proc plus its captured environment
+// a closure: a proc plus a copy of its captures, inline; -define:VIDAR_CLOSURE_ENV=<bytes> sets the room
+CLOSURE_ENV :: (#config(VIDAR_CLOSURE_ENV, 128) + 7) / 8 * 8
+Env :: [CLOSURE_ENV / 8]u64
+
 Closure :: struct($P: typeid) {
 	call: P,
-	env:  rawptr,
+	env:  Env,
 }
 
 // scoped!: a block's own temp allocator

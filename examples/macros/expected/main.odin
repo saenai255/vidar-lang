@@ -91,8 +91,8 @@ main :: proc() {
 	fmt.println("answer:", answer)
 
 	// make_scaler!(f64, 3) — main.vidar:96
-	triple := __vidar.Closure(proc(rawptr, f64) -> f64){call = proc(__env_raw: rawptr, x: f64) -> f64 {
+	triple := __vidar.Closure(proc(__vidar.Env, f64) -> f64){call = proc(__env_raw: __vidar.Env, x: f64) -> f64 {
 		return x * 3
-	}, env = nil}
+	}}
 	fmt.println("scaled:", triple.call(triple.env, 1.5))
 }

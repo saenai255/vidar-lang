@@ -1,0 +1,8 @@
+// error: 'p' is captured by value: each call gets a fresh copy
+package main
+Point :: struct { x, y: int }
+main :: proc() {
+	p := Point{1, 2}
+	move := proc[p]() { p.x += 1 }
+	_ = move
+}

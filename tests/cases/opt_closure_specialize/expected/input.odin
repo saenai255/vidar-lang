@@ -2,18 +2,18 @@ package main; import __vidar "vidar_runtime"
 
 import "core:fmt"
 
-for_each :: proc(xs: []int, f: __vidar.Closure(proc(rawptr, int))) {
+for_each :: proc(xs: []int, f: __vidar.Closure(proc(__vidar.Env, int))) {
 	for x in xs do f.call(f.env, x)
 }
 
-fold :: proc(xs: []$T, init: T, f: __vidar.Closure(proc(rawptr, T, T) -> T)) -> T {
+fold :: proc(xs: []$T, init: T, f: __vidar.Closure(proc(__vidar.Env, T, T) -> T)) -> T {
 	acc := init
 	for x in xs do acc = f.call(f.env, acc, x)
 	return acc
 }
 
 // two closure parameters, one call each, plus a deferred call
-filter_map :: proc(xs: []int, keep: __vidar.Closure(proc(rawptr, int) -> bool), f: __vidar.Closure(proc(rawptr, int) -> int), done: __vidar.Closure(proc(rawptr))) -> (out: [dynamic]int) {
+filter_map :: proc(xs: []int, keep: __vidar.Closure(proc(__vidar.Env, int) -> bool), f: __vidar.Closure(proc(__vidar.Env, int) -> int), done: __vidar.Closure(proc(__vidar.Env))) -> (out: [dynamic]int) {
 	defer done.call(done.env)
 	for x in xs {
 		if keep.call(keep.env, x) do append(&out, f.call(f.env, x))
@@ -23,41 +23,41 @@ filter_map :: proc(xs: []int, keep: __vidar.Closure(proc(rawptr, int) -> bool), 
 
 // stores its closure: not specialized
 Handler :: struct {
-	on: __vidar.Closure(proc(rawptr, int) -> int),
+	on: __vidar.Closure(proc(__vidar.Env, int) -> int),
 }
 
-install :: proc(h: ^Handler, f: __vidar.Closure(proc(rawptr, int) -> int)) {
+install :: proc(h: ^Handler, f: __vidar.Closure(proc(__vidar.Env, int) -> int)) {
 	h.on = f
 }
 
 // passes its closure on: not specialized
-apply_twice :: proc(x: int, f: __vidar.Closure(proc(rawptr, int) -> int)) -> int {
+apply_twice :: proc(x: int, f: __vidar.Closure(proc(__vidar.Env, int) -> int)) -> int {
 	return twice_inner(f.call(f.env, x), f)
 }
 
-twice_inner :: proc(x: int, f: __vidar.Closure(proc(rawptr, int) -> int)) -> int {
+twice_inner :: proc(x: int, f: __vidar.Closure(proc(__vidar.Env, int) -> int)) -> int {
 	return f.call(f.env, x)
 }
 
 
-plain_each :: proc(xs: []int, f: __vidar.Closure(proc(rawptr, int))) {
+plain_each :: proc(xs: []int, f: __vidar.Closure(proc(__vidar.Env, int))) {
 	for x in xs do f.call(f.env, x)
 }
 
 // more calls with closures than copies
-times :: proc(n: int, f: __vidar.Closure(proc(rawptr, int))) {
+times :: proc(n: int, f: __vidar.Closure(proc(__vidar.Env, int))) {
 	for i in 0..<n do f.call(f.env, i)
 }
 
 
-repeat :: proc(n: int, f: __vidar.Closure(proc(rawptr, int) -> int)) -> int {
+repeat :: proc(n: int, f: __vidar.Closure(proc(__vidar.Env, int) -> int)) -> int {
 	s := 0
 	for i in 0..<n do s += f.call(f.env, i)
 	return s
 }
 
 // passes a closure literal to itself: every copy calls the same one
-count_down :: proc(n: int, f: __vidar.Closure(proc(rawptr, int))) {
+count_down :: proc(n: int, f: __vidar.Closure(proc(__vidar.Env, int))) {
 	f.call(f.env, n)
 	if n > 0 do count_down__closure0(n - 1)
 }
@@ -69,9 +69,9 @@ main :: proc() {
 	for_each__closure1(xs, &total, k)
 	__fmt_0(total)
 
-	// by-value capture changed by the body: state lives for one call
+	// by-reference capture changed by the body
 	calls := 0
-	for_each__closure2(xs, calls)
+	for_each__closure2(xs, &calls)
 	__fmt_1(calls)
 
 	__fmt_2(fold__closure3(xs, 0))
@@ -85,7 +85,7 @@ main :: proc() {
 	h: Handler
 	install(&h, __closure_0(k))
 	__fmt_5(h.on.call(h.on.env, 1))
-	__fmt_6(apply_twice(1, __closure_1(&__closure_1_Env(type_of(k)){k})))
+	__fmt_6(apply_twice(1, __closure_1(k)))
 
 	n := 0
 	plain_each(xs, __closure_2(&n))
@@ -93,13 +93,13 @@ main :: proc() {
 
 	// the call inside a closure: its captures come from that closure's environment
 	sum := 0
-	run := __closure_3(&__closure_3_Env(type_of(&sum), type_of(k)){&sum, k})
+	run := __closure_3(&sum, k)
 	run.call(run.env)
 	__fmt_8(sum)
 
 	// a closure inside the one passed
 	adder := __closure_4(k)
-	for_each__closure7(xs[:2], adder)
+	for_each__closure7(xs[:2], &adder)
 
 	count := 0
 	times__closure8(2, &count)
@@ -175,13 +175,15 @@ __fmt_4 :: proc(a0: $T0) -> (n: int) {
 	return
 }
 
-__closure_0 :: proc(__c0: $T0) -> __vidar.Closure(proc(rawptr, int) -> int) {
-	__Env :: struct {
+__closure_0 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env, int) -> int) {
+	__Caps :: struct {
 		k: T0,
 	}
-	return __vidar.Closure(proc(rawptr, int) -> int){
-		call = proc(__env_raw: rawptr, x: int) -> int { __env := cast(^__Env)__env_raw; return x + __env.k },
-		env = new_clone(__Env{__c0}),
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at input.vidar:89: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
+	return __vidar.Closure(proc(__vidar.Env, int) -> int){
+		call = proc(__env_raw: __vidar.Env, x: int) -> int { __env := transmute(__Env)__env_raw; return x + __env.k },
+		env = transmute(__vidar.Env)__Env{__caps = {__c0}},
 	}
 }
 
@@ -209,25 +211,27 @@ __fmt_6 :: proc(a0: $T0) -> (n: int) {
 	return
 }
 
-__closure_1_Env :: struct($T0: typeid) {
-	k: T0,
-}
-
-__closure_1 :: proc(__env_ptr: ^__closure_1_Env($T0)) -> __vidar.Closure(proc(rawptr, int) -> int) {
-	__Env :: __closure_1_Env(T0)
-	return __vidar.Closure(proc(rawptr, int) -> int){
-		call = proc(__env_raw: rawptr, x: int) -> int { __env := cast(^__Env)__env_raw; return x * __env.k },
-		env = __env_ptr,
+__closure_1 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env, int) -> int) {
+	__Caps :: struct {
+		k: T0,
+	}
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at input.vidar:91: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
+	return __vidar.Closure(proc(__vidar.Env, int) -> int){
+		call = proc(__env_raw: __vidar.Env, x: int) -> int { __env := transmute(__Env)__env_raw; return x * __env.k },
+		env = transmute(__vidar.Env)__Env{__caps = {__c0}},
 	}
 }
 
-__closure_2 :: proc(__c0: $T0) -> __vidar.Closure(proc(rawptr, int)) {
-	__Env :: struct {
+__closure_2 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env, int)) {
+	__Caps :: struct {
 		n: T0,
 	}
-	return __vidar.Closure(proc(rawptr, int)){
-		call = proc(__env_raw: rawptr, x: int) { __env := __Env{cast(T0)__env_raw}; __env.n^ += x },
-		env = rawptr(__c0),
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at input.vidar:94: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
+	return __vidar.Closure(proc(__vidar.Env, int)){
+		call = proc(__env_raw: __vidar.Env, x: int) { __env := transmute(__Env)__env_raw; __env.n^ += x },
+		env = transmute(__vidar.Env)__Env{__caps = {__c0}},
 	}
 }
 
@@ -243,18 +247,18 @@ __fmt_7 :: proc(a0: $T0) -> (n: int) {
 	return
 }
 
-__closure_3_Env :: struct($T0: typeid, $T1: typeid) {
-	sum: T0,
-	k: T1,
-}
-
-__closure_3 :: proc(__env_ptr: ^__closure_3_Env($T0, $T1)) -> __vidar.Closure(proc(rawptr)) {
-	__Env :: __closure_3_Env(T0, T1)
-	return __vidar.Closure(proc(rawptr)){
-		call = proc(__env_raw: rawptr) { __env := cast(^__Env)__env_raw;
+__closure_3 :: proc(__c0: $T0, __c1: $T1) -> __vidar.Closure(proc(__vidar.Env)) {
+	__Caps :: struct {
+		sum: T0,
+		k: T1,
+	}
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at input.vidar:99: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
+	return __vidar.Closure(proc(__vidar.Env)){
+		call = proc(__env_raw: __vidar.Env) { __env := transmute(__Env)__env_raw;
 		for_each__closure6([]int{10, 20}, __env.sum, __env.k)
 	},
-		env = __env_ptr,
+		env = transmute(__vidar.Env)__Env{__caps = {__c0, __c1}},
 	}
 }
 
@@ -270,23 +274,27 @@ __fmt_8 :: proc(a0: $T0) -> (n: int) {
 	return
 }
 
-__closure_4 :: proc(__c0: $T0) -> __vidar.Closure(proc(rawptr, int) -> int) {
-	__Env :: struct {
+__closure_4 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env, int) -> int) {
+	__Caps :: struct {
 		k: T0,
 	}
-	return __vidar.Closure(proc(rawptr, int) -> int){
-		call = proc(__env_raw: rawptr, x: int) -> int { __env := cast(^__Env)__env_raw; return x + __env.k },
-		env = new_clone(__Env{__c0}),
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at input.vidar:106: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
+	return __vidar.Closure(proc(__vidar.Env, int) -> int){
+		call = proc(__env_raw: __vidar.Env, x: int) -> int { __env := transmute(__Env)__env_raw; return x + __env.k },
+		env = transmute(__vidar.Env)__Env{__caps = {__c0}},
 	}
 }
 
-__closure_5 :: proc(__c0: $T0) -> __vidar.Closure(proc(rawptr, int)) {
-	__Env :: struct {
+__closure_5 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env, int)) {
+	__Caps :: struct {
 		count: T0,
 	}
-	return __vidar.Closure(proc(rawptr, int)){
-		call = proc(__env_raw: rawptr, i: int) { __env := __Env{cast(T0)__env_raw}; __env.count^ += 10000 },
-		env = rawptr(__c0),
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at input.vidar:117: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
+	return __vidar.Closure(proc(__vidar.Env, int)){
+		call = proc(__env_raw: __vidar.Env, i: int) { __env := transmute(__Env)__env_raw; __env.count^ += 10000 },
+		env = transmute(__vidar.Env)__Env{__caps = {__c0}},
 	}
 }
 
@@ -365,8 +373,8 @@ __for_each__closure2_f_Env :: struct($__T0: typeid) {
 }
 
 __for_each__closure2_f :: proc(__env: ^__for_each__closure2_f_Env($__T0), x: int) {
-		__env.calls += 1
-		if __env.calls == len("abc") do __fmt_12(x)
+		__env.calls^ += 1
+		if __env.calls^ == len("abc") do __fmt_12(x)
 	}
 
 // for_each with the closure from line 74 called directly
@@ -437,16 +445,16 @@ for_each__closure6 :: proc(xs: []int, __f_c0: $__f_T0, __f_c1: $__f_T1) { __f_en
 	for x in xs do __for_each__closure6_f(&__f_env, x)
 }
 
-__closure_6_Env :: struct($T0: typeid, $T1: typeid) {
-	adder: T0,
-	x: T1,
-}
-
-__closure_6 :: proc(__env_ptr: ^__closure_6_Env($T0, $T1)) -> __vidar.Closure(proc(rawptr) -> int) {
-	__Env :: __closure_6_Env(T0, T1)
-	return __vidar.Closure(proc(rawptr) -> int){
-		call = proc(__env_raw: rawptr) -> int { __env := cast(^__Env)__env_raw; return __env.adder.call(__env.adder.env, __env.x) * 2 },
-		env = __env_ptr,
+__closure_6 :: proc(__c0: $T0, __c1: $T1) -> __vidar.Closure(proc(__vidar.Env) -> int) {
+	__Caps :: struct {
+		adder: T0,
+		x: T1,
+	}
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at input.vidar:108: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
+	return __vidar.Closure(proc(__vidar.Env) -> int){
+		call = proc(__env_raw: __vidar.Env) -> int { __env := transmute(__Env)__env_raw; return __env.adder^.call(__env.adder^.env, __env.x) * 2 },
+		env = transmute(__vidar.Env)__Env{__caps = {__c0, __c1}},
 	}
 }
 
@@ -467,7 +475,7 @@ __for_each__closure7_f_Env :: struct($__T0: typeid) {
 }
 
 __for_each__closure7_f :: proc(__env: ^__for_each__closure7_f_Env($__T0), x: int) {
-		inner := __closure_6(&__closure_6_Env(type_of(__env.adder), type_of(x)){__env.adder, x})
+		inner := __closure_6(__env.adder, x)
 		__fmt_14(inner.call(inner.env))
 	}
 

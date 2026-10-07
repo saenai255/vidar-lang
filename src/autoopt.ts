@@ -46,7 +46,7 @@ function closureSpecialize(an: Analyzer, sym: GlobalSym, lit: ProcLit, sites: Ca
   const chosen = found.slice(0, MAX_COPIES);
   for (const { site, closures } of chosen) {
     A(site.call)._closureSpec = { sym, lit, consts: [], closures } satisfies ClosureSpec;
-    markInlined(lit, closures);
+    markInlined(lit);
   }
   const params = [...new Set(chosen.flatMap((x) => [...x.closures.keys()]))].join(", ");
   const lines = chosen.map((x) => posOf(x.site.call).line).join(", ");

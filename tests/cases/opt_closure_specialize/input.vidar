@@ -69,9 +69,9 @@ main :: proc() {
 	for_each(xs, proc[&total, k](x: int) { total += x * k })
 	fmt.println("for_each:", total)
 
-	// by-value capture changed by the body: state lives for one call
+	// by-reference capture changed by the body
 	calls := 0
-	for_each(xs, proc[calls](x: int) {
+	for_each(xs, proc[&calls](x: int) {
 		calls += 1
 		if calls == len("abc") do fmt.println("third call sees", x)
 	})
@@ -104,8 +104,8 @@ main :: proc() {
 
 	// a closure inside the one passed
 	adder := proc[k](x: int) -> int { return x + k }
-	for_each(xs[:2], proc[adder](x: int) {
-		inner := proc[adder, x]() -> int { return adder(x) * 2 }
+	for_each(xs[:2], proc[&adder](x: int) {
+		inner := proc[&adder, x]() -> int { return adder(x) * 2 }
 		fmt.println("inner:", inner())
 	})
 

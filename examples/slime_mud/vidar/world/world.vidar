@@ -150,7 +150,8 @@ in_bounds :: proc(p: Pos) -> bool {
 }
 
 every :: proc(n: int, f: closure(w: ^World)) -> closure(w: ^World) {
-	return proc[n, f](w: ^World) { if w.tick % n == 0 do f(w) }
+	fp := new_clone(f)
+	return proc[n, fp](w: ^World) { if w.tick % n == 0 do fp^(w) }
 }
 
 make_world :: proc(seed: u64, slimes: int) -> ^World {

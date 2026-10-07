@@ -1,6 +1,6 @@
 for_each: 45
 third call sees 3
-calls outside: 0
+calls outside: 5
 fold: 15
 fold f64: 5
 filter_map done

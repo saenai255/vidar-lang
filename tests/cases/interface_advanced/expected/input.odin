@@ -126,12 +126,14 @@ __Store_vtable_Log := __Store_VTable{
 
 __Store_from_Log :: proc(p: ^Log) -> Store { return {data = p, __vtable = &__Store_vtable_Log} }
 
-__closure_0 :: proc(__c0: $T0) -> __vidar.Closure(proc(rawptr, string) -> string) {
-	__Env :: struct {
+__closure_0 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env, string) -> string) {
+	__Caps :: struct {
 		s: T0,
 	}
-	return __vidar.Closure(proc(rawptr, string) -> string){
-		call = proc(__env_raw: rawptr, key: string) -> string { __env := cast(^__Env)__env_raw; val, _ := get(__env.s, key); return val },
-		env = new_clone(__Env{__c0}),
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at input.vidar:64: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
+	return __vidar.Closure(proc(__vidar.Env, string) -> string){
+		call = proc(__env_raw: __vidar.Env, key: string) -> string { __env := transmute(__Env)__env_raw; val, _ := get(__env.s, key); return val },
+		env = transmute(__vidar.Env)__Env{__caps = {__c0}},
 	}
 }

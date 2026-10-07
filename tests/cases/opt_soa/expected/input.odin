@@ -246,13 +246,15 @@ __fmt_8 :: proc(a0: $T0) -> (n: int) {
 	return
 }
 
-__closure_0 :: proc(__c0: $T0) -> __vidar.Closure(proc(rawptr) -> int) {
-	__Env :: struct {
+__closure_0 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env) -> int) {
+	__Caps :: struct {
 		captured: T0,
 	}
-	return __vidar.Closure(proc(rawptr) -> int){
-		call = proc(__env_raw: rawptr) -> int { __env := __Env{cast(T0)__env_raw}; return len(__env.captured^) },
-		env = rawptr(__c0),
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at input.vidar:94: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
+	return __vidar.Closure(proc(__vidar.Env) -> int){
+		call = proc(__env_raw: __vidar.Env) -> int { __env := transmute(__Env)__env_raw; return len(__env.captured^) },
+		env = transmute(__vidar.Env)__Env{__caps = {__c0}},
 	}
 }
 

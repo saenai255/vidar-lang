@@ -1,6 +1,7 @@
 // Test runner.
 //   node scripts/test.js            compare against fixtures
 //   node scripts/test.js --update   regenerate transpiled fixtures and expected stdout
+//   node scripts/test.js --only <s> only the cases and error tests whose name contains <s>
 //
 // Each case is a program (a single .vidar file, or a directory that is the entry package
 // plus any packages it imports) with two fixtures:
@@ -17,6 +18,8 @@ const { loadProgram, emitProgram } = require("../dist/project.js");
 const { CompileError } = require("../dist/lexer.js");
 
 const UPDATE = process.argv.includes("--update");
+const ONLY = process.argv.includes("--only") ? process.argv[process.argv.indexOf("--only") + 1] : undefined;
+const picked = (name) => !ONLY || name.includes(ONLY);
 
 let pass = 0;
 let fail = 0;
@@ -67,7 +70,7 @@ const cases = [
     const entry = existsSync(join(dir, "input")) ? join(dir, "input") : join(dir, "input.vidar");
     return { name: `tests/cases/${name}`, entry, golden: join(dir, "expected"), stdout: join(dir, "stdout.txt"), passthrough: name.startsWith("plain_"), optimize: name.startsWith("opt_") };
   }),
-];
+].filter((c) => picked(c.name));
 
 const work = mkdtempSync(join(tmpdir(), "vidar-test-"));
 
@@ -191,14 +194,14 @@ function expectError(name, want, f) {
 (async () => {
   await runCases();
 
-  for (const f of readdirSync("tests/errors").filter((f) => f.endsWith(".vidar"))) {
+  for (const f of readdirSync("tests/errors").filter((f) => f.endsWith(".vidar") && picked(join("tests/errors", f)))) {
     const path = join("tests/errors", f);
     const text = readFileSync(path, "utf8");
     expectError(path, text.match(/^\/\/ error: (.*)$/m)[1], () => transpile([{ path, text }]));
   }
 
   // multi-package programs that must fail; the expected message is on the first line of main.vidar
-  for (const d of readdirSync("tests/errors_pkg")) {
+  for (const d of readdirSync("tests/errors_pkg").filter((d) => picked(join("tests/errors_pkg", d)))) {
     const dir = join("tests/errors_pkg", d);
     const want = readFileSync(join(dir, "main.vidar"), "utf8").match(/^\/\/ error: (.*)$/m)[1];
     expectError(dir, want, () => emitProgram(loadProgram(dir)));
@@ -207,7 +210,7 @@ function expectError(name, want, f) {
   // Real-world plain Odin must come out byte-for-byte unchanged.
   const root = execSync("odin root", { encoding: "utf8" }).trim();
   const sample = ["core/fmt/fmt.odin", "core/strings/strings.odin", "core/mem/allocators.odin", "core/math/linalg/general.odin", "core/encoding/json/parser.odin"];
-  for (const rel of sample) {
+  for (const rel of ONLY ? [] : sample) {
     const path = join(root, rel);
     const text = readFileSync(path, "utf8");
     let ok = false;

@@ -3,8 +3,8 @@ package right
 import b "../base"
 
 make :: proc() -> b.Op {
-	inner := b.adder(100)
-	return proc[inner](x: int) -> int { return inner(x) * 2 }
+	inner := new_clone(b.adder(100))
+	return proc[inner](x: int) -> int { return inner^(x) * 2 }
 }
 
 name :: proc() -> string { return "right/" + b.NAME }

@@ -22,7 +22,9 @@ make_adder :: proc(n: int) -> closure(int) -> int {
 }
 
 compose :: proc(f, g: closure(int) -> int) -> closure(int) -> int {
-	return proc[f, g](x: int) -> int { return g(f(x)) }
+	// a closure can't hold a copy of another one: keep them on the heap and capture the pointers
+	fp, gp := new_clone(f), new_clone(g)
+	return proc[fp, gp](x: int) -> int { return gp^(fp^(x)) }
 }
 
 apply :: proc(f: closure(int) -> int, xs: []int) -> [dynamic]int {
