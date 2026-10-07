@@ -1,15 +1,15 @@
 import { Block, Expr, File, Node, Stmt, children } from "./ast";
 import { A, Analyzer, INT_TYPES } from "./analyzer";
 import { fmtPlan } from "./fmtspec";
-import { soaLocals } from "./soa";
-import type { LocalSym, Sym } from "./scope";
+import { sizeOf, soaLocals } from "./soa";
+import type { LocalSym, Sym, Ty } from "./scope";
 
 /**
  * -opt rewrites inside one procedure. Each is applied only where the procedure's own code proves
  * it changes nothing but speed; the results are annotations the emitter reads:
  * - `_noBounds` on a statement: every index in it is proven in bounds, so it gets `#no_bounds_check`
  * - `_allocGroup` / `_allocGrouped` / `_groupFree`: slices and pointers freed together, allocated together
- * - `_reserve` on a loop: dynamic arrays it appends to a known number of times, reserved before it
+ * - `_reserve` on a loop: dynamic arrays it appends to at most a known number of times, reserved before it
  * Each decision is also an `an.hint`, so -opt-report and the editor show it.
  */
 export function optimizeProc(body: Block, an: Analyzer, closureCopies = false): void {
@@ -451,12 +451,62 @@ function tripCount(loop: Loop, facts: Facts, an: Analyzer): { trip: TripCount; u
 }
 
 /** A `[dynamic]T` local `xs` appended to as `&xs`, or a `^[dynamic]T` local `p` appended to as `p`. */
-function dynamicTarget(an: Analyzer, arg: Expr): { sym: LocalSym; byPointer: boolean } | undefined {
+function dynamicTarget(an: Analyzer, arg: Expr): { sym: LocalSym; byPointer: boolean; elem: Ty | undefined } | undefined {
   const byPointer = !(arg.k === "Unary" && arg.op === "&");
   const sym = localOf(arg.k === "Unary" && arg.op === "&" ? arg.x : arg);
   let t = an.normalize(sym?.ty);
   if (byPointer) t = t?.t === "ptr" ? an.normalize(t.elem) : undefined;
-  return sym && t?.t === "node" && t.node.k === "TypeExpr" && t.node.what === "dynamic" ? { sym, byPointer } : undefined;
+  if (!sym || t?.t !== "node" || t.node.k !== "TypeExpr" || t.node.what !== "dynamic") return undefined;
+  const elem = t.node.parts[1];
+  return { sym, byPointer, elem: elem ? { t: "node", node: elem, scope: t.scope } : undefined };
+}
+
+/** an upper-bound reserve can't be undone, so it is only made for elements this small */
+const SMALL_ELEM = 16;
+
+interface Appends {
+  target: Expr;
+  byPointer: boolean;
+  elem: Ty | undefined;
+  /** values appended per iteration; the larger branch for appends under an `if` */
+  per: number;
+  args: Set<Node>;
+  ok: boolean;
+  conditional: boolean;
+}
+
+/** Appends to dynamic arrays in `list`, and those in `if` branches at any depth, counted by their larger branch. */
+function appendsIn(an: Analyzer, list: Stmt[]): Map<LocalSym, Appends> {
+  const found = new Map<LocalSym, Appends>();
+  const merge = (from: Map<LocalSym, Appends>, into: Map<LocalSym, Appends>, combine: (a: number, b: number) => number) => {
+    for (const [sym, f] of from) {
+      const g = into.get(sym);
+      if (!g) into.set(sym, { ...f, args: new Set(f.args) });
+      else {
+        g.per = combine(g.per, f.per);
+        f.args.forEach((a) => g.args.add(a));
+        g.ok &&= f.ok && f.byPointer === g.byPointer;
+        g.conditional ||= f.conditional;
+      }
+    }
+  };
+  for (const st of list) {
+    if (st.k === "If") {
+      const branches = [appendsIn(an, st.then.stmts), appendsIn(an, st.else ? (st.else.k === "Block" ? st.else.stmts : [st.else]) : [])];
+      const either = new Map<LocalSym, Appends>();
+      for (const b of branches) merge(b, either, Math.max);
+      for (const f of either.values()) f.conditional = true;
+      merge(either, found, (a, b) => a + b);
+      continue;
+    }
+    if (st.k !== "ExprStmt" || !builtin(st.x, "append") || !st.x.args[0]) continue;
+    const t = dynamicTarget(an, st.x.args[0]);
+    if (!t) continue;
+    const values = st.x.args.slice(1);
+    const ok = !!values.length && !values.some((v) => v.k === "Spread" || v.k === "FieldValue");
+    merge(new Map([[t.sym, { target: st.x.args[0], byPointer: t.byPointer, elem: t.elem, per: values.length, args: new Set<Node>([st.x.args[0]]), ok, conditional: false }]]), found, (a, b) => a + b);
+  }
+  return found;
 }
 
 /**
@@ -470,26 +520,20 @@ function reserves(body: Block, facts: Facts, an: Analyzer): void {
     if ((inner.k !== "For" && inner.k !== "RangeFor") || !straight(inner.body)) return;
     const count = tripCount(inner, facts, an);
     if (!count || !untouched(inner, count.uses, new Set())) return;
-    const found = new Map<LocalSym, { target: Expr; byPointer: boolean; per: number; args: Set<Node>; ok: boolean }>();
-    for (const st of inner.body.stmts) {
-      if (st.k !== "ExprStmt" || !builtin(st.x, "append") || !st.x.args[0]) continue;
-      const t = dynamicTarget(an, st.x.args[0]);
-      if (!t) continue;
-      const f = found.get(t.sym) ?? { target: st.x.args[0], byPointer: t.byPointer, per: 0, args: new Set<Node>(), ok: true };
-      found.set(t.sym, f);
-      const values = st.x.args.slice(1);
-      if (f.byPointer !== t.byPointer || !values.length || values.some((v) => v.k === "Spread" || v.k === "FieldValue")) f.ok = false;
-      f.per += values.length;
-      f.args.add(st.x.args[0]);
-    }
     const out: Reserve[] = [];
-    for (const [sym, f] of found) {
+    for (const [sym, f] of appendsIn(an, inner.body.stmts)) {
       if (!f.ok || count.uses.has(sym) || !untouched(inner, new Set([sym]), f.args)) continue;
       // through a pointer, any other use of it could clear or resize the array
       if (f.byPointer && usedOutside(inner, sym, f.args)) continue;
+      const size = f.elem ? sizeOf(an, f.elem) : Infinity;
+      if (f.conditional && size > SMALL_ELEM) {
+        an.hint(f.target, "not reserved", `${sym.name}: appended under an \`if\`, and its ${size}-byte elements are too big to reserve for every iteration`);
+        continue;
+      }
       const array = f.byPointer ? null : (f.target as Extract<Expr, { k: "Unary" }>).x;
       out.push({ target: f.target, array, perIteration: f.per, trip: count.trip });
-      an.hint(f.target, "reserved", `${sym.name}: reserved before the loop, ${f.per} append${f.per === 1 ? "" : "s"} per iteration`);
+      const per = `${f.per} append${f.per === 1 ? "" : "s"} per iteration`;
+      an.hint(f.target, "reserved", f.conditional ? `${sym.name}: reserved before the loop for at most ${per}, since some are under an \`if\`` : `${sym.name}: reserved before the loop, ${per}`);
     }
     if (out.length) A(s)._reserve = out;
   };

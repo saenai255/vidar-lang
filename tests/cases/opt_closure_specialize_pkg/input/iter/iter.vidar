@@ -1,0 +1,40 @@
+package iter
+
+import "core:fmt"
+import str "core:strings"
+
+Stats :: struct { calls: int }
+
+// called with closure literals from another package
+each :: proc(xs: []int, f: closure(int)) {
+	for x in xs do f(x)
+}
+
+// uses its file's imports, a type and a proc of its package
+sum_by :: proc(xs: []int, s: ^Stats, f: closure(int) -> int) -> int {
+	total := 0
+	for x in xs {
+		total += f(x)
+		bump(s)
+	}
+	if str.has_prefix("iter", "it") do fmt.println("sum_by:", len(xs), "values")
+	return total
+}
+
+bump :: proc(s: ^Stats) { s.calls += 1 }
+
+@(private)
+hidden :: proc(x: int) -> int { return x + 1 }
+
+// uses a package-private helper: no copy outside this package
+shifted :: proc(xs: []int, f: closure(int)) {
+	for x in xs do f(hidden(x))
+}
+
+@(private = "file")
+secret :: proc(x: int) -> int { return x * 2 }
+
+// uses a file-private helper: no copy outside this file
+doubled :: proc(xs: []int, f: closure(int)) {
+	for x in xs do f(secret(x))
+}

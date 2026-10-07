@@ -1,0 +1,22 @@
+package main
+
+import "core:fmt"
+import "core:strings"
+
+// called from main.vidar, another file in the same package
+visit :: proc(xs: []int, f: closure(int) -> bool) -> int {
+	n := 0
+	for x in xs do if f(x) do n += 1
+	b := strings.builder_make()
+	defer strings.builder_destroy(&b)
+	strings.write_string(&b, "visit")
+	fmt.println(strings.to_string(b), n)
+	return n
+}
+
+@(private = "file")
+twice :: proc(x: int) -> int { return 2 * x }
+
+scaled :: proc(xs: []int, f: closure(int)) {
+	for x in xs do f(twice(x))
+}

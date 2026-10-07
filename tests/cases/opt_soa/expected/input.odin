@@ -47,6 +47,18 @@ converted :: proc() {
 	__fmt_2(total, buf[4])
 	clear(&ps)
 	__fmt_3(len(ps))
+
+	typed: #soa[dynamic]Particle = make(#soa[dynamic]Particle, 0, 4)
+	defer delete(typed)
+	reserve(&typed, len(typed) + 4)
+	for i in 0..<4 do append(&typed, Particle{x = f32(i), id = i})
+	for &p in typed do p.x *= 3
+	__fmt_4(len(typed), typed[3].x, typed[1])
+
+	typed_slice: #soa[]Particle = make(#soa[]Particle, 2)
+	defer delete(typed_slice)
+	for &p in typed_slice do p.y += 1
+	__fmt_5(typed_slice[1].y)
 }
 
 sum_x :: proc(ps: []Particle) -> (s: f32) {
@@ -67,34 +79,34 @@ kept :: proc() {
 	sliced := make([]Particle, 4)
 	defer delete(sliced)
 	for &p in sliced do p.x = 1
-	__fmt_4(sum_x(sliced[:]))
+	__fmt_6(sum_x(sliced[:]))
 
 	passed := make([]Particle, 4)
 	defer delete(passed)
 	for &p in passed do p.x = 2
-	__fmt_5(sum_x(passed))
+	__fmt_7(sum_x(passed))
 
 	addressed: [4]Particle
 	for i in 0..<len(addressed) do #no_bounds_check addressed[i].x = f32(i)
 	q := &addressed[2]
 	q.x = 9
-	__fmt_6(addressed[2].x)
+	__fmt_8(addressed[2].x)
 
 	pairs: [4]Pair
 	for &p, i in pairs do p.a = i
-	__fmt_7(pairs[3])
+	__fmt_9(pairs[3])
 
 	whole: [dynamic]Particle
 	defer delete(whole)
 	append(&whole, Particle{id = 7})
-	for p in whole do __fmt_8(p)
+	for p in whole do __fmt_10(p)
 
 	captured: [dynamic]Particle
 	defer delete(captured)
 	append(&captured, Particle{id = 1})
 	for &p in captured do p.y = 3
 	count := __closure_0(&captured)
-	__fmt_9(count.call(count.env))
+	__fmt_11(count.call(count.env))
 
 	by_ref := make([dynamic]Particle)
 	defer delete(by_ref)
@@ -102,12 +114,12 @@ kept :: proc() {
 	for &p in by_ref {
 		p.x += 1
 		copy := p
-		__fmt_10(copy.x)
+		__fmt_12(copy.x)
 	}
 
-	returned := make_some()
+	returned: [dynamic]Particle = make_some()
 	defer delete(returned)
-	__fmt_11(returned[2].x)
+	__fmt_13(returned[2].x)
 
 	reassigned: [dynamic]Particle
 	reserve(&reassigned, len(reassigned) + 2)
@@ -115,7 +127,7 @@ kept :: proc() {
 	for &p in reassigned do p.id += 1
 	delete(reassigned)
 	reassigned = make([dynamic]Particle)
-	__fmt_12(len(reassigned))
+	__fmt_14(len(reassigned))
 	delete(reassigned)
 }
 
@@ -187,12 +199,16 @@ __fmt_3 :: proc(a0: $T0) -> (n: int) {
 }
 
 // fmt.println
-__fmt_4 :: proc(a0: $T0) -> (n: int) {
+__fmt_4 :: proc(a0: $T0, a1: $T1, a2: $T2) -> (n: int) {
 	buf: [1024]byte
 	bw: __vidar.File_Writer
 	w := __vidar.std_writer(&bw, buf[:], false)
-	n += __vidar.w_str(w, "sliced: ")
+	n += __vidar.w_str(w, "typed: ")
 	n += __vidar.w_v(w, a0)
+	n += __vidar.w_str(w, " ")
+	n += __vidar.w_v(w, a1)
+	n += __vidar.w_str(w, " ")
+	n += __vidar.w_v(w, a2)
 	n += __vidar.w_str(w, "\n")
 	__vidar.w_flush(w)
 	return
@@ -203,7 +219,7 @@ __fmt_5 :: proc(a0: $T0) -> (n: int) {
 	buf: [1024]byte
 	bw: __vidar.File_Writer
 	w := __vidar.std_writer(&bw, buf[:], false)
-	n += __vidar.w_str(w, "passed: ")
+	n += __vidar.w_str(w, "typed slice: ")
 	n += __vidar.w_v(w, a0)
 	n += __vidar.w_str(w, "\n")
 	__vidar.w_flush(w)
@@ -215,7 +231,7 @@ __fmt_6 :: proc(a0: $T0) -> (n: int) {
 	buf: [1024]byte
 	bw: __vidar.File_Writer
 	w := __vidar.std_writer(&bw, buf[:], false)
-	n += __vidar.w_str(w, "addressed: ")
+	n += __vidar.w_str(w, "sliced: ")
 	n += __vidar.w_v(w, a0)
 	n += __vidar.w_str(w, "\n")
 	__vidar.w_flush(w)
@@ -227,7 +243,7 @@ __fmt_7 :: proc(a0: $T0) -> (n: int) {
 	buf: [1024]byte
 	bw: __vidar.File_Writer
 	w := __vidar.std_writer(&bw, buf[:], false)
-	n += __vidar.w_str(w, "narrow: ")
+	n += __vidar.w_str(w, "passed: ")
 	n += __vidar.w_v(w, a0)
 	n += __vidar.w_str(w, "\n")
 	__vidar.w_flush(w)
@@ -236,6 +252,30 @@ __fmt_7 :: proc(a0: $T0) -> (n: int) {
 
 // fmt.println
 __fmt_8 :: proc(a0: $T0) -> (n: int) {
+	buf: [1024]byte
+	bw: __vidar.File_Writer
+	w := __vidar.std_writer(&bw, buf[:], false)
+	n += __vidar.w_str(w, "addressed: ")
+	n += __vidar.w_v(w, a0)
+	n += __vidar.w_str(w, "\n")
+	__vidar.w_flush(w)
+	return
+}
+
+// fmt.println
+__fmt_9 :: proc(a0: $T0) -> (n: int) {
+	buf: [1024]byte
+	bw: __vidar.File_Writer
+	w := __vidar.std_writer(&bw, buf[:], false)
+	n += __vidar.w_str(w, "narrow: ")
+	n += __vidar.w_v(w, a0)
+	n += __vidar.w_str(w, "\n")
+	__vidar.w_flush(w)
+	return
+}
+
+// fmt.println
+__fmt_10 :: proc(a0: $T0) -> (n: int) {
 	buf: [1024]byte
 	bw: __vidar.File_Writer
 	w := __vidar.std_writer(&bw, buf[:], false)
@@ -250,7 +290,7 @@ __closure_0 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env) -> int) {
 	__Caps :: struct {
 		captured: T0,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at input.vidar:94: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at input.vidar:105: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env) -> int){
 		call = proc(__env_raw: __vidar.Env) -> int { __env := transmute(__Env)__env_raw; return len(__env.captured^) },
@@ -259,7 +299,7 @@ __closure_0 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env) -> int) {
 }
 
 // fmt.println
-__fmt_9 :: proc(a0: $T0) -> (n: int) {
+__fmt_11 :: proc(a0: $T0) -> (n: int) {
 	buf: [1024]byte
 	bw: __vidar.File_Writer
 	w := __vidar.std_writer(&bw, buf[:], false)
@@ -271,7 +311,7 @@ __fmt_9 :: proc(a0: $T0) -> (n: int) {
 }
 
 // fmt.println
-__fmt_10 :: proc(a0: $T0) -> (n: int) {
+__fmt_12 :: proc(a0: $T0) -> (n: int) {
 	buf: [1024]byte
 	bw: __vidar.File_Writer
 	w := __vidar.std_writer(&bw, buf[:], false)
@@ -283,7 +323,7 @@ __fmt_10 :: proc(a0: $T0) -> (n: int) {
 }
 
 // fmt.println
-__fmt_11 :: proc(a0: $T0) -> (n: int) {
+__fmt_13 :: proc(a0: $T0) -> (n: int) {
 	buf: [1024]byte
 	bw: __vidar.File_Writer
 	w := __vidar.std_writer(&bw, buf[:], false)
@@ -295,7 +335,7 @@ __fmt_11 :: proc(a0: $T0) -> (n: int) {
 }
 
 // fmt.println
-__fmt_12 :: proc(a0: $T0) -> (n: int) {
+__fmt_14 :: proc(a0: $T0) -> (n: int) {
 	buf: [1024]byte
 	bw: __vidar.File_Writer
 	w := __vidar.std_writer(&bw, buf[:], false)

@@ -192,6 +192,7 @@ export class Analyzer {
       for (const f of pkg.files) {
         const fileScope = new Scope(pkg.scope);
         pkg.fileScopes.set(f, fileScope);
+        this.fileScopeOf.set(f.toks, fileScope);
         this.guard(() => this.declareImports(f, fileScope, pkg));
         this.guard(() => this.declareAll(f.stmts, pkg.scope, pkg, fileScope));
       }
@@ -384,11 +385,13 @@ export class Analyzer {
         return;
       case "ExprStmt":
         if (s.x.k === "Postfix" && s.x.value) this.hostOrReturn(s, s.x, scope);
+        else if (s.x.k === "Postfix") this.plainOrReturn(s, s.x, scope);
         if (s.x.k === "MacroCall") {
           const call = s.x;
           this.nested(call, () => {
             const out = this.expandMacro(call, scope, "stmt");
             const stmts = Array.isArray(out) ? out : [this.exprStmtFrom(out)];
+            for (const st of stmts) this.expandedFrom.set(st.toks, call);
             const block: Block = { k: "Block", toks: stmts[0]?.toks ?? s.toks, start: 0, end: 0, stmts, inline: true };
             A(s)._expansion = block;
             this.block(block, scope);
@@ -452,6 +455,7 @@ export class Analyzer {
       }
       case "Assign":
         if (s.rhs.length === 1 && s.rhs[0].k === "Postfix" && s.rhs[0].value) this.hostOrReturn(s, s.rhs[0], scope);
+        else if (s.rhs.length === 1 && s.rhs[0].k === "Postfix" && s.op === "=") this.plainOrReturn(s, s.rhs[0], scope);
         s.lhs.forEach((e) => this.expr(e, scope));
         s.lhs.forEach((e) => this.captureWrite(e, scope));
         s.rhs.forEach((e) => this.expr(e, scope));
@@ -499,6 +503,7 @@ export class Analyzer {
 
   private localDecl(s: ValueDecl, scope: Scope): void {
     if (s.values.length === 1 && s.values[0].k === "Postfix" && s.values[0].value) this.hostOrReturn(s, s.values[0], scope);
+    else if (s.values.length === 1 && s.values[0].k === "Postfix" && !s.type && !s.isConst) this.plainOrReturn(s, s.values[0], scope);
     if (s.type) this.expr(s.type, scope);
     s.values.forEach((v) => this.expr(v, scope));
     if (s.type) s.values.forEach((v) => this.convertTo(v, { t: "node", node: s.type!, scope }));
@@ -565,6 +570,7 @@ export class Analyzer {
           const out = this.expandMacro(e, scope, "expr");
           if (Array.isArray(out)) throw new CompileError(`macro '${e.path.join(".")}' returns statements and can only be used as a statement`, posOf(e));
           A(e)._expansion = out;
+          this.expandedFrom.set(out.toks, e);
           this.expr(out, scope);
         });
         return;
@@ -1133,13 +1139,25 @@ export class Analyzer {
   private readonly closureCalls: { e: Call; sym: GlobalSym; info: SpecInfo; consts: string[] }[] = [];
   /** analyzing a call vidar made up, which isn't a call site */
   private synthetic = false;
+  /** the macro call each expansion's tokens came from */
+  private readonly expandedFrom = new WeakMap<Token[], MacroCall>();
+  /** each source file's scope, by its tokens */
+  private readonly fileScopeOf = new Map<Token[], Scope>();
 
   /** Records an -opt decision after a proc's name or a node; a label starting with "no"/"not" is a decision against. */
   hint(at: Node | GlobalSym, label: string, tooltip?: string): void {
     if (!this.hints || this.synthetic) return;
-    const sym = "k" in at ? undefined : at;
-    const node = sym ? sym.decl : (at as Node);
-    if (this.hints.some((h) => h.at === node && h.label === label)) return;
+    let sym = "k" in at ? undefined : at;
+    let node = sym ? sym.decl : (at as Node);
+    // inside a macro expansion: shown at the outermost macro call in the source
+    let call: MacroCall | undefined;
+    for (let c = this.expandedFrom.get(node.toks); c; c = this.expandedFrom.get(c.toks)) call = c;
+    if (call) {
+      tooltip = `in ${call.path.join(".")}!: ${tooltip ?? label}`;
+      node = call;
+      sym = undefined;
+    }
+    if (this.hints.some((h) => h.at === node && h.label === label && h.tooltip === tooltip)) return;
     let tok = sym ? (sym.decl.names[sym.index]?.tok ?? node.start) : node.end - 1;
     while (!sym && tok > node.start && (node.toks[tok].kind === "semi" || node.toks[tok].kind === "eof")) tok--;
     this.hints.push({ at: node, tok, name: sym?.name, label, tooltip });
@@ -1293,11 +1311,45 @@ export class Analyzer {
     return why ?? (calls ? undefined : `${sym.name} is never called`);
   }
 
+  /** The file scope `n` is written in; for code from a macro expansion, the file of the macro call. */
+  fileScopeAt(n: Node): Scope | undefined {
+    let toks = n.toks;
+    for (let c = this.expandedFrom.get(toks); c; c = this.expandedFrom.get(toks)) toks = c.toks;
+    return this.fileScopeOf.get(toks);
+  }
+
+  /**
+   * Why the body of `lit` can't be copied into the file of `call`, where the copy is written, if it can't:
+   * it uses a private name the file can't see, or the file doesn't import the proc's package.
+   */
+  private cannotMove(sym: GlobalSym, lit: ProcLit, call: Call): string | undefined {
+    const to = this.fileScopeAt(call);
+    if (!to) return `the call at line ${posOf(call).line} isn't in a source file`;
+    if (to === sym.scope) return undefined;
+    const unit = to.parent?.pkg?.unit;
+    if (sym.pkg.unit !== unit && ![...to.syms.values()].some((s) => s.kind === "pkg" && s.target?.unit === sym.pkg.unit))
+      return `the file of the call at line ${posOf(call).line} doesn't import package '${sym.pkg.name}'`;
+    let why: string | undefined;
+    const visit = (n: Node): void => {
+      if (why) return;
+      const used: Sym | undefined = n.k === "Ident" ? A(n)._sym : undefined;
+      if (used?.kind === "global" && used.isPrivate && used !== sym) {
+        const filePrivate = used.decl.attrs.some((a) => /private\s*=\s*"file"/.test(a));
+        if (used.pkg.unit !== unit || (filePrivate && used.scope !== to)) return void (why = `${sym.name} uses '${used.name}', which is private to its ${filePrivate ? "file" : "package"}`);
+      }
+      const exp: Node | Node[] | undefined = A(n)._expansion;
+      if (exp) (Array.isArray(exp) ? exp : [exp]).forEach(visit);
+      children(n).forEach(visit);
+    };
+    visit(lit);
+    return why;
+  }
+
   /** The closure literals a call passes straight to parameters `calledOnlyParams` allows, by parameter. */
   closureLits(sym: GlobalSym, lit: ProcLit, e: Call): Map<string, ProcLit> {
     const out = new Map<string, ProcLit>();
-    // the copy is written next to the proc, so the closure body must see the same imports
-    if (e.toks !== lit.toks || e.args.some((a) => a.k === "FieldValue" || a.k === "Spread")) return out;
+    // the copy is written in the file of the call, next to the closure bodies
+    if (e.args.some((a) => a.k === "FieldValue" || a.k === "Spread") || this.cannotMove(sym, lit, e)) return out;
     const params = this.calledOnlyParams(lit, sym.scope);
     const names = lit.sig.params.flatMap((p) => p.names.map((n) => n.name));
     e.args.forEach((a, i) => {
@@ -1314,7 +1366,8 @@ export class Analyzer {
       for (const [i, a] of e.args.entries()) {
         if (!(a.k === "ProcLit" && a.captures)) continue;
         if (params.get(names[i])) return params.get(names[i]);
-        if (params.has(names[i]) && e.toks !== lit.toks) return `the call at line ${posOf(e).line} is in another file`;
+        const why = params.has(names[i]) && this.cannotMove(sym, lit, e);
+        if (why) return why;
       }
     return undefined;
   }
@@ -1645,6 +1698,19 @@ export class Analyzer {
     A(e)._hosted = true;
     A(s)._orReturn = { postfix: e, results: count, errVar: `__err${++this.errCounter}`, proc: top.proc };
     if (s.k === "ExprStmt") A(s)._discard = this.leadingResults(e.x, scope);
+  }
+
+  /** -opt: a whole-statement Odin `or_return` is written out like `or_return X`, so its failure branch is hinted cold. */
+  private plainOrReturn(s: Stmt, e: Extract<Expr, { k: "Postfix" }>, scope: Scope): void {
+    const top = this.resultStack[this.resultStack.length - 1];
+    if (!this.optimize || e.op !== "or_return" || !top?.sig.results.length) return;
+    // Odin only allows it with named results or a single one; leave the rest for Odin to reject
+    if (top.sig.resultsUnnamed && (top.sig.results.length > 1 || top.sig.results[0].names.length > 1)) return;
+    // a bare call's leading results are discarded, so their count must be known
+    if (s.k === "ExprStmt" && !this.callSig(e.x, scope)) return;
+    this.hostOrReturn(s, e, scope);
+    A(s)._orReturn.plain = true;
+    this.hint(e, "cold failure", "the failure branch of this or_return is written out and hinted unlikely");
   }
 
   /** How many results a bare call returns before its error (they are discarded); 0 when unknown. */

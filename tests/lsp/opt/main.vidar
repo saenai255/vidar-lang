@@ -36,6 +36,14 @@ sum :: proc(a: []int) -> (total: int) {
 	return
 }
 
+sum_all :: proc!(a: Expr) -> Stmt {
+	return quote {
+		for i in 0..<len($a) {
+			fmt.println($a[i])
+		}
+	}
+}
+
 main :: proc() {
 	tmp := make([]int, 16)
 	out := make([]int, 16)
@@ -48,4 +56,5 @@ main :: proc() {
 	fmt.println(area(s), area(&sq))
 	fmt.printf("%d %d\n", bits(7), double(3))
 	fmt.println(sum(out))
+	sum_all!(out)
 }

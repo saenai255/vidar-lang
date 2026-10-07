@@ -15,6 +15,7 @@ fold :: proc(xs: []$T, init: T, f: __vidar.Closure(proc(__vidar.Env, T, T) -> T)
 // two closure parameters, one call each, plus a deferred call
 filter_map :: proc(xs: []int, keep: __vidar.Closure(proc(__vidar.Env, int) -> bool), f: __vidar.Closure(proc(__vidar.Env, int) -> int), done: __vidar.Closure(proc(__vidar.Env))) -> (out: [dynamic]int) {
 	defer done.call(done.env)
+	reserve(&out, len(out) + len(xs))
 	for x in xs {
 		if keep.call(keep.env, x) do append(&out, f.call(f.env, x))
 	}
@@ -427,6 +428,7 @@ __filter_map__closure5_done :: proc() { __fmt_13() }
 // filter_map with the closures from line 84 called directly
 filter_map__closure5 :: proc(xs: []int, __f_c0: $__f_T0) -> (out: [dynamic]int) { __f_env := __filter_map__closure5_f_Env(__f_T0){__f_c0};
 	defer __filter_map__closure5_done()
+	reserve(&out, len(out) + len(xs))
 	for x in xs {
 		if __filter_map__closure5_keep(x) do append(&out, __filter_map__closure5_f(&__f_env, x))
 	}

@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import { Expr, Node, children } from "./ast";
 import { A, Analyzer, CallSite, ClosureSpec, INT_TYPES, markInlined, SpecInfo, nodeText, posOf, unwrapProc } from "./analyzer";
 import type { GlobalSym, LocalSym, Sym } from "./scope";
@@ -49,7 +50,11 @@ function closureSpecialize(an: Analyzer, sym: GlobalSym, lit: ProcLit, sites: Ca
     markInlined(lit);
   }
   const params = [...new Set(chosen.flatMap((x) => [...x.closures.keys()]))].join(", ");
-  const lines = chosen.map((x) => posOf(x.site.call).line).join(", ");
+  const where = (call: Node) => {
+    const at = posOf(call);
+    return at.file === posOf(lit).file ? `${at.line}` : `${at.line} of ${basename(at.file)}`;
+  };
+  const lines = chosen.map((x) => where(x.site.call)).join(", ");
   const rest = found.length - chosen.length;
   an.note(sym, `specialized: a copy calling the closure passed to ${params} directly, for the call${chosen.length > 1 ? "s at lines" : " at line"} ${lines}` +
     (rest ? `; ${rest} more passing a closure literal call${rest === 1 ? "s" : ""} the original, past ${MAX_COPIES} copies` : ""));

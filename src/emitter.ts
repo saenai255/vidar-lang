@@ -318,6 +318,10 @@ export class Emitter {
   private cloneJobs: (() => string)[] = [];
   /** while such a copy is written: its closure parameters, and the lifted body and environment calls go to */
   private inlinedClosures = new Map<Sym, { proc: string; env?: string }>();
+  /** while a copy of a proc from another file is written here: names resolve as in that file */
+  private foreign = false;
+  /** imports the file's copies of procs from other files need, by alias */
+  private extraImports = new Map<string, string>();
 
   constructor(private an: Analyzer, private unit: Unit) {}
 
@@ -326,13 +330,15 @@ export class Emitter {
     this.pkg = pkg;
     this.helpers = [];
     this.callHelpers.clear();
+    this.extraImports.clear();
     this.fileUsesRuntime = false;
     this.indents.clear();
     for (const t of f.toks) if (t.pre.includes("\n") && !this.indents.has(t.pos.line)) this.indents.set(t.pos.line, t.pre.slice(t.pre.lastIndexOf("\n") + 1));
     const root = { k: "Block", toks: f.toks, start: 0, end: f.toks.length, stmts: f.stmts } as Block;
     let out = f.toks[0].pre + this.generic(root, 0, f.toks.length, f.stmts);
     while (this.cloneJobs.length) this.helpers.push(this.cloneJobs.shift()!());
-    const runtime = this.fileUsesRuntime ? `; import ${RUNTIME_ALIAS} "${relImport(this.unit.outDir, "vidar_runtime")}"` : "";
+    const runtime = (this.fileUsesRuntime ? `; import ${RUNTIME_ALIAS} "${relImport(this.unit.outDir, "vidar_runtime")}"` : "") +
+      [...this.extraImports].map(([alias, path]) => `; import ${alias} "${path}"`).join("");
     out = out.replace(RUNTIME_MARK, runtime);
     const { text, lines } = resolveLines(out);
     out = text;
@@ -406,12 +412,14 @@ export class Emitter {
       case "Ident": {
         const sym: Sym | undefined = A(n)._sym;
         if (!sym && n.name === RUNTIME_ALIAS) this.fileUsesRuntime = this.usesRuntime = true; // used by built-in macros
+        if (this.foreign && sym?.kind === "global" && sym.pkg.unit !== this.unit) return this.qualify(sym, sym.odinName, `use '${sym.name}'`);
+        if (this.foreign && sym?.kind === "pkg") return this.pkgRef(sym);
         return sym ? this.symRef(sym) : this.generic(n);
       }
       case "Selector": {
         const member: GlobalSym | undefined = A(n)._pkgMember;
         if (!member) return this.generic(n);
-        return member.pkg.unit === this.unit ? member.odinName : `${this.generic(n.x)}.${member.odinName}`;
+        return member.pkg.unit === this.unit ? member.odinName : `${this.foreign ? this.emit(n.x) : this.generic(n.x)}.${member.odinName}`;
       }
       case "Package":
         return (this.unit.merged ? `package ${this.unit.name}` : this.generic(n)) + RUNTIME_MARK;
@@ -697,6 +705,19 @@ export class Emitter {
     return this.tok(b.toks[b.start]) + " " + lines.join("; ") + ";" + (this.ws(next.pre) || " ") + this.generic(b, b.start + 1);
   }
 
+  /** The name another file's import `p` has in this file; imported under a new name when this file lacks it. */
+  private pkgRef(p: PkgSym): string {
+    if (p.stmt.toks === this.file.toks || p.target?.unit === this.unit) return p.name;
+    for (const s of this.pkg.fileScopes.get(this.file)?.syms.values() ?? [])
+      if (s.kind === "pkg" && (p.target ? s.target?.unit === p.target.unit : !s.target && s.path === p.path)) return s.name;
+    const path = p.target ? relImport(this.unit.outDir, p.target.unit.outDir) : p.path;
+    for (const [alias, imported] of this.extraImports) if (imported === path) return alias;
+    let alias = `__${p.name}`;
+    for (let i = 2; this.extraImports.has(alias); i++) alias = `__${p.name}${i}`;
+    this.extraImports.set(alias, path);
+    return alias;
+  }
+
   private symRef(sym: Sym): string {
     switch (sym.kind) {
       case "global": return sym.odinName;
@@ -721,10 +742,11 @@ export class Emitter {
 
   /** `x := f() or_return .E` -> `x, e := f(); if failed(e) do return {}, .E`; with named results, as Odin: `{ err = .E; return }` */
   private orReturn(s: Stmt): string {
-    const info: { postfix: Extract<Expr, { k: "Postfix" }>; results: number; errVar: string; proc: ProcLit } = A(s)._orReturn;
+    const info: { postfix: Extract<Expr, { k: "Postfix" }>; results: number; errVar: string; proc: ProcLit; plain?: boolean } = A(s)._orReturn;
     this.fileUsesRuntime = this.usesRuntime = true;
     const { head, tail } = this.failHead(s, this.emit(info.postfix.x), info.errVar);
-    const value = this.emit(info.postfix.value!);
+    // plain Odin `or_return` returns the error itself
+    const value = info.plain ? info.errVar : this.emit(info.postfix.value!);
     const errName = this.errorResultName(info.proc.sig, A(info.proc)._nameResults);
     const exit = errName
       ? `{ ${errName} = ${value}; return }`
@@ -1081,10 +1103,13 @@ export class Emitter {
     }
     const lines = [...spec.closures.values()].map((l) => posOf(l).line);
     const what = `the closure${lines.length > 1 ? "s" : ""} from line ${[...new Set(lines)].join(", ")} called directly`;
+    const foreign = this.foreign;
+    this.foreign = spec.sym.scope !== this.pkg.fileScopes.get(this.file);
     try {
       return this.specClone(spec.sym, spec, key, spec.consts, { params, prologue, what });
     } finally {
       this.inlinedClosures = outer;
+      this.foreign = foreign;
     }
   }
 

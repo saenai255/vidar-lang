@@ -15,7 +15,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 2 | 20 | One command to rebuild and reinstall the VS Code extension | tooling | done |
 | 3 | 18 | `@(no_alloc)` and `@(hot)` checks | tooling | done |
 | 4 | 21 | Macro expansion on hover | tooling | done |
-| 5 | 19 | Leftovers from the first batch | tooling | todo |
+| 5 | 19 | Leftovers from the first batch | tooling | done |
 | 6 | 1 | Closure call regression (2.9x slower call through a closure) | bug | todo |
 | 7 | 2 | `sched_pending_io` busy loop | bug | todo |
 | 8 | 3 | Dangling by-reference captures in returned closures | bug | todo |
@@ -181,6 +181,14 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **19, leftovers from the first batch** done in the main tree, not committed yet.
+  - `reserve`: appends under an `if` (any depth, `else if` / `else` included) count as the branch that appends the most, so the reserve is an upper bound. Only for elements of at most 16 bytes (`SMALL_ELEM` in `src/optimize.ts`); bigger ones get `not reserved`. `opt_reserve`'s conditional-append example moved from "not reserved" to reserved; two closure-specialize fixtures picked up a reserve in `filter_map`.
+  - `#soa`: `a: [dynamic]T = make([dynamic]T, ...)` and `a: []T = make([]T, n)` qualify when both types are spelled the same; both get `#soa`.
+  - Hints inside macro expansions: the analyzer maps each expansion's tokens to its macro call (`expandedFrom`), and `an.hint` moves a hint from expanded code to the outermost call in the source, with a tooltip starting `in name!:`. This also puts them under `@(hot)`.
+  - Closure-literal specialization across files and packages: the copy was already written in the caller's file; now the callee's body can be written there too. The emitter qualifies the callee package's names (`iter.bump`) and maps the callee file's imports to the caller file's, adding `import __alias "path"` when missing. Skipped, with a note, when the body uses something `@(private)` from another package or `@(private="file")` from another file, or the caller's file doesn't import the callee's package. New case `opt_closure_specialize_pkg`.
+    - Tried first: a generic copy in the callee's file taking the lifted closure as a `$F` proc constant. Odin can't take a polymorphic proc there, and with `^$E` inferred first it compiled but silently skipped the loop (printed 0), so it was dropped.
+  - Cold paths on plain Odin `or_return`: under `-opt`, a whole-statement `or_return` is written out like `or_return X`, returning the error itself, hinted `cold failure`. Only where Odin accepts it (named results, or a single one), so `-opt` never accepts what plain Odin rejects.
+  - `npm test` passes (278 case checks, 121 LSP checks); `npm run bench` shows no section more than 3% off `HEAD`.
 - **21, macro expansion on hover** done in the main tree. The emitter records the code it writes for each macro call when given an `expansions` map (`emitProgram(p, expansions)`); the language server emits once per analysis, on the first hover over a macro call's name, and appends that code to the macro's hover. Statements a macro hoists before its statement (`do!`, values evaluated once) are tagged with the macro calls being expanded (`_hoistedFor`) and shown first. Comptime calls show the value they folded to (`fib!(20)` expands to `6765`). The rename check in `scripts/test-lsp.js` now loads the whole workspace, since the workspace uses a macro from `geo`.
 - **18, `@(no_alloc)` and `@(hot)`** done in the main tree, in a new `src/checks.ts` rather than `autoopt.ts`/`analyzer.ts`.
   - `@(no_alloc)` follows calls through procs with bodies, proc groups, nested proc constants and interface methods (when the interface is closed), memoized per proc. A call it can't follow says "can't be checked" rather than "can allocate". The backstop is a `when __vidar.NO_ALLOC_CHECKS { ... }` on the body's first line (true at `-o:none` and `-o:minimal`), which also lands in `@(specialize)` copies; it adds two lines to every `expected/vidar_runtime`.

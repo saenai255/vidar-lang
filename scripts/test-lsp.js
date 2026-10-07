@@ -559,6 +559,7 @@ function change(text) {
   check("inlay hints on allocations made together", hintsAt(oh, oEnd("tmp := make([]int, 16)")).includes("grouped alloc") && hintsAt(oh, oEnd("out := make([]int, 16)")).includes("grouped alloc"), ohs);
   check("inlay hint on a compiled fmt call", hintsAt(oh, oEnd('fmt.printf("%d %d\\n", bits(7), double(3))')).includes("fmt inlined"), ohs);
   check("inlay hints tell devirtualized and direct interface calls apart", hintsAt(oh, oEnd("area(s)")).includes("devirtualized") && hintsAt(oh, oEnd("area(&sq)")).includes("direct"), ohs);
+  check("inlay hints from a macro's expansion go at the macro call", oh.some((h) => h.label === "unchecked" && h.position.line === oEnd("sum_all!(out)").line && h.tooltip?.startsWith("in sum_all!:")), ohs);
   check("inlay hints leave out what -opt decided against by default", !oh.some((h) => /^not? /.test(h.label)), ohs);
   const oGen = await request("vidar/generatedOdin", { uri: oUri });
   check("hints don't turn -opt on for the generated Odin", !/__fmt_|#no_bounds_check/.test(oGen.result?.files?.["main.odin"] ?? "__fmt_"), JSON.stringify(oGen.result).slice(0, 200));

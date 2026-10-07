@@ -34,6 +34,39 @@ assign :: proc(n: int) -> int {
 	return total
 }
 
+// plain Odin or_return: -opt writes it out and hints the failure branch cold too
+plain_decl :: proc(n: int) -> (int, Error) {
+	return checked(n)
+}
+
+checked :: proc(n: int) -> (v: int, err: Error) {
+	v = 2
+	w := parse(n) or_return
+	return v + w, .None
+}
+
+only_err :: proc(n: int) -> Error {
+	parse(n) or_return
+	return .None
+}
+
+plain_named :: proc(n: int) -> (total: int, err: Error) {
+	total = 100
+	total = parse(n) or_return
+	parse(n + 1) or_return
+	total += 1
+	return
+}
+
+lookup :: proc(n: int) -> (int, bool) {
+	return n * 2, n > 0
+}
+
+plain_ok :: proc(n: int) -> (s: string, ok: bool) {
+	v := lookup(n) or_return
+	return fmt.tprint(v), true
+}
+
 main :: proc() {
 	for n in ([]int{3, 0, -2}) {
 		v, err := scaled(n)
@@ -60,4 +93,11 @@ main :: proc() {
 
 	sure := parse(9) catch unreachable
 	fmt.println("unreachable not hit:", sure)
+
+	for n in ([]int{1, 0, -1}) {
+		a, e1 := plain_decl(n)
+		b, e2 := plain_named(n)
+		c, ok := plain_ok(n)
+		fmt.println("plain", n, "->", a, e1, b, e2, c, ok, only_err(n))
+	}
 }

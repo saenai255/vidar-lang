@@ -46,6 +46,17 @@ converted :: proc() {
 	fmt.println("slice:", total, buf[4])
 	clear(&ps)
 	fmt.println("cleared:", len(ps))
+
+	typed: [dynamic]Particle = make([dynamic]Particle, 0, 4)
+	defer delete(typed)
+	for i in 0..<4 do append(&typed, Particle{x = f32(i), id = i})
+	for &p in typed do p.x *= 3
+	fmt.println("typed:", len(typed), typed[3].x, typed[1])
+
+	typed_slice: []Particle = make([]Particle, 2)
+	defer delete(typed_slice)
+	for &p in typed_slice do p.y += 1
+	fmt.println("typed slice:", typed_slice[1].y)
 }
 
 sum_x :: proc(ps: []Particle) -> (s: f32) {
@@ -103,7 +114,7 @@ kept :: proc() {
 		fmt.println("by_ref:", copy.x)
 	}
 
-	returned := make_some()
+	returned: [dynamic]Particle = make_some()
 	defer delete(returned)
 	fmt.println("returned:", returned[2].x)
 

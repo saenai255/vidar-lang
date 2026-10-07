@@ -1,0 +1,8 @@
+each: 10
+sum_by: 4 values
+sum_by: 100 4
+doubled: 20
+shifted: 14
+visit 2
+visit: 2
+scaled: 20

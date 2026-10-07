@@ -42,6 +42,32 @@ copy_all :: proc(src: []int, g: Grid, out: ^[dynamic]int) {
 	}
 }
 
+Big :: struct { a, b, c: int }
+
+evens :: proc(n: int) -> (xs: [dynamic]int, bigs: [dynamic]Big) {
+	// reserved: at most one append per iteration, an upper bound
+	reserve(&xs, len(xs) + n)
+	for i in 0..<n {
+		if i % 2 == 0 do append(&xs, i)
+	}
+	// reserved: the larger branch appends two values
+	reserve(&xs, len(xs) + 2 * n)
+	for i in 0..<n {
+		if i < 2 {
+			append(&xs, -i)
+		} else if i == 3 {
+			append(&xs, i, i)
+		} else {
+			append(&xs, 0)
+		}
+	}
+	// not reserved: conditional, and Big is 24 bytes
+	for i in 0..<n {
+		if i == 1 do append(&bigs, Big{a = i})
+	}
+	return
+}
+
 letters :: proc(s: string) -> [dynamic]rune {
 	// reserved: len(s) bytes, at least the rune count
 	rs: [dynamic]rune
@@ -53,8 +79,8 @@ letters :: proc(s: string) -> [dynamic]rune {
 skipped :: proc(n: int) -> int {
 	a, b, c, d, e, f, g: [dynamic]int
 	defer { delete(a); delete(b); delete(c); delete(d); delete(e); delete(f); delete(g) }
-	// not reserved: the append is conditional
-	for i in 0..<n {
+	// not reserved: the append is under an if, and the bound comes from the array
+	for i := 0; i < len(a) + n; i += 1 {
 		if i % 2 == 0 do append(&a, i)
 	}
 	// not reserved: break can end the loop early
@@ -106,6 +132,10 @@ main :: proc() {
 	rs := letters("héllo")
 	defer delete(rs)
 	__fmt_1(len(rs))
+	ev, bigs := evens(6)
+	defer delete(ev)
+	defer delete(bigs)
+	__fmt_2(ev[:], cap(ev) >= 9, len(bigs))
 	__fmt_1(skipped(6))
 }
 
@@ -130,6 +160,21 @@ __fmt_1 :: proc(a0: $T0) -> (n: int) {
 	bw: __vidar.File_Writer
 	w := __vidar.std_writer(&bw, buf[:], false)
 	n += __vidar.w_v(w, a0)
+	n += __vidar.w_str(w, "\n")
+	__vidar.w_flush(w)
+	return
+}
+
+// fmt.println
+__fmt_2 :: proc(a0: $T0, a1: $T1, a2: $T2) -> (n: int) {
+	buf: [1024]byte
+	bw: __vidar.File_Writer
+	w := __vidar.std_writer(&bw, buf[:], false)
+	n += __vidar.w_v(w, a0)
+	n += __vidar.w_str(w, " ")
+	n += __vidar.w_v(w, a1)
+	n += __vidar.w_str(w, " ")
+	n += __vidar.w_v(w, a2)
 	n += __vidar.w_str(w, "\n")
 	__vidar.w_flush(w)
 	return

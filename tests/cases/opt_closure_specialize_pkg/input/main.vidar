@@ -1,0 +1,30 @@
+package main
+
+import "core:fmt"
+import "iter"
+
+main :: proc() {
+	xs := []int{1, 2, 3, 4}
+	total := 0
+	iter.each(xs, proc[&total](x: int) { total += x })
+	fmt.println("each:", total)
+
+	stats: iter.Stats
+	k := 10
+	fmt.println("sum_by:", iter.sum_by(xs, &stats, proc[k](x: int) -> int { return x * k }), stats.calls)
+
+	seen := 0
+	iter.doubled(xs, proc[&seen](x: int) { seen += x })
+	fmt.println("doubled:", seen)
+
+	moved := 0
+	iter.shifted(xs, proc[&moved](x: int) { moved += x })
+	fmt.println("shifted:", moved)
+
+	limit := 2
+	fmt.println("visit:", visit(xs, proc[limit](x: int) -> bool { return x > limit }))
+
+	got := 0
+	scaled(xs, proc[&got](x: int) { got += x })
+	fmt.println("scaled:", got)
+}

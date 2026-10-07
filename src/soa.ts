@@ -1,5 +1,5 @@
 import { Block, Expr, Node, Stmt } from "./ast";
-import { A, Analyzer, posOf } from "./analyzer";
+import { A, Analyzer, nodeText, posOf } from "./analyzer";
 import { kids } from "./optimize";
 import { schedSourcePath } from "./project";
 import type { LocalSym, Sym, Ty } from "./scope";
@@ -22,6 +22,8 @@ interface Candidate {
   sym: LocalSym;
   decl: ValueDecl;
   type: TypeExpr;
+  /** the `make` type of a typed declaration with a value, which gets #soa too */
+  made?: TypeExpr;
   struct: string;
   fields: string[];
   bytes: number;
@@ -66,31 +68,41 @@ export function soaLocals(body: Block, an: Analyzer): void {
       note(`not #soa: ${best ? `every loop touches all ${c.fields.length} fields` : "no loop reads or writes its fields"}`);
       continue;
     }
-    A(c.type)._fix = { prefix: "#soa", suffix: "" };
+    for (const t of [c.type, c.made]) if (t) A(t)._fix = { prefix: "#soa", suffix: "" };
     note(`#soa: a loop touches ${best.size} of ${c.fields.length} fields of ${c.struct} (${[...best].join(", ")}); ${width}`);
   }
 }
 
-/** `a: [dynamic]T`, `a: [N]T`, `a := make([dynamic]T, ...)` or `a := make([]T, ...)` with T a plain struct. */
+/**
+ * `a: [dynamic]T`, `a: [N]T`, `a := make([dynamic]T, ...)`, `a := make([]T, ...)` or
+ * `a: [dynamic]T = make([dynamic]T, ...)` with T a plain struct.
+ */
 function candidate(s: ValueDecl, an: Analyzer): Candidate | undefined {
   if (s.isConst || s.names.length !== 1 || A(s)._pre?.length || A(s)._orReturn || A(s)._allocGroup || A(s)._allocGrouped) return undefined;
   const sym: LocalSym | undefined = A(s)._syms?.[0];
   if (sym?.kind !== "local" || sym.name === "_") return undefined;
+  const made = (v: Expr): Expr | undefined => {
+    if (v.k !== "Call" || v.fn.k !== "Ident" || v.fn.name !== "make" || A(v.fn)._sym || !v.args.length) return undefined;
+    const t = v.args[0];
+    return t.k === "TypeExpr" && (t.what === "dynamic" || t.what === "slice") && !t.parts[0] ? t : undefined;
+  };
   let type: Expr | undefined;
+  let also: Expr | undefined;
   if (s.type && !s.values.length) {
     type = s.type;
     if (type.k !== "TypeExpr" || !(type.what === "dynamic" ? !type.parts[0] : type.what === "array" && type.parts[0])) return undefined;
+  } else if (s.type && s.values.length === 1) {
+    type = s.type;
+    also = made(s.values[0]);
+    if (!also || nodeText(also) !== nodeText(type)) return undefined;
   } else if (!s.type && s.values.length === 1) {
-    const call = s.values[0];
-    if (call.k !== "Call" || call.fn.k !== "Ident" || call.fn.name !== "make" || A(call.fn)._sym || !call.args.length) return undefined;
-    type = call.args[0];
-    if (type.k !== "TypeExpr" || !((type.what === "dynamic" || type.what === "slice") && !type.parts[0])) return undefined;
+    type = made(s.values[0]);
   }
   const elem = type?.k === "TypeExpr" ? type.parts[1] : null;
   if (!elem) return undefined;
   const shape = structShape(an, { t: "node", node: elem, scope: A(elem)._scope ?? sym.scope });
   if (!shape) return undefined;
-  return { sym, decl: s, type: type as TypeExpr, struct: elem.toks.slice(elem.start, elem.end).map((t) => t.text).join(""), ...shape, loops: new Map() };
+  return { sym, decl: s, type: type as TypeExpr, made: also as TypeExpr | undefined, struct: elem.toks.slice(elem.start, elem.end).map((t) => t.text).join(""), ...shape, loops: new Map() };
 }
 
 /** Field names and a rough size of a plain struct: no `using`, field tags, directives or parameters. */
@@ -110,7 +122,7 @@ function structShape(an: Analyzer, ty: Ty): { fields: string[]; bytes: number } 
 }
 
 /** At least roughly the size of a type; 8 when unknown. */
-function sizeOf(an: Analyzer, ty: Ty, depth: number): number {
+export function sizeOf(an: Analyzer, ty: Ty, depth = 0): number {
   const n = an.normalize(ty);
   if (n?.t !== "node" || depth > 8) return 8;
   const e = n.node;

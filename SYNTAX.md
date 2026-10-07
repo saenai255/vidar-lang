@@ -295,7 +295,7 @@ for s in shapes do total += area(s)        // a direct call per type
 - `fmt` print calls with a literal format write each piece directly, with no format parsing or `any` boxing
 - indexes proven in bounds by their loop (`for i in 0..<len(a)`, `for x, i in a`, `for i := 0; i < len(a); i += 1`) get `#no_bounds_check`
 - adjacent `make`/`new` freed only by `defer delete`/`defer free` in the same block become one allocation
-- procs over `bool`/`u8`/`i8` that are pure integer code and loop become tables; procs whose constant arguments bound a loop, or divide, shift or branch inside one, are specialized (at most 4 copies, not when every call passes the same constant); a call passing a closure literal (`proc[...]`) to a closure parameter the callee only calls gets a copy calling the literal's body directly, with its captures on the stack (at most 4 copies per proc, callee in the same file)
+- procs over `bool`/`u8`/`i8` that are pure integer code and loop become tables; procs whose constant arguments bound a loop, or divide, shift or branch inside one, are specialized (at most 4 copies, not when every call passes the same constant); a call passing a closure literal (`proc[...]`) to a closure parameter the callee only calls gets a copy calling the literal's body directly, with its captures on the stack (at most 4 copies per proc, written in the caller's file; not when the callee uses a private name the caller can't see)
 
 `-opt-report` in place of `-opt` also prints what it decided per proc, and why not where it didn't.
 

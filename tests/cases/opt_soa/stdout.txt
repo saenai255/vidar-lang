@@ -2,6 +2,8 @@ dynamic: 10 true 162 26 Particle{x = 9, y = 3, vx = 3, vy = 1, id = 3, alive = f
 fixed: 3.5 Particle{x = 1.5, y = 0, vx = 1.5, vy = 0, id = 0, alive = false}
 slice: 30 Particle{x = 0, y = 0, vx = 0, vy = 0, id = 16, alive = false}
 cleared: 0
+typed: 4 9 Particle{x = 3, y = 0, vx = 0, vy = 0, id = 1, alive = false}
+typed slice: 1
 sliced: 4
 passed: 8
 addressed: 9
