@@ -34,7 +34,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 21 | 25 | Expand-at-cursor view of generated Odin | dev tooling | todo |
 | 22 | 26 | Code actions (quick fixes) | dev tooling | todo |
 | 23 | 27 | Semantic tokens | dev tooling | todo |
-| 24 | 28 | Workspace symbols, call hierarchy, find implementations | dev tooling | todo |
+| 24 | 28 | Workspace symbols, call hierarchy, find implementations | dev tooling | merged |
 | 25 | 29 | `-opt` decisions panel and code lens | dev tooling | todo |
 | 26 | 30 | `vidar fmt` | dev tooling | todo |
 | 27 | 31 | Debugger support: `vidar build -debug` and a launch config | dev tooling | todo |
@@ -252,6 +252,8 @@ Odin has no `#line` directive, so stepping happens in the generated Odin.
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **28, workspace symbols, call hierarchy, find implementations** merged. `src/lsp/navigation.ts`, reusing `features.ts`' index. `workspace/symbol` over every analysis the server holds (substring, then in-order letters; no `__` names). `textDocument/implementation` on an interface (its `variants`, extending interfaces' implementations included) or an interface method (the bound procs). Call hierarchy on procs, proc groups (a group call counts for each member), interface methods (a closed interface's call counts for every bound proc) and macros (calls in an expansion sit at the macro call); items are keyed by declaration position, so incoming calls are found across packages. Not followed: calls through closure values or proc variables. New workspace `tests/lsp/nav/`, 17 checks.
+  - Also fixed: with no `ols` on PATH on Node 22 the server crashed on the first opened file (the handshake was written before the process spawned, and the rejected write killed the server). Two LSP checks made stale by items 9 and 10 are updated (`make([]int, 16)` is now a stack buffer, not a grouped alloc; `@(hot)` uses an index that can't be proven).
 - **24, `--watch`** merged. `src/watch.ts`: `vidar run --watch` / `check --watch` rerun the whole `vidar` command as a child (own process group, SIGTERM then SIGKILL on a change, so what `odin run` started dies too). Watches each project package directory with `fs.watch` (rename-saves work, no recursive watch needed), falls back to `fs.watchFile` polling; the file set is reloaded in tolerant mode before each run, so new imports and broken programs are handled. 100 ms debounce, `--clear`. `.odin` files in project packages count too. `test --watch` is one line (`WATCH_COMMANDS`) once `vidar test` exists. 8 unit tests in `tests/unit/watch.test.js`.
   - Also fixed: the `@(hot)` unit test expected `no bounds proof` on `b[i]`, which item 10 now proves (it indexes with `a[i]` now), and `npm test` / `test:unit` pass a glob to `node --test`, since a directory fails on Node 22.
 - **8, multithreaded scheduler** merged, started before 2 on request (2 is still open).
