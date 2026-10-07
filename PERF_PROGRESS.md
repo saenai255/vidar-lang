@@ -21,7 +21,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 8 | 3 | Dangling by-reference captures in returned closures | bug | merged |
 | 9 | 5 | Intermittent Odin compiler hang | bug | blocked |
 | 10 | 6 | Value interfaces / closed unions | perf | todo |
-| 11 | 7 | Generated per-type printers and JSON code | perf | in progress |
+| 11 | 7 | Generated per-type printers and JSON code | perf | merged (no unmarshal) |
 | 12 | 8 | Multithreaded (M:N) scheduler | perf | todo |
 | 13 | 9 | Constant-size `make` on the stack | perf | merged |
 | 14 | 10 | Wider bounds-check elimination | perf | merged |
@@ -181,6 +181,11 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **7, JSON (second half)** merged: `json.marshal`; `json.unmarshal` is not done.
+  - `src/jsonopt.ts`: `json.marshal(x)` with one argument (default options) and a type resolved like the printers' (structs may have tags here) calls `__json_marshal_T(x)`, a `$T` proc whose `when T == <type>` branch writes with generated `__jsonw_T` procs and whose `else` calls `json.marshal`. It follows `marshal_to_writer` for `.JSON`, not pretty: keys through `io.write_quoted_string` (not escaped for JSON, so keys needing escapes are left to encoding/json), string values with `for_json`, runes quoted, floats through `io.write_f16/f32/f64`, enums as their integer value, `json:"name"`, `json:"-"`, and `omitempty`, which drops only what `is_omitempty` calls empty (strings, slices, dynamic arrays; a 0 int stays). Programs that register their own marshalers keep encoding/json.
+  - `negative_cost` "json.marshal of a struct" (the same `Particle`), plain vs `-opt`: 172 → 77 ms.
+  - New case `opt_json`, compared with encoding/json called through a proc value.
+  - Why not unmarshal: encoding/json first validates the whole input (`is_valid`), coerces between integers and floats, and reports `Unsupported_Type_Error` with the token where it failed, all through private procs (`unmarshal_value`, `unmarshal_object`). A generated decoder would have to reimplement the parser to give the same errors on bad input. That is a separate item if wanted.
 - **7, generated printers (first half)** merged; JSON is next.
   - `src/printers.ts`. In a lowered fmt call, a `%v` / `%#v` argument whose type resolves to a plain struct (no parameters, directives, `using`, tags or `any` fields), an enum without explicit values, or a fixed array, slice or dynamic array of those, strings and numbers, goes to generated `__print_T(w, x)` / `__printh_T(w, x, indent)` procs. They follow `fmt_struct` / `fmt_write_array` exactly: `Name{a = 1, b = 2}`, strings and enum names quoted inside composites, runes raw, `%!(BAD ENUM VALUE=n)` through fmt, `nil` for a nil slice with a length, `%#v`'s tabs and trailing commas, and the count, which leaves out the ", " between fields as fmt's does.
   - Each call sits under `when T0 == <type>`, with fmt as the `else`, so an analyzer type that's off (it calls `dy[:]` a dynamic array) costs nothing but the optimization. Programs that call `register_user_formatter` keep fmt everywhere.

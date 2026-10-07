@@ -210,6 +210,21 @@ w_tabs :: proc(w: io.Writer, count: int) -> (n: int) {
 
 sb_writer :: #force_inline proc(b: ^strings.Builder) -> io.Writer { return strings.to_writer(b) }
 
+// -opt: json.marshal written out, with encoding/json's escaping
+w_json_str :: #force_inline proc(w: io.Writer, s: string) { io.write_quoted_string(w, s, '"', nil, true) }
+
+w_json_rune :: proc(w: io.Writer, r: rune) {
+	io.write_byte(w, '"')
+	io.write_escaped_rune(w, r, '"', for_json = true)
+	io.write_byte(w, '"')
+}
+
+w_json_float :: proc(w: io.Writer, x: $T) where intrinsics.type_is_float(T) {
+	when T == f16 do io.write_f16(w, x)
+	else when T == f32 do io.write_f32(w, x)
+	else do io.write_f64(w, x)
+}
+
 // %v of a float, as fmt writes it
 w_float :: proc(w: io.Writer, x: $T) -> int where intrinsics.type_is_float(T) {
 	fi := fmt.Info{writer = w}

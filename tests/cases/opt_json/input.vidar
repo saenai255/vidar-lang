@@ -1,0 +1,70 @@
+package main
+
+import "core:encoding/json"
+import "core:fmt"
+
+Color :: enum { Red, Green, Blue }
+Level :: enum u8 { Low = 1, High = 200 }
+
+Point :: struct { x, y: f32 }
+
+Item :: struct {
+	id: int,
+	name: string `json:"title"`,
+	note: string `json:"note,omitempty"`,
+	tags: []string `json:"tags,omitempty"`,
+	secret: string `json:"-"`,
+	count: int `json:",omitempty"`,
+	color: Color,
+	level: Level,
+	ok: bool,
+	r: rune,
+	at: Point,
+	path: [dynamic]Point,
+	grid: [2][2]i8,
+	big: u64,
+	ratio: f64,
+	text: string `fmt:"-" json:"body"`,
+	inner: struct { a: int, b: string },
+}
+
+// not generated: a map field; encoding/json writes it
+Tagged :: struct { m: map[string]int, n: int }
+
+main :: proc() {
+	path: [dynamic]Point
+	defer delete(path)
+	append(&path, Point{1, 2.5}, Point{-0.0, 1e21})
+	tags := [2]string{"new", "q\"<&>\né"}
+	items := [2]Item{
+		{id = 1, name = "first", tags = tags[:], secret = "hidden", count = 0, color = .Blue, level = .High, ok = true, r = 'é', at = {0.1, 3}, path = path, grid = {{1, -2}, {3, 4}}, big = 18446744073709551615, ratio = 1.0 / 3.0, text = "t\tab", inner = {7, "in"}},
+		{id = 2, name = "", note = "has a note", r = '"', level = Level(7)},
+	}
+	m := json.marshal
+	check :: proc(got, want: []byte, gerr, werr: json.Marshal_Error) {
+		fmt.println(string(got) == string(want) && gerr == werr ? "same" : "DIFFERENT", string(got))
+	}
+	for it in items {
+		got, gerr := json.marshal(it)
+		want, werr := m(it)
+		check(got, want, gerr, werr)
+		delete(got)
+		delete(want)
+	}
+	got, gerr := json.marshal(items[:])
+	want, werr := m(items[:])
+	check(got, want, gerr, werr)
+	delete(got)
+	delete(want)
+	got2, gerr2 := json.marshal(Color.Green)
+	want2, werr2 := m(Color.Green)
+	check(got2, want2, gerr2, werr2)
+	delete(got2)
+	delete(want2)
+	tm: Tagged
+	got3, gerr3 := json.marshal(tm)
+	want3, werr3 := m(tm)
+	check(got3, want3, gerr3, werr3)
+	delete(got3)
+	delete(want3)
+}

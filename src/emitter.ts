@@ -9,6 +9,7 @@ import type { StackBuf } from "./stackbuf";
 import { StrHash, strHashProc } from "./strswitch";
 import { MemoInfo, memoHelpers } from "./memo";
 import { Printers, registersFormatters } from "./printers";
+import { JsonWriters, registersMarshalers } from "./jsonopt";
 import type { CaptureSym, GlobalSym, LocalSym, PackageInfo, PkgSym, Sym, Ty, Unit } from "./scope";
 
 type ProcLit = Extract<Expr, { k: "ProcLit" }>;
@@ -275,6 +276,21 @@ w_tabs :: proc(w: io.Writer, count: int) -> (n: int) {
 
 sb_writer :: #force_inline proc(b: ^strings.Builder) -> io.Writer { return strings.to_writer(b) }
 
+// -opt: json.marshal written out, with encoding/json's escaping
+w_json_str :: #force_inline proc(w: io.Writer, s: string) { io.write_quoted_string(w, s, '"', nil, true) }
+
+w_json_rune :: proc(w: io.Writer, r: rune) {
+	io.write_byte(w, '"')
+	io.write_escaped_rune(w, r, '"', for_json = true)
+	io.write_byte(w, '"')
+}
+
+w_json_float :: proc(w: io.Writer, x: $T) where intrinsics.type_is_float(T) {
+	when T == f16 do io.write_f16(w, x)
+	else when T == f32 do io.write_f32(w, x)
+	else do io.write_f64(w, x)
+}
+
 // %v of a float, as fmt writes it
 w_float :: proc(w: io.Writer, x: $T) -> int where intrinsics.type_is_float(T) {
 	fi := fmt.Info{writer = w}
@@ -327,6 +343,8 @@ export class Emitter {
   private helpers: string[] = [];
   /** -opt: printers for %v of known types; null when the program registers its own formatters */
   private printers: Printers | null | undefined = undefined;
+  /** -opt: json.marshal of known types; null when the program registers its own marshalers */
+  private json: JsonWriters | null | undefined = undefined;
   /** -opt: string switches through a perfect hash, and their helper procs */
   private strSwitches = new Map<Node, string>();
   private callHelpers = new Map<string, string>();
@@ -371,6 +389,7 @@ export class Emitter {
     this.pkg = pkg;
     this.helpers = [];
     this.printers = undefined;
+    this.json = undefined;
     this.callHelpers.clear();
     this.extraImports.clear();
     this.fileUsesRuntime = false;
@@ -381,6 +400,8 @@ export class Emitter {
     while (this.cloneJobs.length) this.helpers.push(this.cloneJobs.shift()!());
     const printers = this.printers as Printers | null | undefined;
     if (printers?.procs.size) this.helpers.push(`// fmt's %v for the types printed here, written out\n` + [...printers.procs.values()].join("\n\n"));
+    const json = this.json as JsonWriters | null | undefined;
+    if (json?.procs.size) this.helpers.push([...json.procs.values()].join("\n\n"));
     const runtime = (this.fileUsesRuntime ? `; import ${RUNTIME_ALIAS} "${relImport(this.unit.outDir, "vidar_runtime")}"` : "") +
       [...this.extraImports].map(([alias, path]) => `; import ${alias} "${path}"`).join("");
     out = out.replace(RUNTIME_MARK, runtime);
@@ -578,6 +599,14 @@ export class Emitter {
       }
       case "Call": {
         if (A(n)._closureSpec) return this.closureSpecCall(n, A(n)._closureSpec);
+        if (this.an.optimize) {
+          if (this.json === undefined) this.json = registersMarshalers(this.an) ? null : new JsonWriters(this.an, (sym) => this.typeRef(sym));
+          const marshal = this.json?.marshal(n, (e) => this.emit(e));
+          if (marshal) {
+            this.fileUsesRuntime = this.usesRuntime = true;
+            return marshal + this.skipLines(n);
+          }
+        }
         const memoSelf: GlobalSym | undefined = A(n)._memoSelf;
         if (memoSelf && this.an.memos.has(memoSelf)) return `__${memoSelf.odinName}_memo(${[...n.args.map((a) => this.emit(a)), "__memo"].join(", ")})` + this.skipLines(n);
         const spec: { sym: GlobalSym; key: string } | undefined = A(n)._spec;

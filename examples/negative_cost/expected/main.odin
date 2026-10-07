@@ -5,6 +5,7 @@ package main; import __vidar "vidar_runtime"
 // Compare: `vidar run examples/negative_cost -- --bench`, then the same with -opt.
 // Each section runs in a proc of its own (#force_no_inline), so a change in one doesn't shift the code LLVM makes for another.
 
+import "core:encoding/json"
 import "core:fmt"
 import "core:os"
 import "core:strings"
@@ -231,6 +232,21 @@ printing :: #force_no_inline proc(n: int) {
 		total += strings.builder_len(b)
 	}
 	section("fmt %v of a struct", start, total)
+}
+
+// ---- -opt: json.marshal of a known type is written out too ----
+
+marshaling :: #force_no_inline proc(n: int) {
+	tags := [2]string{"hot", "fast"}
+	start := time.tick_now()
+	total := 0
+	for i in 0..<n {
+		p := Particle{id = i, name = "spark", pos = {1, 2, 3}, alive = i % 2 == 0, tags = tags[:]}
+		data, _ := json.marshal(p)
+		total += len(data)
+		delete(data)
+	}
+	section("json.marshal of a struct", start, total)
 }
 
 // ---- -opt: allocations freed together are made together ----
@@ -460,6 +476,7 @@ main :: proc() {
 	keywords(100_000 * scale)
 	memo(20 if !BENCH else 32)
 	printing(2_000 * scale)
+	marshaling(2_000 * scale)
 	allocs(20_000 * scale)
 	appends(1_000, 1_000 * scale)
 	blur(100_000, 2 * scale)
@@ -543,7 +560,7 @@ __closure_0 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env, int, int) ->
 	__Caps :: struct {
 		k: T0,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:331: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:347: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env, int, int) -> int){
 		call = proc(__env_raw: __vidar.Env, x, y: int) -> int { __env := transmute(__Env)__env_raw; return x * __env.k - y if x > y else y - x },
@@ -555,7 +572,7 @@ __closure_1 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env, int, int) ->
 	__Caps :: struct {
 		k: T0,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:335: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:351: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env, int, int) -> int){
 		call = proc(__env_raw: __vidar.Env, x, y: int) -> int { __env := transmute(__Env)__env_raw; return x * __env.k - y if x > y else y - x },
@@ -567,7 +584,7 @@ __closure_2 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env, int) -> int)
 	__Caps :: struct {
 		k: T0,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:347: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:363: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env, int) -> int){
 		call = proc(__env_raw: __vidar.Env, y: int) -> int { __env := transmute(__Env)__env_raw; return y * __env.k + 1 },
@@ -579,7 +596,7 @@ __closure_3 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env, int) -> int)
 	__Caps :: struct {
 		k: T0,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:360: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:376: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env, int) -> int){
 		call = proc(__env_raw: __vidar.Env, y: int) -> int { __env := transmute(__Env)__env_raw; return y * __env.k + 1 },
@@ -591,7 +608,7 @@ __closure_4 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env, int) -> int)
 	__Caps :: struct {
 		k: T0,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:371: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:387: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env, int) -> int){
 		call = proc(__env_raw: __vidar.Env, y: int) -> int { __env := transmute(__Env)__env_raw; return y * __env.k + 1 },
