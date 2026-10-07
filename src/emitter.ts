@@ -11,6 +11,7 @@ import { MemoInfo, memoHelpers } from "./memo";
 import { Printers, registersFormatters } from "./printers";
 import { JsonWriters, registersMarshalers } from "./jsonopt";
 import type { ValueCall, ValueIface } from "./valueiface";
+import type { Reorder } from "./reorder";
 import type { CaptureSym, GlobalSym, LocalSym, PackageInfo, PkgSym, Sym, Ty, Unit } from "./scope";
 
 type ProcLit = Extract<Expr, { k: "ProcLit" }>;
@@ -540,6 +541,8 @@ export class Emitter {
         }
         // Odin rejects `do { ... }`, which a statement macro that expands to several statements gives
         return this.block(n).replace(/^do\s+(?=\{)/, "");
+      case "StructType":
+        return A(n)._reorder ? this.reorderedStruct(n, A(n)._reorder) : this.generic(n);
       case "Switch": {
         const sh: StrHash | undefined = A(n)._strHash;
         if (sh) {
@@ -1032,6 +1035,18 @@ export class Emitter {
         (this.an.pooled.has(sym) ? "\n\n" + this.poolHelpers(sym).trimEnd() : ""),
     );
     return keepLines(t, `struct { data: rawptr, __vtable: ^__${name}_VTable }`);
+  }
+
+  /** -opt: a struct with its field groups in a new order; each slot keeps its original spacing and separators. */
+  private reorderedStruct(n: Extract<Expr, { k: "StructType" }>, r: Reorder): string {
+    const spans = n.fields.map((f) => ({ start: f.names[0].tok, end: f.type!.end }));
+    const text = (i: number) => this.generic(n, spans[i].start, spans[i].end);
+    let out = this.generic(n, n.start, spans[0].start);
+    spans.forEach((slot, i) => {
+      out += this.ws(n.toks[slot.start].pre) + text(r.order[i]);
+      out += this.ws(n.toks[slot.end].pre) + this.generic(n, slot.end, i + 1 < spans.length ? spans[i + 1].start : n.end);
+    });
+    return out;
   }
 
   /** -opt: `__I_Value`, the union an inline interface array holds; written once per file. */

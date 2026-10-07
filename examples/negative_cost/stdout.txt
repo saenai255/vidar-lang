@@ -7,6 +7,7 @@ bounds, hoisted            100
 bounds, lockstep           22114880
 bounds, offsets            61
 string switch              487500
+structs, reordered         10666636
 fib, memoized              6765
 fmt %v of a struct         179890
 json.marshal of a struct   203890

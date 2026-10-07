@@ -1,0 +1,52 @@
+package main
+
+import "core:fmt"
+
+// u8, f64, u8, f64, bool: 40 bytes as written, 24 with the f64s first
+Particle :: struct {
+	alive: bool,
+	x: f64,
+	kind: u8,
+	y: f64,
+	hot: bool,
+}
+
+// already tight: left alone
+Tight :: struct { a, b: f64, c: u32, d: u16 }
+
+// printed: fmt shows fields in memory order, so it stays as written
+Shown :: struct { a: u8, b: f64, c: u8 }
+
+// measured
+Measured :: struct { a: u8, b: f64, c: u8 }
+
+// a map key: its hash follows its bytes
+Key :: struct { a: u8, b: i64, c: u8 }
+
+step :: proc(ps: []Particle) -> (sum: f64) {
+	for &p in ps {
+		if p.alive do p.x += p.y
+		sum += p.x * f64(p.kind)
+	}
+	return
+}
+
+main :: proc() {
+	ps := make([]Particle, 4)
+	defer delete(ps)
+	// positional and named literals both keep their meaning
+	ps[0] = Particle{true, 1.5, 2, 0.5, false}
+	ps[1] = {alive = true, x = 2, kind = 3, y = 1}
+	arr := [2]Particle{{false, 9, 1, 1, true}, {true, 1, 1, 1, true}}
+	ps[2], ps[3] = arr[0], arr[1]
+	fmt.println(step(ps), ps[0].hot, ps[2].hot, ps[3].x)
+
+	t := Tight{1, 2, 3, 4}
+	fmt.println(t.a + t.b + f64(t.c) + f64(t.d))
+	fmt.println(Shown{1, 2, 3})
+	fmt.println(size_of(Measured) > 0)
+	m: map[Key]int
+	defer delete(m)
+	m[{1, 2, 3}] = 4
+	fmt.println(m[{1, 2, 3}])
+}

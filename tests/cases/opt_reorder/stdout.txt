@@ -1,0 +1,5 @@
+24 false true 2
+10
+Shown{a = 1, b = 2, c = 3}
+true
+4

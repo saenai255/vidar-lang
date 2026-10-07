@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import { memoPlan, selfCalls } from "./memo";
+import { reorderStructs } from "./reorder";
 import { Expr, Node, children } from "./ast";
 import { A, Analyzer, CallSite, ClosureSpec, INT_TYPES, markInlined, SpecInfo, nodeText, posOf, unwrapProc } from "./analyzer";
 import type { GlobalSym, LocalSym, Sym } from "./scope";
@@ -37,6 +38,7 @@ export function autoOptimize(an: Analyzer): void {
     if (!off?.has("memo") && autoMemo(an, sym, lit)) continue;
     if (!off?.has("specialize")) autoSpecialize(an, sym, lit, closureSpecialize(an, sym, lit, sites));
   }
+  reorderStructs(an);
 }
 
 /** Calls passing closure literals call a copy that calls their bodies directly. Returns the other calls. */

@@ -27,7 +27,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 14 | 10 | Wider bounds-check elimination | perf | merged |
 | 15 | 11 | String `switch` through a perfect hash | perf | merged |
 | 16 | 13 | Automatic `@(memo)` and two-parameter `@(table)` | perf | merged |
-| 17 | 15 | Struct field reordering, then hot/cold splitting | perf | todo |
+| 17 | 15 | Struct field reordering, then hot/cold splitting | perf | merged (reordering only) |
 
 ## Tooling
 
@@ -181,6 +181,13 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **15, struct field reordering** merged; hot/cold splitting is not done.
+  - `src/reorder.ts`, run once per program from `autoOptimize`. Candidates: plain structs declared in the program (not in `vidar:sched`), at least two field groups, every field type's size and alignment known exactly (Odin's rules: basic types, pointers, slices 16, dynamic arrays 40, maps 32, fixed arrays, enums by base type, nested plain structs; closures are out, since `VIDAR_CLOSURE_ENV` sets their size). Field groups are sorted by alignment, largest first, stably; only when that saves bytes.
+  - Refused, with the reason as a `not reordered` hint, when anything could see the layout: `size_of`/`align_of`/`offset_of`/`type_info_of`/`typeid_of`/`type_of`/`transmute` on it, a cast or conversion of something holding it, a map key holding it, a value holding it converted to `any` (a declaration or a vidar proc parameter of type `any`), a value holding it passed to anything but vidar procs, interface methods and closures (that is: core, foreign and proc values, and so fmt and encoding/json), a mention in a foreign block, or an exported proc taking it. Values whose type the analyzer can't tell are judged by the variables in them.
+  - Positional literals: typed ones, and untyped ones inside a typed array literal or as a typed declaration's value, get field names (`_fix` prefixes). An untyped positional literal vidar can't place refuses every candidate with that many fields.
+  - `negative_cost` "structs, reordered" (1,000,000 40-byte structs that become 24, one pass per rep): 112 → 53 ms.
+  - Not done, hot/cold splitting: inside one proc, automatic `#soa` already splits every field into its own array, which serves the same loops. Splitting arrays that cross proc boundaries means rewriting every parameter and call they pass through, which is a different, interprocedural optimization.
+  - New case `opt_reorder`.
 - **6, value interfaces** merged, as the second option: an `-opt` rewrite where nobody can tell the difference, with no new syntax (the value form for the coder to choose can still come later).
   - `src/valueiface.ts`: a local `[dynamic]I` (typed or from `make`) of a closed interface without bases or extensions, whose every use is `append(&xs, new_clone(v))` with `v` of an implementation type, a `for s in xs` whose `s` is only a method receiver, `m(xs[i], ...)`, `len`, `cap`, `clear(&xs)` or `delete(xs)`, and nothing in a loop over it touching it. Not captured by a closure. Each implementation at most 64 bytes, and each bound method uses its receiver only through `.field` or `^`, so no pointer to an element can be kept past a reallocation.
   - Emitted as `[dynamic]__I_Value` (`union { T1, T2, ... }`), `append(&xs, v)`, `for &s in xs`, and `__I_v_m(&s, ...)`: a `#force_inline` type switch calling the bound proc with `&v`.
