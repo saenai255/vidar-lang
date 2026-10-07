@@ -46,8 +46,8 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 33 | 37 | Debug race check at N threads | scheduler | todo |
 | 34 | 38 | Scheduler trace for Perfetto | scheduler | todo |
 | 35 | 39 | Work stealing of goroutines that have run | scheduler | todo |
-| 36 | 40 | Closure bodies that use the enclosing proc's constants, types and `$T` | language | todo |
-| 37 | 41 | Anonymous struct literals everywhere | language | todo |
+| 36 | 40 | Closure bodies that use the enclosing proc's constants, types and `$T` | language | merged |
+| 37 | 41 | Anonymous struct literals everywhere | language | merged |
 | 38 | 42 | Generic impls, and proc groups or polymorphic procs as bound methods | language | merged |
 | 39 | 43 | Resolve field and enum-member uses in the analyzer | editor | todo |
 | 40 | 44 | Forward rewritten lines to ols | editor | todo |
@@ -57,7 +57,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 44 | 48 | Hot/cold splitting across procs | perf | todo |
 | 45 | 49 | Loop fusion and pipeline macros | perf | todo |
 | 46 | 50 | `vidar new` | dev tooling | merged |
-| 47 | 51 | Windows support | platform | todo |
+| 47 | 51 | Windows support | platform | merged |
 
 ## Tooling
 
@@ -364,6 +364,11 @@ For a `[dynamic]T` whose hot loops (in any proc it is passed to) touch few field
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **51, Windows** merged, never run on Windows (no wine; Odin can't link for Windows from linux). `switch_windows_amd64.asm`: Win64 callee-saved registers, xmm6 to xmm15 and the TIB's StackBase, StackLimit and DeallocationStack switched with the stack; `vidar_entry` has shadow space and `.pdata`/`.xdata` unwind info that ends stack walks at a goroutine's base. `core:nbio` has an IOCP backend, so nothing is gated. `src/paths.ts` compares paths without case and with either slash on Windows (run map, `odin check` on save, the ols bridge); programs are named `.exe`. Checked: `odin check -target:windows_amd64` and `-build-mode:obj` on the sched examples (also at 4 threads), `nasm -f win64`, `lld-link /force:unresolved` leaving only system symbols, and the real routine run on linux against a fake TIB through the win64 calling convention (identical output, register round trips). A CI windows job is the next step.
+- **40, closures and the enclosing proc's declarations** merged. Local constants and types a closure body uses are lifted to file scope as `__Local_N` (the local becomes an alias, so both are one type); a body that needs `$T`, `$N` or `#procedure` gets its `__closure_N` declared inside the proc, before the statement holding it. Those aren't copied into specialized callees. Cases `closure_local_decls`, `closure_poly`; the `closure_local_const` error is gone.
+- **41, anonymous struct literals everywhere** merged: at file scope, in `if`/`for`/`switch` initializers, and as arguments to `$T`, `any` or fmt's print procs, written as one expression `struct { a: type_of(__anon_typed(v)) }{a = v}` (the `type_of` copy never runs, so each value is evaluated once). Not for other callees vidar can't see. Case `anon_structs_everywhere`.
+  - Found by 40: `X :: #procedure` at a line end didn't end the statement; the lexer now inserts a semicolon after value directives (`#procedure`, `#file`, `#line`, `#directory`, `#caller_location`, `#caller_expression`).
+- **CI's first run** failed: ubuntu has no `nasm` (Odin assembles the scheduler's `.asm` with it), and on macOS FSEvents reported writes made before a watch began, so two `--watch` tests reran twice. The workflow installs nasm; `--watch` reruns only when a watched file's mtime or size changed.
 - **42, generic impls** merged. `impl I for Box($T) { m = box_m }` (bound procs take `^Box($T)` or a more general `^$T`), `impl I for Box(int)` for one instance, and `m = group` / `m = poly`. A generic impl emits a polymorphic `__I_from_Box_T` with its vtable in a `@(static, rodata)` local, so Odin makes one per instance used, including from generic code. A group binds the member taking `^T` with the method's arity (an exact `^T` beats polymorphic ones); a polymorphic bound proc more general than `^T` gets a `#force_inline` wrapper. New errors: overlap with a covered instance, a concrete receiver in a generic impl, `X(..)` of a non-parametric type, no or several fitting group members, `Pool(I)` with a generic impl. `-opt`: devirtualization and inline interface arrays skip generic impls (hinted); `@(no_alloc)` follows into them, and no longer treats `T(x)` with a polymorphic `$T` as a call. Cases `interface_generic`, `opt_iface_generic`.
 - **33, escape analysis through calls** merged. `src/escape.ts` computes, for each proc's parameters, whether they escape (stored through a pointer, in a global or slice, appended to something not owned, passed to `sched.go*` or to an escaping parameter), to a fixed point over the call graph across packages; `checkCallEscapes` reports `&x` closures and interface values that escape through a call, naming the chain (`passed to later (line 17), where it is passed to keep (line 11), where it is appended to memory behind a pointer (line 7)`). Departures from the spec: a returned parameter flows back as the call's value (`return id(f)` is an error, `id(f)()` isn't); `main` is exempt, since its frame lasts until exit (`sched.go(proc[&wg, ...])` from `main` stays legal; from any other proc it is an error, even when that proc waits); storing through any pointer counts, even into the caller's own local (a false positive, in Limits). Proc values, closures, interface methods, foreign and `core:` callees are trusted. The `&x` quick fix uses the same summaries.
 - **34, closure types through calls** merged. Not named results: `make_closures` was `#force_no_inline proc`, and the type lookup didn't look through a directive. Case `closure_named_results`.
