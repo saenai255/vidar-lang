@@ -166,6 +166,7 @@ load_config :: proc(path: string) -> (Config, Error) {
 - **A value starting with `-` or `&`** is ambiguous after `or_return`, because in Odin `f() or_return - 1` subtracts from the result. vidar rejects it: write `or_return (-1)` for the error value, or `(f() or_return) - 1` for the arithmetic.
 - **A `catch` block after a declaration or assignment must leave the scope** (`return`, `break`, `continue`, `panic`); otherwise the values would be used unset. After a bare call it may fall through.
 - **`errdefer`** looks at the procedure's last result after `return` has set it. Unnamed results are given names in the generated code, which doesn't change how the procedure is called.
+- **`or_return <value>` with named results** works like Odin's `or_return`: it sets only the error result and returns, so `errdefer` sees the other results as they were when the call failed.
 - **Lowering:** everything becomes plain Odin on the same line: `x, e := f(); if failed(e) { ... }` and `defer if failed(err) { ... }`.
 
 ## Anonymous struct literals

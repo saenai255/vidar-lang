@@ -168,7 +168,7 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - After each wave: `npm test`, `npm run bench`, and `npm run vsix` if the editor's output changed.
 
 ## Not in this batch
-- `errdefer` sees results already zeroed by a failing `or_return X`. Being fixed in a separate session.
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **`errdefer` / `or_return X` fix** merged from `claude/festive-yonath-2bae71`. In a proc with named results, a failing `or_return X` now sets only the error result and returns, as Odin's `or_return` does, so `errdefer` sees the other results as they were. Before, it returned `{}` for them first, and the cleanup missed the allocation. New case `tests/cases/errdefer_named_results`.

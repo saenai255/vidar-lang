@@ -698,13 +698,23 @@ export class Emitter {
     return { head: `${[...Array(discard).fill("_"), errVar].join(", ")} := ${call}`, tail: "" };
   }
 
-  /** `x := f() or_return .E` -> `x, e := f(); if failed(e) do return {}, .E` */
+  /** `x := f() or_return .E` -> `x, e := f(); if failed(e) do return {}, .E`; with named results, as Odin: `{ err = .E; return }` */
   private orReturn(s: Stmt): string {
-    const info: { postfix: Extract<Expr, { k: "Postfix" }>; results: number; errVar: string } = A(s)._orReturn;
+    const info: { postfix: Extract<Expr, { k: "Postfix" }>; results: number; errVar: string; proc: ProcLit } = A(s)._orReturn;
     this.fileUsesRuntime = this.usesRuntime = true;
     const { head, tail } = this.failHead(s, this.emit(info.postfix.x), info.errVar);
-    const values = [...Array(info.results - 1).fill("{}"), this.emit(info.postfix.value!)];
-    return `${head}; if ${this.failed(info.errVar)} do return ${values.join(", ")}${tail && `; ${tail}`}`;
+    const value = this.emit(info.postfix.value!);
+    const errName = this.errorResultName(info.proc.sig, A(info.proc)._nameResults);
+    const exit = errName
+      ? `{ ${errName} = ${value}; return }`
+      : `do return ${[...Array(info.results - 1).fill("{}"), value].join(", ")}`;
+    return `${head}; if ${this.failed(info.errVar)} ${exit}${tail && `; ${tail}`}`;
+  }
+
+  private errorResultName(sig: ProcSig, synthesized: boolean): string | undefined {
+    if (sig.resultsUnnamed) return synthesized ? "__err" : undefined;
+    const last = sig.results[sig.results.length - 1];
+    return last.names[last.names.length - 1].name;
   }
 
   /**

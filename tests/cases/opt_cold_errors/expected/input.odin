@@ -23,7 +23,7 @@ build :: proc(n: int) -> (out: [dynamic]int, err: Error) {
 		__fmt_0(n, err)
 		delete(out)
 	} }
-	v, __err2 := scaled(n); if __vidar.expect(__vidar.failed(__err2), false) do return {}, .Empty
+	v, __err2 := scaled(n); if __vidar.expect(__vidar.failed(__err2), false) { err = .Empty; return }
 	append(&out, v)
 	return
 }

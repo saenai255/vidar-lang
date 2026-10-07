@@ -1,0 +1,41 @@
+package main
+
+import "core:fmt"
+
+Error :: enum { None, Bad }
+
+step :: proc(fail: bool) -> Error {
+	return fail ? .Bad : .None
+}
+
+// errdefer must see `out` as it was when `step` failed, not zeroed
+read :: proc(fail: bool) -> (out: []u8, err: Error) {
+	out = make([]u8, 10)
+	errdefer {
+		fmt.println("  errdefer sees len", len(out), err)
+		delete(out)
+	}
+	step(fail) or_return .Bad
+	return
+}
+
+// unnamed results: the caller still gets zero values plus the error
+make_pair :: proc(fail: bool) -> (int, string, Error) {
+	n := 7
+	errdefer fmt.println("  errdefer (unnamed) n =", n)
+	step(fail) or_return .Bad
+	return n, "ok", .None
+}
+
+main :: proc() {
+	out, err := read(true)
+	fmt.println("read(true):", err)
+	out2, err2 := read(false)
+	fmt.println("read(false):", len(out2), err2)
+	delete(out2)
+
+	n, s, e := make_pair(true)
+	fmt.println("make_pair(true):", n, s == "", e)
+	n, s, e = make_pair(false)
+	fmt.println("make_pair(false):", n, s, e)
+}

@@ -1,0 +1,6 @@
+  errdefer sees len 10 Bad
+read(true): Bad
+read(false): 10 None
+  errdefer (unnamed) n = 7
+make_pair(true): 0 true Bad
+make_pair(false): 7 ok None
