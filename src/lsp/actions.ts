@@ -4,6 +4,9 @@ import { Node, Stmt, children } from "../ast";
 import { A, OptHint, importName } from "../analyzer";
 import type { Program as Analysis } from "../project";
 import { scopeAt } from "./features";
+import { spawnSync } from "node:child_process";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 
 /**
  * Quick fixes, built from the data the analyzer attaches to its errors (`CompileError.fix`), the
@@ -13,7 +16,7 @@ import { scopeAt } from "./features";
 
 export const NEW_CLONE_TITLE = "Allocate a heap copy (new_clone, caller frees)";
 
-/** Packages a bare `name.member` most likely means, by the name they are imported as. */
+/** Packages a bare `name.member` most likely means, by the name they are imported as; the only ones known when `odin root` can't be read. */
 const KNOWN_PACKAGES: Record<string, string> = {
   fmt: "core:fmt", strings: "core:strings", strconv: "core:strconv", os: "core:os", mem: "core:mem", virtual: "core:mem/virtual",
   math: "core:math", linalg: "core:math/linalg", rand: "core:math/rand", bits: "core:math/bits", cmplx: "core:math/cmplx",
@@ -24,6 +27,73 @@ const KNOWN_PACKAGES: Record<string, string> = {
   small_array: "core:container/small_array", net: "core:net", nbio: "core:nbio", c: "core:c", libc: "core:c/libc", runtime: "base:runtime",
   intrinsics: "base:intrinsics", sched: "vidar:sched",
 };
+
+/** Directories under `odin root` that hold no library packages: tests, examples and internal (`_x`) packages. */
+const SKIP_DIRS = /^(\.|_)|^(tests?|examples?)$/;
+
+let odinPath = "odin";
+let odinIndex: Map<string, string[]> | null | undefined;
+
+/** The `odin` the package index is read from (the language server's `odinPath` setting). */
+export function setOdinPath(path: string): void {
+  if (path !== odinPath) odinIndex = undefined;
+  odinPath = path;
+}
+
+const collectionRank = (path: string) => ["core", "base", "vendor"].indexOf(path.slice(0, path.indexOf(":")));
+
+/**
+ * Every package directory (one holding a `.odin` file) under `root`'s `core/`, `base/` and
+ * `vendor/`, by its last path part: `linalg` -> `core:math/linalg`. Each list is in order of
+ * preference: core, base, vendor, then the shallowest.
+ */
+export function packageIndex(root: string): Map<string, string[]> {
+  const index = new Map<string, string[]>();
+  const walk = (collection: string, dir: string, rel: string) => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    const name = rel.slice(rel.lastIndexOf("/") + 1);
+    if (rel && /^[A-Za-z_]\w*$/.test(name) && entries.some((e) => e.isFile() && e.name.endsWith(".odin"))) {
+      const list = index.get(name) ?? [];
+      list.push(`${collection}:${rel}`);
+      index.set(name, list);
+    }
+    for (const e of entries) if (e.isDirectory() && !SKIP_DIRS.test(e.name)) walk(collection, join(dir, e.name), rel ? `${rel}/${e.name}` : e.name);
+  };
+  for (const collection of ["core", "base", "vendor"]) walk(collection, join(root, collection), "");
+  for (const list of index.values())
+    list.sort((x, y) => collectionRank(x) - collectionRank(y) || x.split("/").length - y.split("/").length || (x < y ? -1 : 1));
+  return index;
+}
+
+/** The package index of `odin root`, read once; null when `odin` can't be run. */
+function odinPackages(): Map<string, string[]> | null {
+  if (odinIndex !== undefined) return odinIndex;
+  odinIndex = null;
+  try {
+    const r = spawnSync(odinPath, ["root"], { encoding: "utf8", timeout: 5000 });
+    const root = r.status === 0 ? r.stdout.trim() : "";
+    if (root) odinIndex = packageIndex(root);
+  } catch {}
+  return odinIndex;
+}
+
+/**
+ * The packages a bare `name.member` can mean: the table's entry first, then every package of
+ * `odin root` named `name`. `preferred` is the one a fix may apply without asking: the table's,
+ * the only one, or the only one outside `vendor:`.
+ */
+export function packagesNamed(name: string, index: Map<string, string[]> | null = odinPackages()): { paths: string[]; preferred?: string } {
+  const known = Object.hasOwn(KNOWN_PACKAGES, name) ? KNOWN_PACKAGES[name] : undefined;
+  const paths = [...new Set([...(known ? [known] : []), ...(index?.get(name) ?? [])])];
+  const library = paths.filter((p) => !p.startsWith("vendor:"));
+  const preferred = known ?? (paths.length === 1 ? paths[0] : library.length === 1 ? library[0] : undefined);
+  return { paths: preferred ? [preferred, ...paths.filter((p) => p !== preferred)] : paths, preferred };
+}
 
 /** -opt decisions an attribute undoes: the attribute that asks for it explicitly, and its opt-out. */
 const OPT_OUTS: { label: RegExp; wanted?: string; attr: string; what: string }[] = [
@@ -70,11 +140,14 @@ export const fixCode = (err: CompileError): string | undefined => err.fix?.code;
 
 export interface MissingImport {
   name: string;
-  path: string;
+  /** every package it can be, the preferred one first */
+  paths: string[];
+  /** the one a fix may apply without asking, if any */
+  preferred?: string;
   range: Range;
 }
 
-/** Names used as `name.member` that no declaration or import of `file` gives, and that a known package is imported as. */
+/** Names used as `name.member` that no declaration or import of `file` gives, and that a package is imported as. */
 export function missingImports(a: Analysis, file: string, text: string): MissingImport[] {
   const pkg = a.packages.find((p) => p.files.some((f) => f.path === file));
   const f = pkg?.files.find((x) => x.path === file);
@@ -88,16 +161,16 @@ export function missingImports(a: Analysis, file: string, text: string): Missing
     if (n.k === "ProcLit" && n.comptime) return;
     if (n.k === "Selector" && n.x.k === "Ident" && !A(n)._pkgMember && !A(n.x)._sym) {
       const name = n.x.name;
-      const path = Object.hasOwn(KNOWN_PACKAGES, name) ? KNOWN_PACKAGES[name] : undefined;
       const tok = n.x.toks[n.x.start];
-      if (path && tok?.pos.file === file && !imported.has(name) && !declared(name)) {
+      const { paths, preferred } = tok?.pos.file === file && !imported.has(name) ? packagesNamed(name) : { paths: [], preferred: undefined };
+      if (paths.length && !declared(name)) {
         const range = tokRange(tok);
         const { scope } = scopeAt(a, file, range.start);
         let known = false;
         try {
           known = !!a.analyzer.lookup(name, scope, null);
         } catch {}
-        if (!known) out.push({ name, path, range });
+        if (!known) out.push({ name, paths, preferred, range });
       }
     }
     for (const c of children(n)) visit(c);
@@ -112,7 +185,10 @@ export function importDiagnostics(a: Analysis, file: string, text: string): Diag
     severity: DiagnosticSeverity.Error,
     source: "vidar",
     code: "missing-import",
-    message: `'${m.name}' is not declared: is it the package "${m.path}"? This file doesn't import it`,
+    message:
+      m.paths.length === 1
+        ? `'${m.name}' is not declared: is it the package "${m.paths[0]}"? This file doesn't import it`
+        : `'${m.name}' is not declared: is it one of the packages ${m.paths.map((p) => `"${p}"`).join(", ")}? This file doesn't import any`,
   }));
 }
 
@@ -220,10 +296,12 @@ function quickFixes(req: ActionRequest, range: Range): CodeAction[] {
 
   const seenImports = new Set<string>();
   for (const m of missingImports(a, file, text)) {
-    if (!overlaps(range, m.range.start.line, m.range.end.line) || seenImports.has(m.path)) continue;
-    seenImports.add(m.path);
-    const edit = importEdit(a, file, [m.path]);
-    if (edit) out.push(action(`Add import "${m.path}"`, [edit], true, diagsAt("missing-import", m.range.start)));
+    if (!overlaps(range, m.range.start.line, m.range.end.line) || seenImports.has(m.name)) continue;
+    seenImports.add(m.name);
+    for (const path of m.paths) {
+      const edit = importEdit(a, file, [path]);
+      if (edit) out.push(action(`Add import "${path}"`, [edit], path === m.preferred, diagsAt("missing-import", m.range.start)));
+    }
   }
 
   out.push(...optOuts(req, range));

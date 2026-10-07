@@ -190,6 +190,7 @@ function odinCheck(dir: string): void {
 connection.onInitialize((params): InitializeResult => {
   const opts = params.initializationOptions ?? {};
   settings = { ...settings, ...opts };
+  Actions.setOdinPath(settings.odinPath);
   hintRefresh = !!params.capabilities.workspace?.inlayHint?.refreshSupport;
   semanticRefresh = !!params.capabilities.workspace?.semanticTokens?.refreshSupport;
   lensRefresh = !!params.capabilities.workspace?.codeLens?.refreshSupport;

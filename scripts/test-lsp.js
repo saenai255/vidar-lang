@@ -835,6 +835,18 @@ function change(text) {
   acts = await actionsOn("fmt.println");
   const imp = acts.find((x) => x.title === 'Add import "core:fmt"');
   check("a missing import is added after the last one", imp?.isPreferred && edited(imp).includes('import "core:strings"\nimport "core:fmt"\n'), titles(acts));
+  // packages outside the fixed table come from `odin root`
+  const hasOdin = spawnSync("odin", ["root"]).status === 0;
+  if (!hasOdin) console.log("SKIP lsp: odin not on PATH, so only the fixed package table is known");
+  else {
+    check("a package outside the fixed table is found under odin root", diagOn("xml.Document", "missing-import")?.message.includes('"core:encoding/xml"'), ads);
+    check("a name two packages share lists both", /"core:crypto\/noise".*"core:math\/noise"/.test(diagOn("noise.noise_2d", "missing-import")?.message ?? ""), ads);
+    acts = await actionsOn("xml.Document");
+    const xmlImp = acts.find((x) => x.title === 'Add import "core:encoding/xml"');
+    check("its import is the preferred fix", xmlImp?.isPreferred && edited(xmlImp).includes('import "core:strings"\nimport "core:encoding/xml"\n'), titles(acts));
+    acts = await actionsOn("noise.noise_2d");
+    check("a shared name offers each package, none preferred", acts.length === 2 && acts.every((x) => !x.isPreferred && x.title.startsWith('Add import "core:')) && acts.some((x) => x.title.includes("core:math/noise")), titles(acts));
+  }
   acts = await actionsOn("bits :: proc");
   const noTable = acts.find((x) => x.title.includes("@(no_table)"));
   check("an automatic table can be turned off with @(no_table)", noTable && !noTable.isPreferred && edited(noTable).includes("@(no_table)\nbits :: proc"), titles(acts));
@@ -844,9 +856,10 @@ function change(text) {
   const all = await actionsOn("package main", ["source.fixAll"]);
   const fixedAll = edited(all[0]);
   check("fix all applies the preferred fixes and never allocates", all.length === 1 && !fixedAll.includes("new_clone") && fixedAll.includes("s: Shape = &sq") && fixedAll.includes("proc[&n]") && fixedAll.includes('import "core:fmt"') && fixedAll.includes("return built"), fixedAll);
+  if (hasOdin) check("fix all adds an unambiguous import from odin root, and not a shared name's", fixedAll.includes('import "core:encoding/xml"') && !fixedAll.includes("noise\""), fixedAll);
 
   // fixed by hand where no preferred fix applies: the program has no errors left
-  const fixedText = fixedAll.replace("return built", "return new_clone(built)").replace("area(Shape(p))", "area(Shape(new_clone(p)))");
+  const fixedText = fixedAll.replace("return built", "return new_clone(built)").replace("area(Shape(p))", "area(Shape(new_clone(p)))").replace('import "core:strings"\n', 'import "core:strings"\nimport "core:math/noise"\n');
   const aFixed = nextDiagnostics((d) => d.uri === aUri);
   notify("textDocument/didChange", { textDocument: { uri: aUri, version: 2 }, contentChanges: [{ text: fixedText }] });
   const afd = (await aFixed).diagnostics;

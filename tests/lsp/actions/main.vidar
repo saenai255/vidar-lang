@@ -42,4 +42,6 @@ main :: proc() {
 	_ = make_shape()
 	_ = of_param(sq)
 	_ = counter()
+	_ = xml.Document{}
+	_ = noise.noise_2d(1, {0, 0})
 }
