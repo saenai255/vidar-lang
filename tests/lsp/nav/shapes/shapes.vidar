@@ -1,0 +1,34 @@
+package shapes
+
+Shape :: interface { area }
+
+area :: proc(s: Shape) -> f64 ---
+
+Solid :: interface { using Shape, volume }
+
+volume :: proc(s: Solid) -> f64 ---
+
+Sq :: struct { side: f64 }
+
+Cube :: struct { side: f64 }
+
+sq_area :: proc(q: ^Sq) -> f64 { return q.side * q.side }
+
+cube_area :: proc(c: ^Cube) -> f64 { return 6 * c.side * c.side }
+
+cube_volume :: proc(c: ^Cube) -> f64 { return c.side * c.side * c.side }
+
+impl Shape for Sq { area = sq_area }
+
+impl Solid for Cube { area = cube_area, volume = cube_volume }
+
+grow_sq :: proc(q: ^Sq) { q.side += 1 }
+
+grow_cube :: proc(c: ^Cube) { c.side += 1 }
+
+grow :: proc{grow_sq, grow_cube}
+
+total :: proc(xs: []Shape) -> (t: f64) {
+	for x in xs do t += area(x)
+	return
+}

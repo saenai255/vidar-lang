@@ -318,6 +318,77 @@ function change(text) {
   const sLabels = (sComp.result ?? []).map((c) => c.label);
   check("completion after sched. lists the public API only", ["go", "make_chan", "select", "on_recv", "Chan", "sleep"].every((x) => sLabels.includes(x)) && !sLabels.includes("park"), JSON.stringify(sLabels));
 
+  // ---- workspace symbols, implementations and the call hierarchy (tests/lsp/nav) ----
+  const nav = realpathSync(mkdtempSync(join(tmpdir(), "vidar-lsp-nav-")));
+  cpSync("tests/lsp/nav", nav, { recursive: true });
+  const nMain = pathToFileURL(join(nav, "main.vidar")).toString();
+  const nShapes = pathToFileURL(join(nav, "shapes", "shapes.vidar")).toString();
+  const nText = { [nMain]: readFileSync(join(nav, "main.vidar"), "utf8"), [nShapes]: readFileSync(join(nav, "shapes", "shapes.vidar"), "utf8") };
+  /** Like `at`, in one of the nav fixture's files. */
+  const nAt = (u, lineHas, needle = lineHas, nth = 0) => {
+    const ls = nText[u].split("\n");
+    const line = ls.findIndex((l) => l.includes(lineHas));
+    if (line < 0) throw new Error(`no line with ${lineHas}`);
+    let col = -1;
+    for (let i = 0; i <= nth; i++) col = ls[line].indexOf(needle, col + 1);
+    if (col < 0) throw new Error(`no '${needle}' on line ${line + 1}`);
+    return { line, character: col + 1 };
+  };
+  const nLine = (u, lineHas) => nText[u].split("\n").findIndex((l) => l.includes(lineHas));
+  const nDiag = nextDiagnostics((d) => d.uri === nMain);
+  notify("textDocument/didOpen", { textDocument: { uri: nMain, languageId: "vidar", version: 1, text: nText[nMain] } });
+  check("navigation fixture has no errors", (await nDiag).diagnostics.length === 0, "");
+
+  const wsCube = (await request("workspace/symbol", { query: "cube" })).result ?? [];
+  const wsNames = wsCube.map((s) => `${s.containerName}.${s.name}`);
+  check("workspace symbols search every analyzed package", ["shapes.Cube", "shapes.cube_area", "shapes.cube_volume", "shapes.grow_cube"].every((n) => wsNames.includes(n)), JSON.stringify(wsNames));
+  const wsArea = wsCube.find((s) => s.name === "cube_area");
+  check("workspace symbols point at the declaration", wsArea?.location?.uri === nShapes && wsArea.location.range.start.line === nLine(nShapes, "cube_area :: proc") && wsArea.kind === 12, JSON.stringify(wsArea));
+  const wsFuzzy = ((await request("workspace/symbol", { query: "cbvol" })).result ?? []).map((s) => s.name);
+  check("workspace symbols match the query's letters in order", wsFuzzy.includes("cube_volume") && !wsFuzzy.includes("cube_area"), JSON.stringify(wsFuzzy));
+  const wsAll = ((await request("workspace/symbol", { query: "" })).result ?? []).map((s) => s.name);
+  check("workspace symbols never list generated names", wsAll.includes("report") && wsAll.includes("Shape") && !wsAll.some((n) => n.startsWith("__")), JSON.stringify(wsAll.filter((n) => n.startsWith("_"))));
+
+  const implOf = async (u, pos) => ((await request("textDocument/implementation", { textDocument: { uri: u }, position: pos })).result ?? []).map((l) => `${l.uri === nShapes ? "shapes" : l.uri}:${l.range.start.line}`);
+  const implShape = await implOf(nMain, nAt(nMain, "a, b: shapes.Shape", "Shape"));
+  check("implementations of an interface, from another package, include types implementing an extension of it",
+    implShape.length === 2 && implShape.includes(`shapes:${nLine(nShapes, "Sq :: struct")}`) && implShape.includes(`shapes:${nLine(nShapes, "Cube :: struct")}`), JSON.stringify(implShape));
+  const implArea = await implOf(nShapes, nAt(nShapes, "area :: proc(s: Shape)", "area"));
+  check("implementations of an interface method are the procs bound to it",
+    implArea.length === 2 && implArea.includes(`shapes:${nLine(nShapes, "sq_area :: proc")}`) && implArea.includes(`shapes:${nLine(nShapes, "cube_area :: proc")}`), JSON.stringify(implArea));
+  const implProc = await implOf(nShapes, nAt(nShapes, "sq_area :: proc", "sq_area"));
+  check("a proc has no implementations", implProc.length === 0, JSON.stringify(implProc));
+
+  const prepare = async (u, pos) => (await request("textDocument/prepareCallHierarchy", { textDocument: { uri: u }, position: pos })).result ?? [];
+  const calls = async (dir, item) => ((await request(`callHierarchy/${dir}Calls`, { item })).result ?? []).map((c) => {
+    const it = c.from ?? c.to;
+    return { name: it.name, uri: it.uri, lines: c.fromRanges.map((r) => r.start.line) };
+  });
+  const callNames = (cs) => cs.map((c) => c.name).sort().join(",");
+  const [report] = await prepare(nMain, nAt(nMain, "report :: proc", "report"));
+  check("call hierarchy prepares on a proc's declaration", report?.name === "report" && report.uri === nMain && report.selectionRange.start.line === nLine(nMain, "report :: proc"), JSON.stringify(report));
+  const repOut = await calls("outgoing", report);
+  check("outgoing calls go through proc groups and macro expansions, at the macro call",
+    callNames(repOut) === "doubled,grow_cube,grow_sq,sq_area" && repOut.find((c) => c.name === "sq_area")?.lines[0] === nLine(nMain, "return doubled!") && repOut.find((c) => c.name === "grow_sq")?.uri === nShapes, JSON.stringify(repOut));
+  const repIn = await calls("incoming", report);
+  check("incoming calls of a proc", callNames(repIn) === "main" && repIn[0].lines[0] === nLine(nMain, "fmt.println(shapes.total"), JSON.stringify(repIn));
+  // from the other package's file: callers in the importing package are found too
+  notify("textDocument/didOpen", { textDocument: { uri: nShapes, languageId: "vidar", version: 1, text: nText[nShapes] } });
+  const [sqArea] = await prepare(nShapes, nAt(nShapes, "sq_area :: proc", "sq_area"));
+  const sqIn = await calls("incoming", sqArea);
+  check("incoming calls cross packages and come through a closed interface's method",
+    callNames(sqIn) === "main,report,total" && sqIn.find((c) => c.name === "total")?.uri === nShapes && sqIn.find((c) => c.name === "main")?.uri === nMain, JSON.stringify(sqIn));
+  const [areaItem] = await prepare(nMain, nAt(nMain, "fmt.println(shapes.total", "area"));
+  const areaIn = await calls("incoming", areaItem);
+  check("call hierarchy on an interface method call", areaItem?.name === "area" && areaItem.uri === nShapes && callNames(areaIn) === "main,total", JSON.stringify([areaItem, areaIn]));
+  const [mainItem] = await prepare(nMain, nAt(nMain, "main :: proc", "main"));
+  const mainOut = await calls("outgoing", mainItem);
+  check("outgoing calls of an interface method call list the bound procs", callNames(mainOut) === "cube_area,report,sq_area,total", JSON.stringify(mainOut));
+  const [growItem] = await prepare(nShapes, nAt(nShapes, "grow :: proc{", "grow"));
+  check("a proc group's outgoing calls are its members", callNames(await calls("outgoing", growItem)) === "grow_cube,grow_sq", "");
+  const noItem = await prepare(nMain, nAt(nMain, "sq := shapes.Sq", "sq"));
+  check("no call hierarchy on a variable", noItem.length === 0, JSON.stringify(noItem));
+
   // ---- macros, comptime code and interfaces: code the analyzer expands or folds away ----
   const mac = realpathSync(mkdtempSync(join(tmpdir(), "vidar-lsp-macros-")));
   cpSync("tests/lsp/macros", mac, { recursive: true });

@@ -542,6 +542,9 @@ Bounds checks rarely matter: LLVM already removes most of them in loops like the
 | References / rename | Follows a variable through closure capture lists and into macro arguments; works across packages. |
 | Completion | After `pkg.`, the package's public members; after `value.`, struct fields; otherwise everything in scope, plus macros and keywords. While the line you're typing doesn't parse yet, completion uses the last good analysis. |
 | Outline | Procs, macros, structs (fields), interfaces (methods), impl blocks (bindings). |
+| Workspace symbols | Every global of every package the server has analyzed (each open program and what it imports), by substring or by the query's letters in order. Generated `__` names are left out. |
+| Go to implementation | On an interface, the types implementing it, also through interfaces that extend it; on an interface method, the procs bound to it in each `impl`. A plain proc has none. |
+| Call hierarchy | Incoming and outgoing calls of procs, proc groups, interface methods and macros, across packages. A call to a proc group counts as a call to each of its members; a call to a closed interface's method (one no other package extends) counts as a call to every proc bound to it. Calls a macro expands to count at the macro call, and calls in closures at the proc that holds them. Calls through closure values and proc variables aren't followed. |
 | Plain Odin via ols | If [ols](https://github.com/DanielGavin/ols) is on your PATH, requests vidar can't answer go to it: hover, definition and signature help for core library procs and types, and `fmt.`-style completion (merged with vidar's own). See below. |
 | Inlay hints | What `-opt` would decide, without building with it: `table` / `specialized ×2` after a proc's name, `unchecked` after a statement whose indexes are proven in bounds, `grouped alloc`, `fmt inlined`, and `direct` / `devirtualized` / `vtable` after an interface method call. The tooltip gives the reason. The setting `optHints` (initialization option or `vidar.optHints` in `workspace/didChangeConfiguration`) is `"on"` (default), `"all"` (also what `-opt` decided against, e.g. `no table`) or `"off"`. They come from a second analysis with `-opt` on, made only when hints are requested; diagnostics and generated code are unaffected. |
 | `vidar/generatedOdin` | Custom request that returns the generated Odin for a file. |
@@ -608,6 +611,7 @@ npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many tim
   - completion, including privacy across packages
   - hover, definition, signature help and completion forwarded to ols (skipped when `ols` is not on PATH)
   - the outline and the generated-Odin request
+  - workspace symbols, go to implementation and the call hierarchy, across packages, proc groups, an extended interface and a macro (`tests/lsp/nav`)
   - `-opt` inlay hints (`tests/lsp/opt`), their setting, and that they follow edits
 
 ## Source layout
@@ -636,7 +640,7 @@ npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many tim
 | `src/cli.ts` | `build` / `run` / `check` / `emit` |
 | `src/watch.ts` | `--watch`: the files of a program, the watch loop (`fs.watch` on each package directory, polling as the fallback, debounced), and rerunning the command in a child process that is killed on change |
 | `src/bin.ts` | entry point of the standalone binary (`vidar`, `vidar-lsp`) |
-| `src/lsp/` | language server: `features.ts` (index, hover, definition, completion, …) and `server.ts` (protocol, `odin check` on save) and `odin.ts` (shadow tree and forwarding to ols) |
+| `src/lsp/` | language server: `features.ts` (index, hover, definition, completion, …), `navigation.ts` (workspace symbols, implementations, call hierarchy) and `server.ts` (protocol, `odin check` on save) and `odin.ts` (shadow tree and forwarding to ols) |
 | `editors/vscode/` | VS Code extension: grammar and client |
 
 ## Limits (MVP)

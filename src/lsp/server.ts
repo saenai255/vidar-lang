@@ -17,6 +17,7 @@ import { PRELUDE_PATH } from "../prelude";
 import { writeOutput } from "../cli";
 import * as F from "./features";
 import { OdinBridge } from "./odin";
+import * as N from "./navigation";
 
 // editors usually pass --stdio; default to it so `vidar-lsp` alone works too
 if (!process.argv.some((a) => /^--(stdio|node-ipc|socket|pipe)/.test(a))) process.argv.push("--stdio");
@@ -191,6 +192,9 @@ connection.onInitialize((params): InitializeResult => {
       completionProvider: { triggerCharacters: [":", ".", ">"] },
       signatureHelpProvider: { triggerCharacters: ["(", ","], retriggerCharacters: [","] },
       inlayHintProvider: true,
+      workspaceSymbolProvider: true,
+      implementationProvider: true,
+      callHierarchyProvider: true,
     },
     serverInfo: { name: "vidar-lsp", version: "0.1.0" },
   };
@@ -354,6 +358,45 @@ connection.onRequest("vidar/generatedOdin", ({ uri }: { uri: string }) => {
   const file = pkgOf?.files.find((f) => f.path === path);
   return { files: Object.fromEntries(out.files), main: pkgOf && file ? outputName(pkgOf, file) : undefined };
 });
+
+// ---- workspace symbols, implementations, call hierarchy (navigation.ts) ----
+
+/** Every analysis the server holds, the one for `first` (a package directory) first. */
+function analyses(first?: string): Analysis[] {
+  const all = [...packages.entries()].filter(([, st]) => st.current).sort(([a], [b]) => Number(b === first) - Number(a === first));
+  return all.map(([, st]) => st.current!);
+}
+
+connection.onWorkspaceSymbol(({ query }) =>
+  N.workspaceSymbols(analyses(), query).map((s) => ({ name: s.name, kind: SYMBOL_KINDS[s.kind], containerName: s.container, location: loc(s) })),
+);
+
+connection.onImplementation(({ textDocument, position }) => {
+  const { state, path } = stateFor(textDocument.uri);
+  if (!state.current || !state.index) return null;
+  return N.implementations(state.current, state.index, path, position).map(loc);
+});
+
+const callItem = (i: N.CallItem) => ({
+  name: i.name, kind: SYMBOL_KINDS[i.kind], detail: i.detail, uri: toUri(i.file), range: i.full, selectionRange: i.range, data: { key: i.key },
+});
+const callKey = (item: { data?: unknown }) => (item.data as { key?: string } | undefined)?.key ?? "";
+const callDir = (uri: string) => (uri.startsWith("file:") ? dirname(toPath(uri)) : undefined);
+
+connection.languages.callHierarchy.onPrepare(({ textDocument, position }) => {
+  const { state, path } = stateFor(textDocument.uri);
+  if (!state.index) return null;
+  const items = N.prepareCallHierarchy(state.index, path, position).map(callItem);
+  return items.length ? items : null;
+});
+
+connection.languages.callHierarchy.onIncomingCalls(({ item }) =>
+  N.incomingCalls(analyses(callDir(item.uri)), callKey(item)).map((c) => ({ from: callItem(c.item), fromRanges: c.ranges })),
+);
+
+connection.languages.callHierarchy.onOutgoingCalls(({ item }) =>
+  N.outgoingCalls(analyses(callDir(item.uri)), callKey(item)).map((c) => ({ to: callItem(c.item), fromRanges: c.ranges })),
+);
 
 connection.onShutdown(() => ols?.shutdown());
 process.on("exit", () => ols?.shutdown());
