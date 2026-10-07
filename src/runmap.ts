@@ -8,7 +8,8 @@
 // `vidar run` / `vidar test`, and `vidar map <out>`, which reads the `vidar.map.json` that
 // `vidar build` writes next to the generated code.
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import * as nodePath from "node:path";
+import { type PathModule, pathKey, pathPattern } from "./paths";
 import type { Output } from "./project";
 
 export const MAP_FILE = "vidar.map.json";
@@ -27,7 +28,7 @@ export function runMapOf(out: Output): RunMap {
 }
 
 export function readRunMap(dir: string): RunMap {
-  const file = join(dir, MAP_FILE);
+  const file = nodePath.join(dir, MAP_FILE);
   if (!existsSync(file)) throw new Error(`${file} does not exist (it is written by 'vidar build')`);
   const map = JSON.parse(readFileSync(file, "utf8")) as RunMap;
   if (map.version !== 1 || typeof map.files !== "object") throw new Error(`${file} is not a vidar map`);
@@ -71,35 +72,41 @@ const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 export interface MapperOptions {
   /** directory short `[file.odin:line]` paths are written relative to (default: the process's cwd) */
   cwd?: string;
+  /** the `node:path` flavor the paths are in (default: this platform's; tests pass `path.win32`) */
+  path?: PathModule;
 }
 
 /** Rewrites generated locations in one line (or any text) of output; `roots` are the directories the generated files are in. */
 export function locationMapper(map: RunMap, roots: string[], opts: MapperOptions = {}): (text: string) => string {
+  const p = opts.path ?? nodePath;
   const cwd = opts.cwd ?? process.cwd();
+  // by pathKey: on Windows Odin may print either slash, and the drive letter in either case
   const byPath = new Map<string, RunMap["files"][string]>();
+  const patterns = new Map<string, string>();
   const byBase = new Map<string, RunMap["files"][string] | null>();
-  const dirs = [...new Set(roots.flatMap((r) => [resolve(r), ...(existsSync(r) ? [realpathSync(r)] : [])]))];
+  const dirs = [...new Set(roots.flatMap((r) => [p.resolve(r), ...(existsSync(r) ? [realpathSync(r)] : [])]))];
   for (const [gen, entry] of Object.entries(map.files)) {
     for (const dir of dirs) {
-      byPath.set(join(dir, gen), entry);
-      if (sep !== "/") byPath.set(`${dir}/${gen}`, entry);
+      const path = p.join(dir, gen);
+      byPath.set(pathKey(path, p), entry);
+      patterns.set(pathKey(path, p), pathPattern(path, p));
     }
-    const base = basename(gen);
+    const base = p.posix.basename(gen);
     byBase.set(base, byBase.has(base) ? null : entry); // a name two packages share is ambiguous
   }
   if (!byPath.size) return (text) => text;
-  const paths = [...byPath.keys()].sort((a, b) => b.length - a.length).map(escape);
+  const paths = [...patterns].sort(([a], [b]) => b.length - a.length).map(([, pattern]) => pattern);
   const bases = [...byBase].filter(([, e]) => e).map(([b]) => escape(b));
-  const long = new RegExp(`(${paths.join("|")})(?:\\((\\d+):(\\d+)\\)|:(\\d+)(?=[:\\]\\s]|$))`, "g");
+  const long = new RegExp(`(${paths.join("|")})(?:\\((\\d+):(\\d+)\\)|:(\\d+)(?=[:\\]\\s]|$))`, p.sep === "\\" ? "gi" : "g");
   const short = bases.length ? new RegExp(`\\[(${bases.join("|")}):(\\d+)(?=[:\\]])`, "g") : null;
   const shown = (source: string) => {
-    const rel = relative(cwd, source);
-    return rel && !rel.startsWith("..") && !isAbsolute(rel) ? rel : source;
+    const rel = p.relative(cwd, source);
+    return rel && !rel.startsWith("..") && !p.isAbsolute(rel) ? rel : source;
   };
   return (text) => {
     if (!text) return text;
     text = text.replace(long, (m, path: string, l1?: string, c?: string, l2?: string) => {
-      const entry = byPath.get(path)!;
+      const entry = byPath.get(pathKey(path, p))!;
       const line = sourceLine(entry.lines, Number(l1 ?? l2));
       if (!line) return m;
       return l1 ? `${entry.source}(${line}:${c})` : `${entry.source}:${line}`;

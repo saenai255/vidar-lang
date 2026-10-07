@@ -1,4 +1,4 @@
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 import { Expr, Node, Param } from "./ast";
 import { A, Analyzer, nodeText, posOf, unwrapProc } from "./analyzer";
 import { kids } from "./optimize";
@@ -55,7 +55,7 @@ export function reorderStructs(an: Analyzer): void {
 
   const rejected = new Map<GlobalSym, string>();
   const reject = (sym: GlobalSym, why: string, at: Node) => {
-    if (cands.has(sym) && !rejected.has(sym)) rejected.set(sym, `${why} (${posOf(at).file === posOf(sym.decl).file ? "" : posOf(at).file.split("/").pop() + ":"}line ${posOf(at).line})`);
+    if (cands.has(sym) && !rejected.has(sym)) rejected.set(sym, `${why} (${posOf(at).file === posOf(sym.decl).file ? "" : basename(posOf(at).file) + ":"}line ${posOf(at).line})`);
   };
   /** the candidate structs a type holds, through fields, arrays, pointers, maps and unions */
   const held = new Map<GlobalSym, Set<GlobalSym>>();

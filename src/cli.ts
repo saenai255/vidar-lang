@@ -129,7 +129,7 @@ export function main(argv: string[]): number | Promise<number> {
     console.error(`wrote ${out.files.size} file(s) to ${outDir}`);
     if (!debug) return 0;
     // the generated .odin stays next to the binary, so the debugger can show it
-    const binary = join(outDir, name);
+    const binary = join(outDir, binaryName(name));
     const r = spawnSync("odin", ["build", outDir, "-debug", `-out:${binary}`, ...defines, ...tail], { encoding: "utf8", stdio: ["inherit", "inherit", "pipe"] });
     if (r.stderr) process.stderr.write(mapper(r.stderr));
     if (r.status === 0) console.error(`built ${binary} with debug info`);
@@ -141,14 +141,14 @@ export function main(argv: string[]): number | Promise<number> {
     return r.status ?? 1;
   }
   if (cmd === "run") {
-    const odinArgs = ["run", outDir, `-out:${join(outDir, name)}`, ...defines, ...(tail.length ? ["--", ...tail] : [])];
+    const odinArgs = ["run", outDir, `-out:${join(outDir, binaryName(name))}`, ...defines, ...(tail.length ? ["--", ...tail] : [])];
     return runMapped(odinArgs, mapper, false);
   }
   // test: `--run a,b` is ODIN_TEST_NAMES with the package filled in
   const names = valueOf("--run");
   const pkg = [...out.files].find(([f]) => !f.includes("/"))?.[1].match(/^\s*package\s+(\w+)/m)?.[1] ?? "main";
   const select = names ? [`-define:ODIN_TEST_NAMES=${names.split(",").map((n) => (n.includes(".") ? n : `${pkg}.${n}`)).join(",")}`] : [];
-  return runMapped(["test", outDir, `-out:${join(outDir, name)}`, ...defines, ...select, ...tail], mapper, true);
+  return runMapped(["test", outDir, `-out:${join(outDir, binaryName(name))}`, ...defines, ...select, ...tail], mapper, true);
 }
 
 /** Runs odin with its stderr (and stdout, for `odin test`) rewritten line by line to .vidar locations. */
@@ -203,6 +203,11 @@ function printReport(hints: Analyzer["hints"]): void {
   const sorted = notes.sort((a, b) => a.pos.file.localeCompare(b.pos.file) || a.pos.line - b.pos.line || a.pos.col - b.pos.col);
   if (!sorted.length) console.error("-opt: nothing to report");
   for (const n of sorted) console.error(`${relative(process.cwd(), n.pos.file)}:${n.pos.line}: ${n.name ? n.name + ": " : ""}${n.label}${n.tooltip ? ": " + n.tooltip : ""}`);
+}
+
+/** The program's file name: Windows wants the `.exe`. */
+export function binaryName(name: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? `${name}.exe` : name;
 }
 
 /** Points `file.odin(line:col)` locations in Odin's output at the .vidar files and lines they came from. */

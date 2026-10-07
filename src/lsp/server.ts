@@ -17,6 +17,7 @@ import { PRELUDE_PATH } from "../prelude";
 import { writeOutput } from "../cli";
 import { formatEdits } from "../format";
 import { generatedLine } from "../runmap";
+import { relativeInside } from "../paths";
 import * as F from "./features";
 import * as Actions from "./actions";
 import { OdinBridge } from "./odin";
@@ -160,8 +161,8 @@ function odinCheck(dir: string): void {
     for (let i = 0; i < lines.length; i++) {
       const m = ODIN_DIAG.exec(lines[i].trim());
       if (!m) continue;
-      const rel = m[1].startsWith(work) ? m[1].slice(work.length + 1) : m[1];
-      const name = rel.split("\\").join("/");
+      // on Windows Odin may print the path with other slashes, or the drive letter in another case
+      const name = relativeInside(work, m[1]) ?? m[1].split("\\").join("/");
       const sourcePath = out.sourceOf.get(name);
       const source = a.sources.find((s) => s.path === sourcePath);
       if (!source) continue;

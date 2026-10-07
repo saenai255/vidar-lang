@@ -1,8 +1,9 @@
 import { ChildProcess, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { relativeInside } from "../paths";
 import {
   CompletionItem, CompletionList, Hover, Location, LocationLink, MessageConnection, Position, SignatureHelp,
   StreamMessageReader, StreamMessageWriter, createMessageConnection,
@@ -238,10 +239,11 @@ export class OdinBridge {
   /** Maps a location in the shadow tree back to its source; drops generated code. */
   private toSource(uri: string, line: number): { uri: string; line: number } | null {
     const file = uri.startsWith("file:") ? fileURLToPath(uri) : uri;
-    if (!this.root || !file.startsWith(this.root + sep)) return { uri, line };
+    // on Windows ols' URIs may spell the drive letter in another case (file:///c%3A/...)
+    if (!this.root || relativeInside(this.root, file) === null) return { uri, line };
     for (const shadow of this.shadows.values()) {
-      if (!file.startsWith(shadow.dir + sep)) continue;
-      const name = relative(shadow.dir, file).split(sep).join("/");
+      const name = relativeInside(shadow.dir, file);
+      if (name === null) continue;
       const entry = shadow.files.get(name);
       const source = shadow.lines.get(name)?.[line] ?? 0;
       if (!entry?.source || source <= 0) return null;
