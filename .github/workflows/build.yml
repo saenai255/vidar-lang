@@ -1,0 +1,70 @@
+name: Build binaries and VS Code extension
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # vidar:sched has stack-switching assembly for these three only
+          - { os: macos-14, target: darwin-arm64 }
+          - { os: ubuntu-24.04, target: linux-x64 }
+          - { os: ubuntu-24.04-arm, target: linux-arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            editors/vscode/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm ci --prefix editors/vscode
+
+      - name: Build binaries
+        run: npm run build:binaries
+
+      - name: Smoke test
+        run: bin/${{ matrix.target }}/vidar emit tests/cases/closure_values/input.vidar > /dev/null
+
+      - name: Package extension
+        working-directory: editors/vscode
+        run: npm run package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vidar-${{ matrix.target }}
+          path: |
+            bin/*.tar.gz
+            editors/vscode/*.vsix
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes dist/bin/*.tar.gz dist/editors/vscode/*.vsix
