@@ -1,5 +1,0 @@
-// error: an anonymous struct literal cannot be declared in an if/for/switch initializer
-package main
-main :: proc() {
-	if a := { x = 1 }; a.x > 0 {}
-}

@@ -1,0 +1,11 @@
+{name = "slime", size = 7, scale = 1.5, origin = {x = 0, y = -1}} -1 http://x // not a comment
+a 1 1
+0 2 4 
+b 2
+{a = 1, b = "two"}
+show: {x = 1.5} 7 {y = true, z = {w = w}}
+{hp = 10, name = "hero"} {calls = 3}
+30
+{q = 1} {r = 2, s = "s"}
+5
+3

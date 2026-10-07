@@ -1,4 +1,0 @@
-// error: anonymous struct literals can only be declared inside a procedure
-package main
-config := { port = 80 }
-main :: proc() {}

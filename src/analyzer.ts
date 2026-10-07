@@ -41,6 +41,9 @@ export interface AnonTemp {
   pre: string;
 }
 
+/** fmt's print procs, whose values are `..any`: a writer/builder/file first (group 1), a format string (group 2). */
+const FMT_LEAD = /^(sb|w|f|b)?(?:e|t|a|ca)?print(f|fln|ln)?$/;
+
 /** `{ name = value, ... }` with no type in front. */
 export function isAnonLit(e: Expr): e is CompoundLit {
   return e.k === "CompoundLit" && !e.type && e.elems.some((x) => x.k === "FieldValue");
@@ -361,10 +364,9 @@ export class Analyzer {
     }
     if (s.k === "Package" || s.k === "Import") return;
     if (s.k === "ValueDecl") {
-      const anon = s.values.find(isAnonLit);
-      if (anon && !s.type && !s.isConst) throw new CompileError("anonymous struct literals can only be declared inside a procedure", posOf(anon));
       if (s.type) this.expr(s.type, scope);
       this.withStmt(s, () => s.values.forEach((v) => this.expr(v, scope)));
+      if (!s.type && !s.isConst) s.values.forEach((v) => isAnonLit(v) && this.anonExpr(v, scope, false));
       const table = this.tables.get((A(s)._syms as GlobalSym[])[0]);
       if (table) this.guard(() => this.resolveTable((A(s)._syms as GlobalSym[])[0], table));
       const memoSym = (A(s)._syms as GlobalSym[])[0];
@@ -576,8 +578,9 @@ export class Analyzer {
     s.values.forEach((v) => this.expr(v, scope));
     if (s.type) s.values.forEach((v) => this.convertTo(v, { t: "node", node: s.type!, scope }));
     if (!s.type && !s.isConst && s.values.some(isAnonLit)) {
-      if (A(s)._isInit) throw new CompileError("an anonymous struct literal cannot be declared in an if/for/switch initializer; declare it on its own line first", posOf(s));
-      A(s)._anonTemps = s.values.flatMap((v) => (isAnonLit(v) ? this.anonLit(v, scope, `__anon${++this.anonCounter}`) : []));
+      // an if/for/switch initializer is one statement, so there is nowhere to put temps
+      if (A(s)._isInit) s.values.forEach((v) => isAnonLit(v) && this.anonExpr(v, scope, true));
+      else A(s)._anonTemps = s.values.flatMap((v) => (isAnonLit(v) ? this.anonLit(v, scope, `__anon${++this.anonCounter}`) : []));
     }
     const multi = s.values.length === 1 && s.names.length > 1 ? this.callSig(s.values[0], scope) : undefined;
     A(s)._syms = s.names.map((n, i) => {
@@ -683,6 +686,7 @@ export class Analyzer {
         }
         if (method && e.args[0]) this.dispatchHint(e, e.args[0], method);
         if (ft?.t === "sig") this.convertArgs(e.args, ft, method ? 1 : 0);
+        this.anonArgs(e, ft?.t === "sig" ? ft : undefined, scope);
         return;
       }
       case "CompoundLit": {
@@ -1106,6 +1110,44 @@ export class Analyzer {
     A(e)._anon = fields;
     A(e)._anonTy = { t: "node", node: this.structNode(types, posOf(e)), scope } satisfies Ty;
     return temps;
+  }
+
+  /**
+   * `{ a = 1 }` lowered as one expression, where temps can't go before it (file scope, initializers,
+   * arguments): `struct { a: type_of(__anon_typed(1)) }{a = 1}`. `paren`: Odin would read the
+   * literal's braces as a block (an if/for/switch initializer).
+   */
+  private anonExpr(e: CompoundLit, scope: Scope, paren: boolean): void {
+    const temps = this.anonLit(e, scope, `__anon${++this.anonCounter}`);
+    A(e)._anonExpr = new Map(temps.map((t) => [t.name, t.value]));
+    if (paren) A(e)._anonParen = true;
+  }
+
+  /**
+   * Arguments written `{ a = 1, ... }` for parameters whose type is inferred (`$T`, `any`, `..any`,
+   * and fmt's print procs), where Odin has no type for them, make their struct type on the spot.
+   */
+  private anonArgs(e: Call, ft: Extract<Ty, { t: "sig" }> | undefined, scope: Scope): void {
+    const value = (a: Expr) => (a.k === "FieldValue" ? a.value : a);
+    if (!e.args.some((a) => isAnonLit(value(a)))) return;
+    const inferred = (t: Expr | undefined): boolean =>
+      !!t && (t.k === "Poly" || (t.k === "Ident" && t.name === "any" && !A(t)._sym) || (t.k === "Spread" && inferred(t.x)));
+    const fn = e.fn;
+    const pkg: Sym | undefined = fn.k === "Selector" && fn.x.k === "Ident" ? A(fn.x)._sym : undefined;
+    const fmt = pkg?.kind === "pkg" && pkg.path === "core:fmt" && fn.k === "Selector" ? FMT_LEAD.exec(fn.name) : null;
+    const params = ft ? ft.sig.params.flatMap((p) => (ft.sig.unnamed ? [{ name: "", type: p.type }] : p.names.map((n) => ({ name: n.name, type: p.type })))) : [];
+    e.args.forEach((a, i) => {
+      const v = value(a);
+      if (!isAnonLit(v)) return;
+      let ok: boolean;
+      if (fmt) ok = a.k !== "FieldValue" && i >= (fmt[1] ? 1 : 0) + (fmt[2] === "f" || fmt[2] === "fln" ? 1 : 0);
+      else {
+        const variadic = params.length && params[params.length - 1].type?.k === "Spread" ? params[params.length - 1] : undefined;
+        const param = a.k === "FieldValue" ? params.find((p) => p.name === a.name) : (params[i] ?? variadic);
+        ok = inferred(param?.type);
+      }
+      if (ok) this.anonExpr(v, scope, false);
+    });
   }
 
   /** A synthetic struct type for analysis and tooling (field names point at the literal). */

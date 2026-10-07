@@ -205,11 +205,11 @@ take :: proc(h: struct { name: string, hp: int, pos: struct { x: f64, y: int } }
 take(hero)
 ```
 
-- Only the right-hand side of a `:=` declaration inside a procedure is affected, the one place Odin has no type for `{ ... }`. With an expected type (`p: Point = { x = 1 }`, arguments, `return`), `{ ... }` keeps Odin's meaning.
+- Only the places Odin has no type for `{ ... }` are affected: the right-hand side of a `:=` declaration (inside a procedure, at file scope, or in an `if`/`for`/`switch` initializer), and an argument whose parameter type is inferred (`$T`, `any`, `..any`, and the values of `fmt`'s print procs): `fmt.println({ x = 1, y = 2 })`, `describe({ name = "a" })`. With an expected type (`p: Point = { x = 1 }`, a typed parameter, `return`), `{ ... }` keeps Odin's meaning. A callee vidar can't see (a `core:` proc other than `fmt`'s) counts as typed.
 - Every element needs a name. A field can't be inferred from `nil`, `---` or an untyped positional `{ 1, 2 }`.
 - The type is a plain Odin anonymous struct, and Odin treats anonymous structs with the same fields as the same type, so two such literals, or a literal and a written-out `struct { ... }`, are interchangeable.
 - vidar knows the field types, so closure fields can be called (`cfg.on_click(x)`) and the language server completes and hovers the fields.
-- **Lowering:** each value is evaluated once into a temp on its own source line, then `hero := struct { name: type_of(__anon1_name), ... }{name = __anon1_name, ...}`, so Odin infers every field type itself.
+- **Lowering:** in a procedure's `:=` declaration, each value is evaluated once into a temp on its own source line, then `hero := struct { name: type_of(__anon1_name), ... }{name = __anon1_name, ...}`, so Odin infers every field type itself. Elsewhere there is no room for temps, so the literal is one expression: `struct { name: type_of(__anon_typed("slime")), ... }{name = "slime", ...}`. The copy inside `type_of` is never run, and `__anon_typed` (a file-private `proc(x: $T) -> T`) gives untyped constants their default types; a proc or closure value's type is written from its signature. Initializers wrap it in parentheses, where Odin would read the braces as a block.
 
 ## Goroutines and channels
 
@@ -659,7 +659,7 @@ npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many tim
   - closures: capture modes, loops, every declaration form, multiple results, variadics, nesting, closure types
   - interfaces: dispatch, static calls across packages, decorators, multiple results, variadic methods, generic impls (`Box($T)`, `Pair(int, f64)`, converted in generic code), proc groups and polymorphic procs as bound methods
   - macros: hygiene, code generation, reflection, the typecheck fallback
-  - anonymous struct literals: inferred field types, nesting, closure fields, evaluation order, structural compatibility
+  - anonymous struct literals: inferred field types, nesting, closure fields, evaluation order, structural compatibility; globals, initializers and arguments to inferred parameters
   - import cycles: three packages, the entry package in a cycle, aliases, multiple files per package
   - a diamond-shaped import graph
   - plain Odin passthrough
@@ -722,7 +722,7 @@ npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many tim
 - **Closures that use `$T` stay in their proc.** A closure body using the enclosing proc's polymorphic parameters (or a local constant built from them) isn't copied into a specialized callee by `@(specialize)` or `-opt`; the call goes through the closure value. A closure type naming a local type, called through an expression that isn't a name, field or index (`make_adder(1)(2)`), needs a file-scope helper and doesn't build.
 - **Closure size:** every closure value carries room for `VIDAR_CLOSURE_ENV` bytes of captures (128 by default), whether it uses them or not. Arrays of closures and channels of closures are that much bigger.
 - **Import cycles merge packages.** Odin sees one package for the whole cycle. Procs declared inside `foreign` blocks of cycle members are not prefixed, so they must not clash across the cycle. Only relative imports are followed; packages reached through collections (`core:`, `shared:`, ...) can't take part in a cycle.
-- **Anonymous struct literals** only work in `:=` declarations inside procedures; not at file scope or in `if`/`for`/`switch` initializers.
+- **Anonymous struct literals** as arguments need a callee vidar can see, with a parameter typed `$T`, `any` or `..any` (or one of `fmt`'s print procs); in `return`, assignments and other expressions, `{ ... }` keeps Odin's meaning.
 - **`@(no_alloc)` trusts lists.** Core procs are judged by name from a list of ones known not to allocate, and a custom `fmt` formatter or an allocator set on the context isn't followed. The run-time backstop only covers builds below `-o:size`.
 - **Extension keywords are contextual.** `closure`, `quote`, `interface`, `impl`, `catch` and `errdefer` remain usable as ordinary identifiers, and `take` is only a keyword inside `do!` and `comptime!` blocks.
 - **Goroutines run on one thread by default.** With `-define:VIDAR_THREADS=N` they run on N threads, but a goroutine stays on the thread that first runs it; only goroutines that haven't started move to an idle thread. At 1 thread, `blocking` work and non-Linux file I/O are the only other threads. With several threads, a deadlock waits forever instead of panicking. Goroutines aren't preempted: a long loop that never calls into `sched` holds up the others. `core:sync` locks park the whole thread, so use `sched.Mutex` between goroutines. Only darwin/arm64, linux/arm64, linux/amd64 and windows/amd64 are supported, and only darwin/arm64 is tested so far. windows/amd64 has only been cross-checked from Linux (`odin check` and `odin build -build-mode:obj` with `-target:windows_amd64`, and the switch routine run under a Linux harness with a fake TIB), never run on Windows.

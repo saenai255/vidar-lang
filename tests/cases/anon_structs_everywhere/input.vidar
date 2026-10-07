@@ -1,0 +1,58 @@
+package main
+
+import "core:fmt"
+
+// Anonymous struct literals outside `:=` declarations in procs: globals,
+// if/for/switch initializers, and arguments whose parameter type is inferred.
+
+LIMIT :: 3
+
+config := { name = "slime", size = LIMIT * 2, scale = 1.5, origin = { x = 0, y = -1 } }
+banner := { text = "http://x // not a comment", width = 40 }
+
+describe :: proc(v: $T) -> string { return fmt.tprintf("%v", v) }
+
+show :: proc(label: string, values: ..any) {
+	fmt.print(label)
+	for v in values do fmt.print("", v)
+	fmt.println()
+}
+
+call_f :: proc(v: $T) -> int { return v.f(v.k) }
+
+hp_of :: proc(v: struct { name: string, hp: int }) -> int { return v.hp }
+
+calls := 0
+next :: proc() -> int { calls += 1; return calls }
+
+main :: proc() {
+	config.size += 1
+	fmt.println(config, config.origin.y, banner.text)
+
+	// initializers: evaluated once, scoped to the statement
+	if p := { hp = next(), name = "a" }; p.hp > 0 {
+		fmt.println(p.name, p.hp, calls)
+	}
+	for c := { i = 0, step = 2 }; c.i < 6; c.i += c.step {
+		fmt.print(c.i, "")
+	}
+	fmt.println()
+	switch s := { kind = 'b', n = next() }; s.kind {
+	case 'a': fmt.println("a")
+	case 'b': fmt.println("b", s.n)
+	}
+
+	// arguments to $T, ..any and fmt's print procs
+	fmt.println(describe({ a = 1, b = "two" }))
+	show("show:", { x = 1.5 }, 7, { y = true, z = { w = 'w' } })
+	fmt.println({ hp = 10, name = "hero" }, { calls = next() })
+	fmt.println(call_f({ k = LIMIT, f = proc(x: int) -> int { return x * 10 } }))
+	fmt.printf("%v %v\n", { q = 1 }, {
+		r = 2,  // a comment
+		s = "s",
+	})
+
+	// a parameter with a type keeps Odin's meaning
+	fmt.println(hp_of({ name = "typed", hp = 5 }))
+	fmt.println(calls)
+}

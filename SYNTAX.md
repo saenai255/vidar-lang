@@ -134,6 +134,8 @@ Example: [examples/errors](examples/errors).
 | `x := { name = value, ... }` | declares `x` with a struct type made on the spot; each field's type is inferred from its value |
 | `x := { pos = { x = 1, y = 2 }, ... }` | nested literals become nested struct types |
 | `a, b := { v = 1 }, { v = 2 }` | several in one declaration |
+| `if p := { hp = 10 }; p.hp > 0 { ... }` | in an `if`/`for`/`switch` initializer, and in a `:=` at file scope |
+| `fmt.println({ x = 1 })`, `describe({ x = 1 })` | an argument whose parameter type is inferred: `$T`, `any`, `..any`, `fmt`'s print procs |
 
 ```odin
 hero := { name = "slime", hp = 10 }     // struct { name: string, hp: int }
@@ -145,11 +147,10 @@ take(hero)                               // same field names and types: same typ
 ```
 
 Rules:
-- Only on the right-hand side of a `:=` declaration inside a procedure, the one place where Odin has no type for `{ ... }`. Everywhere else (`p: Point = { x = 1 }`, arguments, `return`, assignments) a `{ ... }` keeps Odin's meaning.
+- Only where Odin has no type for `{ ... }`: the right-hand side of a `:=` declaration (in a procedure, at file scope, or in an `if`/`for`/`switch` initializer), and an argument to a parameter typed `$T`, `any` or `..any` (or a value of `fmt`'s print procs). Everywhere else (`p: Point = { x = 1 }`, typed parameters, `return`, assignments) a `{ ... }` keeps Odin's meaning.
 - Every element needs a name. Untyped constants take their default types (`int`, `f64`, `string`, `rune`, `bool`). A field cannot be inferred from `nil`, `---` or an untyped positional literal like `{ 1, 2 }`; write the type, e.g. `Point{1, 2}`.
 - Values are evaluated once, left to right, before the struct is built.
 - The type is an ordinary Odin anonymous struct, so it is identical to any other with the same fields in the same order, including a written-out `struct { ... }`.
-- Not allowed at file scope or in an `if`/`for`/`switch` initializer.
 
 Example: [examples/anon_structs](examples/anon_structs).
 

@@ -388,6 +388,8 @@ export class Emitter {
   /** local constants and types closure bodies took to file scope, by their new name; and those already written */
   private liftedNames = new Map<LocalSym, string>();
   private liftedWritten = new Set<LocalSym>();
+  /** `__anon_typed` is among this file's helpers */
+  private anonTyped = false;
   /** while a closure body that goes to file scope is written: lifted constants are named by their new name */
   private liftDepth = 0;
   /** closure helpers to declare before the statement being listed, inside its proc (they use its `$T`) */
@@ -399,6 +401,7 @@ export class Emitter {
     this.file = f;
     this.pkg = pkg;
     this.helpers = [];
+    this.anonTyped = false;
     this.printers = undefined;
     this.valueHelpers.clear();
     this.json = undefined;
@@ -587,6 +590,7 @@ export class Emitter {
         return hoisted ? keepLines(n, text) : text;
       }
       case "CompoundLit":
+        if (A(n)._anonExpr) return this.anonExpr(n);
         if (A(n)._anon) return this.anonLit(n);
         return this.pretty ? `${n.type ? this.emit(n.type) : ""}{${n.elems.map((e) => this.withPre(e)).join(", ")}}` : this.generic(n);
       case "Assign":
@@ -977,6 +981,37 @@ export class Emitter {
   /** `{ a = 1 }` -> `struct { a: type_of(__anon1_a) }{a = __anon1_a}`; the values were hoisted into temps. */
   private anonLit(n: Extract<Expr, { k: "CompoundLit" }>): string {
     return `${this.anonType(n)}${this.anonValue(n)}`;
+  }
+
+  /**
+   * `{ a = f(), b = 1 }` as one expression: `struct { a: type_of(__anon_typed(f())), b: type_of(__anon_typed(1)) }{a = f(), b = 1}`.
+   * The copies inside `type_of` aren't evaluated; `__anon_typed` gives untyped constants their default types.
+   */
+  private anonExpr(n: Extract<Expr, { k: "CompoundLit" }>): string {
+    const values: Map<string, Expr> = A(n)._anonExpr;
+    const texts = new Map<string, string>();
+    for (const [temp, v] of values) texts.set(temp, this.emit(v));
+    if (!this.anonTyped) {
+      this.anonTyped = true;
+      this.helpers.push(`// the default type of an untyped constant, for anonymous struct fields\n@(private = "file")\n__anon_typed :: #force_inline proc "contextless" (x: $T) -> T { return x }`);
+    }
+    const typeOf = (temp: string): string => {
+      const v = values.get(temp)!;
+      if (v.k === "ProcLit" && v.captures) return this.closureType(v.sig);
+      if (v.k === "ProcLit" && v.body) return oneLine(this.generic(v, v.start, v.body.start)).trim();
+      return `type_of(__anon_typed(${oneLine(texts.get(temp)!)}))`;
+    };
+    const type = (m: Extract<Expr, { k: "CompoundLit" }>): string =>
+      `struct { ${(A(m)._anon as AnonField[]).map((f) => `${f.name}: ${f.nested ? type(f.nested) : typeOf(f.temp!)}`).join(", ")} }`;
+    const value = (m: Extract<Expr, { k: "CompoundLit" }>): string =>
+      `{${(A(m)._anon as AnonField[]).map((f) => `${f.name} = ${f.nested ? value(f.nested) : texts.get(f.temp!)}`).join(", ")}}`;
+    const body = value(n);
+    // source lines the values don't account for (the literal's own line breaks)
+    let lines = 0;
+    for (const c of body) if (c === "\n" || c === SKIP_LINE) lines++;
+    const text = `${type(n)}${body}`;
+    const skip = n.toks === this.file.toks ? Math.max(0, this.skipLines(n).length - lines) : 0;
+    return (A(n)._anonParen ? `(${text})` : text) + SKIP_LINE.repeat(skip);
   }
 
   private anonType(n: Extract<Expr, { k: "CompoundLit" }>): string {
@@ -1825,6 +1860,31 @@ function squash(pre: string): string {
   const comments = pre.match(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g) ?? [];
   const inline = comments.map((c) => (c.startsWith("//") ? `/*${c.slice(2)} */` : c.replace(/\s*\n\s*/g, " ")));
   return inline.length ? ` ${inline.join(" ")} ` : " ";
+}
+
+/** Code copied into `type_of`, which is never run: on one line, without line markers. */
+function oneLine(text: string): string {
+  let out = "";
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === GEN_NL) {
+      i = text.indexOf(GEN_NL_END, i);
+      out += " ";
+    } else if (c === "\n") out += " ";
+    else if (c === SKIP_LINE || c === RUNTIME_MARK[0]) continue;
+    else if (c === '"' || c === "'" || c === "`") {
+      let j = i + 1;
+      while (j < text.length && text[j] !== c) j += c !== "`" && text[j] === "\\" ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j;
+    } else if (c === "/" && text[i + 1] === "/") {
+      const end = text.slice(i).search(/\n|\u0001/);
+      const comment = end < 0 ? text.slice(i + 2) : text.slice(i + 2, i + end);
+      out += `/*${comment} */`;
+      i = end < 0 ? text.length : i + end - 1;
+    } else out += c;
+  }
+  return out;
 }
 
 /** Turns the line markers into line breaks and returns the source line of each output line. */
