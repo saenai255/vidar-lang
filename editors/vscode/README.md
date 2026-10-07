@@ -16,7 +16,7 @@ cd ../.. && npm run build:binaries      # builds bin/<os>-<arch>/vidar-lsp
 cd editors/vscode && npm install && npm run package
 ```
 
-This produces `vidar-<os>-<arch>-<version>.vsix`. Install it with **Extensions: Install from VSIX...** in VS Code, or with `code --install-extension vidar-darwin-arm64-0.1.0.vsix`.
+This produces `vidar-<os>-<arch>-<version>.vsix`. From the repository root, `npm run vsix` does both steps and installs the result. Install it with **Extensions: Install from VSIX...** in VS Code, or with `code --install-extension vidar-darwin-arm64-0.1.0.vsix`.
 
 - `npm run package -- --target linux-x64` packages a binary built with `scripts/build-binaries.js --target linux-x64`.
 - `npm run package -- --no-server` makes a platform-independent `.vsix` that uses `vidar-lsp` from your PATH.

@@ -222,12 +222,7 @@ git worktree remove --force "$TMPDIR/vidar-base"
 - `intrinsics.expect` keeps its branch weights only through a constant alias (`expect :: intrinsics.expect` in the runtime). A `#force_inline` wrapper proc loses them. To check, build with `odin build <dir> -o:speed -build-mode:llvm-ir` and look for `branch_weights`.
 - `vidar build -o <dir>` sets the output directory, while Odin's `-o:speed` sets the optimization level.
 
-**Editor:** VS Code runs the `vidar-lsp` binary bundled in the installed `.vsix`, not `dist/`. To see an analyzer or LSP change there, run these, then reload the VS Code window (`code` is not on PATH):
-```bash
-npm run build:binaries
-(cd editors/vscode && npm run package)
-"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code" --install-extension editors/vscode/vidar-darwin-arm64-0.1.0.vsix --force
-```
+**Editor:** VS Code runs the `vidar-lsp` binary bundled in the installed `.vsix`, not `dist/`. To see an analyzer or LSP change there, run `npm run vsix`, then reload the VS Code window. It rebuilds the binaries, packages the `.vsix` and installs it with the CLI inside `/Applications/Visual Studio Code.app` (`code` is not on PATH; `VSCODE_CLI` overrides it). It takes about 15 s.
 
 **Docs:** when behavior changes, update:
 - README.md: the feature's section, plus "Tests", "Source layout" and "Limits" when they're affected;
