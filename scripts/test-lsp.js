@@ -741,6 +741,91 @@ function change(text) {
   const semB = await request("textDocument/semanticTokens/full", { textDocument: { uri: semUri } });
   const semBToks = decode(semB.result?.data ?? []);
   check("semantic tokens for a file with a syntax error", !semB.error && semBToks.some((t) => t.type === "interface") && semBToks.some((t) => t.type === "macro"), JSON.stringify(semB.error ?? semBToks.slice(0, 5)));
+
+  // ---- field and enum member uses (tests/lsp/members) ----
+  {
+    const memDir = realpathSync(mkdtempSync(join(tmpdir(), "vidar-lsp-members-")));
+    cpSync("tests/lsp/members", memDir, { recursive: true });
+    const mmPath = join(memDir, "main.vidar");
+    const mmUri = pathToFileURL(mmPath).toString();
+    const shapesUri = pathToFileURL(join(memDir, "shapes", "shapes.vidar")).toString();
+    const mmText = readFileSync(mmPath, "utf8");
+    const mmLines = mmText.split("\n");
+    const mmAt = (lineHas, needle, offset = 0, nth = 0) => {
+      const line = mmLines.findIndex((l) => l.includes(lineHas));
+      if (line < 0) throw new Error(`no line with ${lineHas}`);
+      let col = -1;
+      for (let i = 0; i <= nth; i++) col = mmLines[line].indexOf(needle, col + 1);
+      if (col < 0) throw new Error(`no '${needle}' on line ${line + 1}`);
+      return { line, character: col + offset };
+    };
+    const mmDoc = { uri: mmUri };
+    const mmDiag = nextDiagnostics((d) => d.uri === mmUri);
+    notify("textDocument/didOpen", { textDocument: { uri: mmUri, languageId: "vidar", version: 1, text: mmText } });
+    check("members fixture has no errors", (await mmDiag).diagnostics.length === 0, "");
+    const mmHover = async (pos) => (await request("textDocument/hover", { textDocument: mmDoc, position: pos })).result?.contents?.value ?? "";
+    const mmDef = async (pos) => (await request("textDocument/definition", { textDocument: mmDoc, position: pos })).result;
+    const mmRefs = async (pos) => (await request("textDocument/references", { textDocument: mmDoc, position: pos, context: { includeDeclaration: true } })).result ?? [];
+    const isAt = (l, pos, u = mmUri) => l?.uri === u && l.range.start.line === pos.line && l.range.start.character === pos.character;
+
+    const hImplicit = await mmHover(mmAt("_ = paint(q, .Blue)", "Blue"));
+    check("hover on an implicit enum selector in a call argument names its enum", hImplicit.includes("Color.Blue = 2") && hImplicit.includes("enum member of* `Color`"), hImplicit);
+    const hQual = await mmHover(mmAt("c := Color.Blue", "Blue"));
+    check("hover on Enum.Member", hQual.includes("Color.Blue = 2"), hQual);
+    const hUsing = await mmHover(mmAt("fmt.println(p.x, q.y", "p.id", 2));
+    check("hover on a field reached through a using field", hUsing.includes("id: int") && hUsing.includes("field of struct* `Base`"), hUsing);
+    const hSoa = await mmHover(mmAt("grid[0].age = 3", "age"));
+    check("hover on a field of an #soa element", hSoa.includes("age: int") && hSoa.includes("`Cell`"), hSoa);
+
+    const declOf = (lineHas, name) => mmAt(lineHas, name);
+    check("definition of .Green in a struct literal", isAt(await mmDef(mmAt("tint = .Green", "Green")), declOf("Color :: enum", "Green")), JSON.stringify(await mmDef(mmAt("tint = .Green", "Green"))));
+    check("definition of .Red in a case", isAt(await mmDef(mmAt("case .Red, .Blue", "Red")), declOf("Color :: enum", "Red")), "");
+    check("definition of .Red in a return", isAt(await mmDef(mmAt("if c == .Blue do return .Red", "Red")), declOf("Color :: enum", "Red")), "");
+    check("definition of a field through a pointer", isAt(await mmDef(mmAt("fmt.println(p.x, q.y", "y")), declOf("x, y: f64", "y")), "");
+    check("definition of a field through using", isAt(await mmDef(mmAt("fmt.println(p.x, q.y", "id")), declOf("Base :: struct", "id")), "");
+    check("definition of a field of another package's struct", isAt(await mmDef(mmAt("fmt.println(shapes.area(r), r.w)", "w")), { line: 2, character: 17 }, shapesUri), JSON.stringify(await mmDef(mmAt("fmt.println(shapes.area(r), r.w)", "w"))));
+
+    const refsTint = await mmRefs(mmAt("tint: Color", "tint"));
+    check("references of a field: declaration, literal, assignment, return, switch", refsTint.length === 5, JSON.stringify(refsTint.map((r) => r.range.start)));
+    const refsBlue = await mmRefs(mmAt("Color :: enum", "Blue"));
+    check("references of an enum member: comparisons, arguments, cases, Enum.Member", refsBlue.length === 5, JSON.stringify(refsBlue.map((r) => r.range.start)));
+    const refsW = await mmRefs(mmAt("r := shapes.Rect", "w"));
+    check("references of a field cross packages", refsW.length === 4 && refsW.some((r) => r.uri === shapesUri), JSON.stringify(refsW));
+
+    const renX = await request("textDocument/rename", { textDocument: mmDoc, position: mmAt("x, y: f64", "x"), newName: "px" });
+    const xEdits = renX.result?.changes?.[mmUri] ?? [];
+    const xText = mmLines.slice();
+    for (const e of [...xEdits].sort((a, b) => b.range.start.line - a.range.start.line || b.range.start.character - a.range.start.character)) {
+      const l = xText[e.range.start.line];
+      xText[e.range.start.line] = l.slice(0, e.range.start.character) + e.newText + l.slice(e.range.end.character);
+    }
+    const { emitProgram: emitP, loadProgram: loadP } = require("../dist/project.js");
+    let xOk = false;
+    try {
+      const before = emitP(loadP(memDir)).files.get("main.odin");
+      const after = emitP(loadP(memDir, { overrides: new Map([[mmPath, xText.join("\n")]]) })).files.get("main.odin");
+      xOk = after.split("px").join("x") === before;
+    } catch {}
+    check("rename of a field edits its declaration and every use", xEdits.length === 4 && xOk, JSON.stringify(xEdits.map((e) => e.range.start)));
+    const renBuf = await request("textDocument/rename", { textDocument: mmDoc, position: mmAt("Buffer :: struct", "buf"), newName: "bytes" });
+    check("rename of a field is refused while a use of that name can't be resolved", !!renBuf.error && /can't rename field 'buf'.*main\.vidar:43/.test(renBuf.error.message), JSON.stringify(renBuf));
+    const renBlue = await request("textDocument/rename", { textDocument: mmDoc, position: mmAt("case .Red, .Blue", "Blue"), newName: "Navy" });
+    check("rename of an enum member from a use", (renBlue.result?.changes?.[mmUri] ?? []).length === 5, JSON.stringify(renBlue));
+
+    const mmToks = (await request("textDocument/semanticTokens/full", { textDocument: mmDoc })).result?.data ?? [];
+    const mmDecoded = [];
+    for (let i = 0, line = 0, char = 0; i + 4 < mmToks.length; i += 5) {
+      line += mmToks[i];
+      char = mmToks[i] ? mmToks[i + 1] : char + mmToks[i + 1];
+      mmDecoded.push({ line, character: char, type: semLegend.tokenTypes[mmToks[i + 3]], modifiers: semLegend.tokenModifiers.filter((_, b) => mmToks[i + 4] & (1 << b)) });
+    }
+    const mmTok = (pos) => mmDecoded.find((t) => t.line === pos.line && t.character === pos.character);
+    semIs("field use", mmTok(mmAt("grid[0].age = 3", "age")), "property", [], ["declaration"]);
+    semIs("field name in a struct literal", mmTok(mmAt("p := Point{x = 1", "x")), "property");
+    semIs("implicit enum selector", mmTok(mmAt("case .Green", "Green")), "enumMember", [], ["declaration"]);
+    semIs("Enum.Member", mmTok(mmAt("c := Color.Blue", "Blue")), "enumMember");
+    semIs("field declaration", mmTok(mmAt("tint: Color", "tint")), "property", ["declaration"]);
+  }
   // ---- vidar/expandAt: the Odin for the statement at the cursor ----
   const exDir = realpathSync(mkdtempSync(join(tmpdir(), "vidar-lsp-expand-")));
   cpSync("tests/lsp/expand", exDir, { recursive: true });

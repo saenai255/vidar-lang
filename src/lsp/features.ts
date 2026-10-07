@@ -5,6 +5,7 @@ import { Parser } from "../parser";
 import { ATTRIBUTE_DOCS, BUILTIN_PROC_DOCS, BUILTIN_TYPE_DOCS, COMPTIME_BUILTIN_DOCS, CONTEXT_FIELD_DOCS, KEYWORD_DOCS, MACRO_KIND_DOCS, ODIN_CONSTANT_DOCS } from "./docs";
 import { type Program as Analysis, emitProgram, schedSourcePath } from "../project";
 import { CaptureSym, GlobalSym, LocalSym, Scope, Sym, Ty } from "../scope";
+import { Member, MemberMiss, membersOf, resolveMembers } from "../members";
 
 /** 0-based position, as in LSP. */
 export interface Position {
@@ -114,13 +115,30 @@ export function allFiles(a: Analysis) {
   return a.packages.flatMap((p) => p.files);
 }
 
+/** A field or enum member at a position: its declaration (`decl`) or a use the analyzer resolved. */
+export interface MemberRef {
+  file: string;
+  range: Range;
+  member: Member;
+  decl: boolean;
+}
+
 export class Index {
   readonly refs: Ref[] = [];
+  readonly members: MemberRef[] = [];
+  /** member uses that couldn't be resolved, which make renaming a member of that name unsafe */
+  readonly memberMisses: MemberMiss[] = [];
   private seen = new Set<string>();
+  private memberSeen = new Set<string>();
   private lines = new Map<string, string[]>();
 
   constructor(readonly a: Analysis) {
     for (const s of a.sources) this.lines.set(s.path, s.text.split("\n"));
+    try {
+      this.memberMisses = resolveMembers(a).misses;
+    } catch {
+      // no member uses: hover and definition fall back to what the node lookup finds
+    }
     for (const f of allFiles(a)) for (const s of f.stmts) this.visit(s);
     for (const g of this.globals()) {
       const t = declToken(g);
@@ -138,15 +156,28 @@ export class Index {
     this.refs.push({ file: t.pos.file, range: tokRange(t), sym, decl });
   }
 
+  private addMember(t: Token | undefined, member: Member, decl: boolean): void {
+    const line = t && this.lines.get(t.pos.file)?.[t.pos.line - 1];
+    if (!t || line === undefined || line.substr(t.pos.col - 1, t.text.length) !== t.text) return;
+    const key = `${t.pos.file}:${t.pos.line}:${t.pos.col}`;
+    if (this.memberSeen.has(key)) return;
+    this.memberSeen.add(key);
+    this.members.push({ file: t.pos.file, range: tokRange(t), member, decl });
+  }
+
   private visit(n: Node): void {
     const a = A(n);
     for (const p of (a._pre as Stmt[] | undefined) ?? []) this.visit(p);
+    if (a._member) this.addMember(n.k === "FieldValue" ? n.toks[n.start] : n.toks[n.end - 1], a._member, false);
     switch (n.k) {
       case "Ident":
         if (a._sym) this.add(n.toks[n.start], a._sym, false);
         break;
       case "Selector":
         if (a._pkgMember) this.add(n.toks[n.end - 1], a._pkgMember, false);
+        break;
+      case "EnumType":
+        for (const m of membersOf(n)) this.addMember(m.tok, m, true);
         break;
       case "Import":
         if (a._sym) {
@@ -200,6 +231,7 @@ export class Index {
       case "StructType":
       case "UnionType":
         for (const s of (a._polyParams as LocalSym[] | undefined) ?? []) if (s.declTok) this.add(s.declTok, s, true);
+        if (n.k === "StructType" && !a._anonFields) for (const m of membersOf(n)) this.addMember(m.tok, m, true);
         break;
       case "InterfaceType":
         for (const m of (a._methods as IfaceMethod[] | undefined) ?? []) {
@@ -430,6 +462,14 @@ export class Index {
   refsTo(sym: Sym): Ref[] {
     const target = canonical(sym);
     return this.refs.filter((r) => canonical(r.sym) === target);
+  }
+
+  memberAt(file: string, p: Position): MemberRef | undefined {
+    return this.members.find((r) => r.file === file && contains(r.range, p));
+  }
+
+  usesOf(member: Member): MemberRef[] {
+    return this.members.filter((r) => r.member === member);
   }
 }
 
@@ -679,6 +719,8 @@ export function hover(a: Analysis, index: Index, file: string, p: Position): Hov
     const local = ref.sym.kind === "local" || ref.sym.kind === "capture";
     return { markdown: describe(a, ref.sym), range: ref.range, weak: local && !symType(a, canonical(ref.sym)) };
   }
+  const resolved = index.memberAt(file, p);
+  if (resolved) return { markdown: memberHover(a, resolved.member).markdown, range: resolved.range };
   const member = memberAt(a, file, p);
   if (member) return { markdown: member.markdown, range: member.range };
   const t = tokenHover(a, file, p);
@@ -858,6 +900,35 @@ function enumMemberHover(def: Extract<Expr, { k: "EnumType" }>, index: number, o
   const t = def.toks[m.tok];
   const name = owner ? `${owner}.${m.name}` : `.${m.name}`;
   return { markdown: md(value !== undefined ? `${name} = ${value}` : name, owner ? `*enum member of* \`${owner}\`` : "*enum member*"), target: { file: t.pos.file, range: tokRange(t) } };
+}
+
+const ownerNames = new WeakMap<Analysis, Map<Node, string>>();
+
+/** The name a struct or enum is declared under, at file scope or as a local constant. */
+function ownerName(a: Analysis, owner: Node): string | undefined {
+  let names = ownerNames.get(a);
+  if (!names) {
+    names = new Map();
+    const found = names;
+    const visit = (n: Node) => {
+      if (n.k === "ValueDecl" && n.isConst) {
+        n.values.forEach((v, i) => {
+          while (v.k === "Directive" && v.x) v = v.x;
+          if (n.names[i] && !found.has(v)) found.set(v, n.names[i].name);
+        });
+      }
+      for (const c of children(n)) visit(c);
+    };
+    for (const f of allFiles(a)) for (const s of f.stmts) visit(s);
+    ownerNames.set(a, names);
+  }
+  return names.get(owner);
+}
+
+function memberHover(a: Analysis, m: Member): Omit<TokenHover, "range"> {
+  const owner = ownerName(a, m.owner);
+  if (m.owner.k === "EnumType") return enumMemberHover(m.owner, m.index ?? 0, owner);
+  return fieldDeclHover(m.owner, m.name, owner) ?? { markdown: md(m.name, "*field*") };
 }
 
 /** Enum declarations in the program that have a member called `name`. */
@@ -1045,13 +1116,30 @@ export function definition(a: Analysis, index: Index, file: string, p: Position)
     const t = declToken(ref.sym);
     return t && { file: t.pos.file, range: tokRange(t) };
   }
+  const member = index.memberAt(file, p)?.member;
+  if (member) return { file: member.tok.pos.file, range: tokRange(member.tok) };
   return memberAt(a, file, p)?.target ?? tokenHover(a, file, p)?.target;
 }
 
 export function references(index: Index, file: string, p: Position, includeDecl = true): Location[] {
   const ref = index.refAt(file, p);
-  if (!ref) return [];
-  return index.refsTo(ref.sym).filter((r) => includeDecl || !r.decl).map((r) => ({ file: r.file, range: r.range }));
+  const member = ref ? undefined : index.memberAt(file, p)?.member;
+  const found: { file: string; range: Range; decl: boolean }[] = ref ? index.refsTo(ref.sym) : member ? index.usesOf(member) : [];
+  return found.filter((r) => includeDecl || !r.decl).map((r) => ({ file: r.file, range: r.range }));
+}
+
+/** Renames a field or enum member: refused while some use of a member of that name couldn't be resolved. */
+function renameMember(index: Index, member: Member, newName: string): { edits: RenameEdit[]; error?: string } {
+  const decl = member.tok;
+  if (!index.a.sources.some((s) => s.path === decl.pos.file) || decl.pos.file === schedSourcePath()) return { edits: [], error: "this symbol is not declared in the workspace" };
+  const what = member.kind === "field" ? "field" : "enum member";
+  const misses = index.memberMisses.filter((m) => m.kind === member.kind && m.name === member.name);
+  if (misses.length) {
+    const first = misses[0];
+    const where = `${first.tok.pos.file.split(/[\\/]/).pop()}:${first.tok.pos.line}:${first.tok.pos.col}`;
+    return { edits: [], error: `can't rename ${what} '${member.name}': vidar couldn't tell what ${misses.length === 1 ? "one use" : `${misses.length} uses`} of '.${member.name}' refer${misses.length === 1 ? "s" : ""} to, first at ${where} (${first.why})` };
+  }
+  return { edits: index.usesOf(member).map((r) => ({ file: r.file, range: r.range, text: newName })) };
 }
 
 export interface RenameEdit extends Location {
@@ -1061,6 +1149,8 @@ export interface RenameEdit extends Location {
 export function rename(index: Index, file: string, p: Position, newName: string): { edits: RenameEdit[]; error?: string } {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(newName)) return { edits: [], error: `'${newName}' is not a valid identifier` };
   const ref = index.refAt(file, p);
+  const member = ref ? undefined : index.memberAt(file, p)?.member;
+  if (member) return renameMember(index, member, newName);
   if (!ref) return { edits: [], error: "nothing to rename here" };
   const decl = declToken(ref.sym);
   if (!decl || !index.a.sources.some((s) => s.path === decl.pos.file) || decl.pos.file === schedSourcePath())

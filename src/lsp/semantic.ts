@@ -236,6 +236,11 @@ export function semanticTokens(a: Analysis, index: Index | undefined, file: stri
       const k = sem.kindOf(ref.sym);
       if (k) put(ref.range, text, k, ref.decl);
     }
+    // fields and enum members, at their declarations and every use the analyzer resolved
+    for (const m of index.members) {
+      if (m.file !== file) continue;
+      put(m.range, m.member.name, { type: m.member.kind === "field" ? "property" : "enumMember", modifiers: [] }, m.decl);
+    }
   }
   const f = fileTokens(a, file);
   if (f) {

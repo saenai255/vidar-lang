@@ -1,0 +1,7 @@
+package shapes
+
+Rect :: struct { w, h: int }
+
+area :: proc(r: Rect) -> int {
+	return r.w * r.h
+}

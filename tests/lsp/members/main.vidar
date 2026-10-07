@@ -1,0 +1,46 @@
+package main
+
+import "core:fmt"
+import "core:strings"
+import "shapes"
+
+Color :: enum { Red, Green, Blue }
+
+Base :: struct { id: int }
+
+Point :: struct {
+	using base: Base,
+	x, y: f64,
+	tint: Color,
+}
+
+Cell :: struct { alive: bool, age: int, heat: f32 }
+
+paint :: proc(p: ^Point, c: Color) -> Color {
+	p.tint = c
+	if c == .Blue do return .Red
+	return p.tint
+}
+
+// `b.buf` has a type vidar doesn't know, so a field called `buf` can't be renamed safely
+Buffer :: struct { buf: [dynamic]u8 }
+
+main :: proc() {
+	p := Point{x = 1, y = 2, tint = .Green}
+	q := &p
+	fmt.println(p.x, q.y, p.id, p.base.id)
+	_ = paint(q, .Blue)
+	switch p.tint {
+	case .Red, .Blue:
+		fmt.println("warm")
+	case .Green:
+	}
+	c := Color.Blue
+	grid: #soa[4]Cell
+	grid[0].age = 3
+	fmt.println(c, grid[0].age, q.x)
+	b := strings.builder_make()
+	_ = b.buf
+	r := shapes.Rect{w = 2, h = 3}
+	fmt.println(shapes.area(r), r.w)
+}
