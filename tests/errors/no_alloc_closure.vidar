@@ -1,0 +1,7 @@
+// error: @(no_alloc) 'apply' can't be checked: calls 'f' through a closure, whose targets aren't known
+package main
+
+@(no_alloc)
+apply :: proc(x: int, f: closure(int) -> int) -> int { return f(x) }
+
+main :: proc() { _ = apply(1, proc[](x: int) -> int { return x }) }

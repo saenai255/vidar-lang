@@ -4,18 +4,19 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { Analyzer, posOf } from "./analyzer";
+import { hotWarnings } from "./checks";
 import { CompileError } from "./lexer";
 import { Output, Program, emitProgram, loadProgram, transpile } from "./project";
 
 export { transpile };
 export const EXT = ".vidar";
 
-function formatError(err: CompileError, program: Program | undefined): string {
-  if (!err.pos) return `error: ${err.message}`;
+function formatError(err: CompileError, program: Program | undefined, kind = "error"): string {
+  if (!err.pos) return `${kind}: ${err.message}`;
   const { file, line, col } = err.pos;
   const source = program?.sources.find((s) => s.path === file)?.text ?? (existsSync(file) ? readFileSync(file, "utf8") : "");
   const text = source.split("\n")[line - 1] ?? "";
-  return `${file}:${line}:${col}: error: ${err.message}\n  ${text.replace(/\t/g, "    ")}\n  ${" ".repeat(Math.max(0, text.slice(0, col - 1).replace(/\t/g, "    ").length))}^`;
+  return `${file}:${line}:${col}: ${kind}: ${err.message}\n  ${text.replace(/\t/g, "    ")}\n  ${" ".repeat(Math.max(0, text.slice(0, col - 1).replace(/\t/g, "    ").length))}^`;
 }
 
 function usage(): never {
@@ -35,7 +36,9 @@ fmt calls with a literal format, bounds checks a loop already guarantees, and
 allocations freed together. It also turns pure integer procs over bool, u8 or i8
 that loop into lookup tables, and copies procs whose constant arguments bound a
 loop into versions where they are compile-time, and procs passed closure literals
-into copies that call them directly. @(no_table) and @(no_specialize) opt a proc out.`);
+into copies that call them directly. @(no_table) and @(no_specialize) opt a proc out.
+@(no_alloc) makes it an error for a proc to allocate; with -opt, @(hot) warns about
+every -opt decision against something inside a proc.`);
   process.exit(2);
 }
 
@@ -76,9 +79,10 @@ export function main(argv: string[]): number {
   let program: Program | undefined;
   let out: Output;
   try {
-    program = loadProgram(input, { optimize, report });
+    program = loadProgram(input, { optimize });
     out = emitProgram(program);
     if (report) printReport(program.analyzer.hints);
+    for (const w of hotWarnings(program.analyzer)) console.error(formatError(w, program, "warning"));
   } catch (err) {
     if (err instanceof CompileError) {
       console.error(formatError(err, program));

@@ -37,6 +37,10 @@ Closure :: struct($P: typeid) {
 	env:  Env,
 }
 
+// @(no_alloc): what the analysis missed fails loudly in debug builds
+NO_ALLOC_CHECKS :: ODIN_OPTIMIZATION_MODE == .None || ODIN_OPTIMIZATION_MODE == .Minimal
+panic_allocator :: mem.panic_allocator
+
 // scoped!: a block's own temp allocator
 Temp_Arena :: runtime.Default_Temp_Allocator
 
@@ -669,8 +673,13 @@ export class Emitter {
   }
 
   private block(b: Block): string {
-    const lines = this.prologue.get(b);
-    if (!lines?.length) return this.generic(b);
+    const lines = [...(this.prologue.get(b) ?? [])];
+    if (A(b)._noAlloc) {
+      // allocations the @(no_alloc) check missed panic in builds below -o:size
+      lines.unshift(`when ${RUNTIME_ALIAS}.NO_ALLOC_CHECKS { context.allocator = ${RUNTIME_ALIAS}.panic_allocator(); context.temp_allocator = context.allocator }`);
+      this.fileUsesRuntime = this.usesRuntime = true;
+    }
+    if (!lines.length) return this.generic(b);
     this.prologue.delete(b);
     const next = b.toks[b.start + 1];
     return this.tok(b.toks[b.start]) + " " + lines.join("; ") + ";" + (this.ws(next.pre) || " ") + this.generic(b, b.start + 1);
@@ -1255,7 +1264,7 @@ export class Emitter {
     if (A(p)._nameResults) this.nameResults(p);
     if (this.an.optimize && p.body && !A(p)._optimized) {
       A(p)._optimized = true;
-      optimizeProc(p.body, this.an);
+      optimizeProc(p.body, this.an, !!A(p)._closureCopies);
     }
     const params: LocalSym[] = A(p)._params ?? [];
     const shadowedParams = params.filter((s) => s.refCaptured).map(addressable);

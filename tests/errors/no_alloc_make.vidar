@@ -1,0 +1,11 @@
+// error: @(no_alloc) 'squares' can allocate: make
+package main
+
+@(no_alloc)
+squares :: proc(n: int) -> []int {
+	out := make([]int, n)
+	for i in 0..<n do out[i] = i * i
+	return out
+}
+
+main :: proc() { _ = squares(3) }

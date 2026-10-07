@@ -1,0 +1,53 @@
+package main
+
+import "core:fmt"
+import "core:math"
+import "core:strings"
+
+Shape :: interface { area }
+area :: proc(s: Shape) -> f64 ---
+
+Circle :: struct { r: f64 }
+Square :: struct { side: f64 }
+
+circle_area :: proc(c: ^Circle) -> f64 { return 3 * c.r * c.r }
+square_area :: proc(s: ^Square) -> f64 { return s.side * s.side }
+
+impl Shape for Circle { area = circle_area }
+impl Shape for Square { area = square_area }
+
+Vec :: struct { x, y: f64 }
+
+length :: proc { length_vec, length_xy }
+length_vec :: proc(v: Vec) -> f64 { return math.sqrt(v.x * v.x + v.y * v.y) }
+length_xy :: proc(x, y: f64) -> f64 { return length_vec(Vec{x, y}) }
+
+fib :: proc(n: int) -> int { return n if n < 2 else fib(n - 1) + fib(n - 2) }
+
+// interface calls, proc groups, recursion, core:math and fmt.println: nothing here allocates
+@(no_alloc)
+summary :: proc(shapes: []Shape, words: []string) -> (total: f64, tagged: int) {
+	double :: proc(x: f64) -> f64 { return 2 * x }
+	for s in shapes do total += double(area(s))
+	total += length(Vec{3, 4}) + length(6, 8) + f64(fib(10))
+	for w in words do if strings.has_prefix(w, "#") do tagged += 1
+	buf: [64]byte
+	fmt.println(fmt.bprintf(buf[:], "%.1f/%d", total, tagged))
+	return
+}
+
+// called with a constant, so -opt specializes it; each copy keeps the check
+@(no_alloc)
+sum_to :: proc(xs: []int, n: int) -> (s: int) {
+	for i in 0..<n do s += xs[i]
+	return
+}
+
+main :: proc() {
+	c := Circle{1}
+	sq := Square{2}
+	shapes := []Shape{Shape(&c), Shape(&sq)}
+	fmt.println(summary(shapes, {"#a", "b", "#c"}))
+	xs := []int{1, 2, 3, 4}
+	fmt.println(sum_to(xs, 3), sum_to(xs, 4))
+}

@@ -13,7 +13,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 |---|---|---|---|---|
 | 1 | 17 | Benchmark regression check | tooling | done |
 | 2 | 20 | One command to rebuild and reinstall the VS Code extension | tooling | done |
-| 3 | 18 | `@(no_alloc)` and `@(hot)` checks | tooling | todo |
+| 3 | 18 | `@(no_alloc)` and `@(hot)` checks | tooling | done |
 | 4 | 19 | Leftovers from the first batch | tooling | todo |
 | 5 | 1 | Closure call regression (2.9x slower call through a closure) | bug | todo |
 | 6 | 2 | `sched_pending_io` busy loop | bug | todo |
@@ -171,6 +171,11 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **18, `@(no_alloc)` and `@(hot)`** done in the main tree, in a new `src/checks.ts` rather than `autoopt.ts`/`analyzer.ts`.
+  - `@(no_alloc)` follows calls through procs with bodies, proc groups, nested proc constants and interface methods (when the interface is closed), memoized per proc. A call it can't follow says "can't be checked" rather than "can allocate". The backstop is a `when __vidar.NO_ALLOC_CHECKS { ... }` on the body's first line (true at `-o:none` and `-o:minimal`), which also lands in `@(specialize)` copies; it adds two lines to every `expected/vidar_runtime`.
+  - `@(hot)` needed decisions against that weren't recorded, so `-opt` now also hints `no bounds proof` (a statement in a loop with an index that keeps its check) and `no direct call` (a call through a closure value, unless the proc has closure copies). Allocations in a loop are found by `@(hot)` itself. Hints are now always collected under `-opt`; `-opt-report` only decides whether to print them, and `LoadOptions.report` is gone.
+  - The language server runs its `-opt` analysis whenever a package has a `@(hot)` proc, and publishes the warnings with the errors.
+  - Not done: the "no direct call" hint doesn't know whether a closure parameter's callers all got copies, so it is skipped for any proc with closure copies.
 - **20, VS Code extension in one command** done in the main tree. `npm run vsix` (`scripts/vsix.js`) runs `build:binaries`, `npm install` in `editors/vscode` when it has no `node_modules`, `npm run package`, then installs the `.vsix` and reminds you to reload the window. It finds the VS Code CLI through `$VSCODE_CLI`, then `/Applications`, then `code` on PATH. About 13 s. The LSP suite passes against the rebuilt binary, inlay hints included.
 - **17, benchmark regression check** done in the main tree. `npm run bench` (`scripts/bench.js`) builds `negative_cost` at the working tree and at a ref, runs them alternately, and fails on a section over 0.5 ms that is more than 15% slower, or on a changed checksum (exit 2 when a build fails). New sections: "closure, created in a loop" (19 ms), "closure, from an array" (19 ms), "closure, as a parameter" (11 ms; a closure parameter called once per call, which is what item 1's copy on entry costs). `--against 14d4af1 --section closure` reports "called through" at +188% and fails, so it catches item 1.
   - Found while writing the array section: `fs := make_closures()`, where `make_closures` has a named result of type `[8]closure(int) -> int`, loses the closure type, and `f(x)` in `for f in fs` fails in Odin with "Cannot call a non-procedure". The section uses a typed declaration instead. Not fixed.

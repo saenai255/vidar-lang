@@ -1,0 +1,7 @@
+// error: @(no_alloc) goes on a proc declaration with a body
+package main
+
+@(no_alloc)
+limit := 3
+
+main :: proc() { _ = limit }

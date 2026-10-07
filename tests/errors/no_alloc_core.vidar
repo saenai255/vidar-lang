@@ -1,0 +1,9 @@
+// error: @(no_alloc) 'name' can allocate: strings.clone
+package main
+
+import "core:strings"
+
+@(no_alloc)
+name :: proc(s: string) -> string { return strings.clone(s) }
+
+main :: proc() { _ = name("x") }

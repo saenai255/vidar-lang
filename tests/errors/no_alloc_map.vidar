@@ -1,0 +1,10 @@
+// error: @(no_alloc) 'count' can allocate: an insert into a map
+package main
+
+@(no_alloc)
+count :: proc(m: ^map[string]int, word: string) { m[word] = m[word] + 1 }
+
+main :: proc() {
+	m: map[string]int
+	count(&m, "a")
+}

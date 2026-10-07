@@ -1170,7 +1170,7 @@ export interface OptHint {
   tooltip?: string;
 }
 
-/** The -opt decisions in `file` of an analysis made with `report`, each after its token; `all` adds the decisions against. */
+/** The -opt decisions in `file` of an -opt analysis, each after its token; `all` adds the decisions against. */
 export function optHints(a: Analysis, file: string, all: boolean): OptHint[] {
   const toks = a.packages.flatMap((p) => p.files).find((f) => f.path === file)?.toks;
   const out: OptHint[] = [];

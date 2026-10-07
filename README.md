@@ -458,6 +458,21 @@ box_blur(dst, src, r)       // the original
 
 On a `@(specialize)` proc, a call passing a closure literal also gets a copy calling the closure's body directly, as `-opt` does on its own (see above), together with any constants it passes. This happens without `-opt` too, and isn't capped.
 
+### `@(no_alloc)` and `@(hot)`
+
+Two promises the compiler checks:
+
+```odin
+@(no_alloc)
+step :: proc(w: ^World) { ... }    // error: @(no_alloc) 'step' can allocate: append, reached through step -> spawn -> push at world.vidar:12
+
+@(hot)
+blur :: proc(dst, src: []int) { ... }   // with -opt, warning: @(hot) 'blur': no bounds proof: an index here isn't proven in bounds by its loop
+```
+
+- **`@(no_alloc)`** is a compile error when the proc, or anything it calls, can allocate. It follows calls into procs with bodies (in any package), proc groups, and interface methods when every impl is known. It stops at `make`, `new`, `new_clone`, `append`, `reserve`, `resize` and the other allocating built-ins, map inserts, `[dynamic]` and `map` literals, and allocating `core:` procs (`fmt.aprintf`, `fmt.tprintf`, `fmt.sbprintf`, `strings.clone`, `strings.builder_make`, ...). A call it can't follow is an error too: a call through a closure or proc value, an interface whose impls aren't all known, or a `core:` proc that isn't on the list of procs known not to allocate (`fmt.println`/`printf`/`bprintf`, `core:math`, `core:time`'s ticks and durations, `strings.has_prefix`, ...). The message names the allocation and the chain of calls that reached it. As a backstop, in builds below `-o:size` the proc's `context.allocator` and `context.temp_allocator` panic, so an allocation the analysis missed fails loudly in tests.
+- **`@(hot)`**, with `-opt`, turns every `-opt` decision against something inside the proc into a warning, on the command line and in the editor: an index that keeps its bounds check inside a loop (`no bounds proof`), a call through a closure value (`no direct call`), a closure literal not inlined, a `vtable` call, and an allocation inside a loop. Without `-opt` it does nothing.
+
 ### `Pool(I)`
 
 `Pool(I)` holds values of every type implementing the interface `I`, stored by type: one `[dynamic]T` per implementation instead of one array of interface values. `for s in pool` becomes one loop per type, in which `s` is a `^T`, so method calls are direct calls Odin can inline. `s` converts to `I` like any pointer to an implementation.
@@ -583,6 +598,7 @@ npm run bench          # examples/negative_cost timed against HEAD; --against <r
 | `src/optimize.ts` | `-opt` rewrites inside a proc: proven bounds checks, allocations freed together, `reserve` before append loops |
 | `src/soa.ts` | `-opt`: which local arrays of structs become `#soa` |
 | `src/autoopt.ts` | `-opt` after analysis: which procs become tables or specialized copies, and the `-opt-report` notes |
+| `src/checks.ts` | `@(no_alloc)` (what a proc can allocate through) and `@(hot)` (warnings from the `-opt` decisions inside it) |
 | `src/fmtspec.ts` | reads `fmt` format strings for `-opt` |
 | `src/project.ts` | loads a program by following imports, groups import cycles (Tarjan's algorithm), and emits the output tree; shared by the CLI and the language server |
 | `src/cli.ts` | `build` / `run` / `check` / `emit` |
@@ -597,6 +613,7 @@ npm run bench          # examples/negative_cost timed against HEAD; --against <r
 - **Closure size:** every closure value carries room for `VIDAR_CLOSURE_ENV` bytes of captures (128 by default), whether it uses them or not. Arrays of closures and channels of closures are that much bigger.
 - **Import cycles merge packages.** Odin sees one package for the whole cycle. Procs declared inside `foreign` blocks of cycle members are not prefixed, so they must not clash across the cycle. Only relative imports are followed; packages reached through collections (`core:`, `shared:`, ...) can't take part in a cycle.
 - **Anonymous struct literals** only work in `:=` declarations inside procedures; not at file scope or in `if`/`for`/`switch` initializers.
+- **`@(no_alloc)` trusts lists.** Core procs are judged by name from a list of ones known not to allocate, and a custom `fmt` formatter or an allocator set on the context isn't followed. The run-time backstop only covers builds below `-o:size`.
 - **Extension keywords are contextual.** `closure`, `quote`, `interface`, `impl`, `catch` and `errdefer` remain usable as ordinary identifiers, and `take` is only a keyword inside `do!` and `comptime!` blocks.
 - **Goroutines run on one thread.** Goroutines don't run in parallel; only `blocking` work and non-Linux file I/O use other threads. Goroutines aren't preempted: a long loop that never calls into `sched` holds up the others. `core:sync` locks park the whole thread, so use `sched.Mutex` between goroutines. Only darwin/arm64, linux/arm64 and linux/amd64 are supported, and only darwin/arm64 is tested so far.
 - **`-opt` and `@(table)`** trust the compile-time interpreter. Automatic tables use only integer code it runs exactly; a `@(table)` you write yourself must be pure, which vidar does not check.

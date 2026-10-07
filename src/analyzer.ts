@@ -3,6 +3,7 @@ import { Block, Expr, File, Node, Param, ProcSig, Stmt, children } from "./ast";
 import { Parser } from "./parser";
 import { CaptureSym, Ctx, GlobalSym, LocalSym, PackageInfo, PkgSym, Scope, Sym, Ty } from "./scope";
 import { autoOptimize } from "./autoopt";
+import { checkNoAlloc } from "./checks";
 import { CallSpan, Interp, NotConstant, Val, joinTokens, repeatable, respace, valueToTokens, tokensOf } from "./comptime";
 
 /** Annotation accessor: analysis results live in `_`-prefixed fields on nodes. */
@@ -207,6 +208,7 @@ export class Analyzer {
     }
     for (const p of this.closureCalls) this.guard(() => this.specializeClosures(p.e, p.sym, p.info, p.consts));
     if (this.optimize) this.guard(() => autoOptimize(this));
+    checkNoAlloc(this, (f) => this.guard(f));
   }
 
   // ---- declarations ----
@@ -250,7 +252,7 @@ export class Analyzer {
         });
         A(s)._syms = syms;
         if (inWhen) for (const sym of syms) this.whenDeclared.add(sym);
-        const attrs = this.takeAttrs(s, ["specialize", "table", "no_specialize", "no_table"]);
+        const attrs = this.takeAttrs(s, ["specialize", "table", "no_specialize", "no_table", "no_alloc", "hot"]);
         if (attrs.size) {
           const lit = s.values.length === 1 && s.isConst ? unwrapProc(s.values[0]) : undefined;
           const which = [...attrs].map((a) => `@(${a})`).join(" and ");
@@ -260,7 +262,9 @@ export class Analyzer {
           if (!lit || !lit.body || lit.comptime || lit.captures) throw new CompileError(`${which} goes on a proc declaration with a body: name :: proc(...) { ... }`, posOf(s));
           if (attrs.has("specialize")) this.specialized.set(syms[0], { lit, scope: fileScope, clones: new Map() });
           else if (attrs.has("table")) this.tables.set(syms[0], { lit } as TableInfo);
-          const out = [...attrs].filter((a) => a.startsWith("no_")).map((a) => a.slice(3));
+          if (attrs.has("no_alloc")) this.noAllocProcs.set(syms[0], lit), (A(lit.body)._noAlloc = true);
+          if (attrs.has("hot")) this.hotProcs.set(syms[0], lit);
+          const out = [...attrs].filter((a) => a.startsWith("no_") && a !== "no_alloc").map((a) => a.slice(3));
           if (out.length) this.optOut.set(syms[0], new Set(out));
         }
         s.values.forEach((v, i) => {
@@ -1115,6 +1119,10 @@ export class Analyzer {
   readonly tables = new Map<GlobalSym, TableInfo>();
   /** declared inside a top-level `when`, so maybe not compiled at all */
   readonly whenDeclared = new Set<GlobalSym>();
+  /** @(no_alloc) procs: nothing they run may allocate */
+  readonly noAllocProcs = new Map<GlobalSym, ProcLit>();
+  /** @(hot) procs: -opt decisions against anything inside them are warnings */
+  readonly hotProcs = new Map<GlobalSym, ProcLit>();
   /** what `@(no_specialize)` / `@(no_table)` keep -opt from doing on its own */
   readonly optOut = new Map<GlobalSym, Set<string>>();
   /** -opt: the direct calls to each proc that isn't @(specialize), to decide on it after analysis */

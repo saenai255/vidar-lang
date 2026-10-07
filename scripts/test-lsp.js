@@ -222,6 +222,14 @@ function change(text) {
   const msgs = d1.diagnostics.map((d) => d.message).join(" | ");
   check("vidar errors reported (several at once)", d1.diagnostics.length === 2 && msgs.includes("not captured") && msgs.includes("private"), msgs);
 
+  // @(hot): -opt decisions against code inside it are warnings
+  const hot = original + "\n@(hot)\nhot_sum :: proc(a, b: []int) -> (t: int) {\n\tfor i in 0..<len(a) do t += b[i]\n\treturn\n}\n";
+  const warned = nextDiagnostics((d) => d.diagnostics.some((x) => x.severity === 2));
+  change(hot);
+  const w = (await warned).diagnostics.find((x) => x.severity === 2);
+  const hotLine = hot.split("\n").findIndex((l) => l.includes("t += b[i]"));
+  check("@(hot) warns about a bounds check left in", w.range.start.line === hotLine && w.message.includes("no bounds proof"), JSON.stringify(w));
+
   // diagnostics from `odin check` on save, mapped back to the .vidar line
   const typeError = original.replace("\tinc()\n", "\tinc()\n\tbad: string = count\n");
   writeFileSync(file, typeError);

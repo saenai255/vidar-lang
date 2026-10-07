@@ -23,6 +23,10 @@ Closure :: struct($P: typeid) {
 	env:  Env,
 }
 
+// @(no_alloc): what the analysis missed fails loudly in debug builds
+NO_ALLOC_CHECKS :: ODIN_OPTIMIZATION_MODE == .None || ODIN_OPTIMIZATION_MODE == .Minimal
+panic_allocator :: mem.panic_allocator
+
 // scoped!: a block's own temp allocator
 Temp_Arena :: runtime.Default_Temp_Allocator
 

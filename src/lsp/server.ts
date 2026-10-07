@@ -12,6 +12,7 @@ import { spawn } from "node:child_process";
 import { CompileError } from "../lexer";
 import { Program as Analysis, emitProgram, loadProgram, outputName, preludeSourcePath } from "../project";
 import { optimizeAll } from "../optimize";
+import { hotWarnings } from "../checks";
 import { PRELUDE_PATH } from "../prelude";
 import { writeOutput } from "../cli";
 import * as F from "./features";
@@ -29,6 +30,8 @@ interface PackageState {
   lastGood?: Analysis;
   /** a separate analysis with -opt on, made when hints are asked for */
   opt?: { of: Analysis; program: Analysis };
+  /** @(hot) warnings, from the -opt analysis */
+  hotWarnings: CompileError[];
   odinDiagnostics: Map<string, Diagnostic[]>;
 }
 
@@ -43,7 +46,7 @@ const toUri = (path: string) => pathToFileURL(path === PRELUDE_PATH ? preludeSou
 
 function pkg(dir: string): PackageState {
   let p = packages.get(dir);
-  if (!p) packages.set(dir, (p = { odinDiagnostics: new Map() }));
+  if (!p) packages.set(dir, (p = { hotWarnings: [], odinDiagnostics: new Map() }));
   return p;
 }
 
@@ -52,12 +55,12 @@ function overrides(): Map<string, string> {
   return new Map(documents.all().map((d) => [toPath(d.uri), d.getText()]));
 }
 
-function toDiagnostic(err: CompileError, source: string): Diagnostic {
+function toDiagnostic(err: CompileError, source: string, severity: DiagnosticSeverity = DiagnosticSeverity.Error): Diagnostic {
   const line = (err.pos?.line ?? 1) - 1;
   const col = (err.pos?.col ?? 1) - 1;
   return {
     range: { start: { line, character: col }, end: { line, character: col + 1 } },
-    severity: DiagnosticSeverity.Error,
+    severity,
     source,
     message: err.message,
   };
@@ -77,6 +80,8 @@ function analyzePackage(dir: string): PackageState {
   state.current = a;
   state.index = new F.Index(a);
   if (!a.errors.length) state.lastGood = a;
+  const opt = a.analyzer.hotProcs.size && !a.errors.length ? optAnalysis(state, dir) : undefined;
+  state.hotWarnings = opt ? hotWarnings(opt.analyzer) : [];
   if (ols) syncOdin(dir, a);
   publish(dir, state);
   if (hintRefresh && settings.optHints !== "off" && settings.optHints !== false) connection.languages.inlayHint.refresh().catch(() => {});
@@ -97,6 +102,7 @@ function publish(dir: string, state: PackageState): void {
   if (!a) return;
   for (const s of a.sources) {
     const diags = a.errors.filter((e) => (e.pos?.file ?? a.sources[0].path) === s.path).map((e) => toDiagnostic(e, "vidar"));
+    diags.push(...state.hotWarnings.filter((w) => w.pos?.file === s.path).map((w) => toDiagnostic(w, "vidar", DiagnosticSeverity.Warning)));
     diags.push(...(state.odinDiagnostics.get(s.path) ?? []));
     connection.sendDiagnostics({ uri: toUri(s.path), diagnostics: diags });
   }
@@ -310,23 +316,29 @@ connection.onDidChangeConfiguration(({ settings: s }) => {
   if (hintRefresh) connection.languages.inlayHint.refresh().catch(() => {});
 });
 
-/** What -opt decided, shown after the names and code it is about; a second, -opt analysis that emits nothing. */
+/** A second analysis of the current one with -opt on, which emits nothing; made once per analysis. */
+function optAnalysis(state: PackageState, dir: string): Analysis | undefined {
+  if (state.opt?.of === state.current) return state.opt!.program;
+  try {
+    const program = loadProgram(dir, { tolerant: true, overrides: overrides(), optimize: true });
+    optimizeAll(program.analyzer, program.packages.flatMap((p) => p.files));
+    state.opt = { of: state.current!, program };
+    return program;
+  } catch (err) {
+    connection.console.error(`vidar: -opt analysis failed: ${err instanceof Error ? err.stack : err}`);
+    return undefined;
+  }
+}
+
+/** What -opt decided, shown after the names and code it is about. */
 connection.languages.inlayHint.on(({ textDocument, range }) => {
   if (settings.optHints === "off" || settings.optHints === false) return [];
   const { state, path } = stateFor(textDocument.uri);
   if (!state.current) return [];
-  if (state.opt?.of !== state.current) {
-    try {
-      const program = loadProgram(dirname(path), { tolerant: true, overrides: overrides(), optimize: true, report: true });
-      optimizeAll(program.analyzer, program.packages.flatMap((p) => p.files));
-      state.opt = { of: state.current, program };
-    } catch (err) {
-      connection.console.error(`vidar: -opt analysis failed: ${err instanceof Error ? err.stack : err}`);
-      return [];
-    }
-  }
+  const program = optAnalysis(state, dirname(path));
+  if (!program) return [];
   const inRange = (p: F.Position) => (p.line > range.start.line || (p.line === range.start.line && p.character >= range.start.character)) && (p.line < range.end.line || (p.line === range.end.line && p.character <= range.end.character));
-  return F.optHints(state.opt.program, path, settings.optHints === "all")
+  return F.optHints(program, path, settings.optHints === "all")
     .filter((h) => inRange(h.position))
     .map((h) => ({ position: h.position, label: h.label, tooltip: h.tooltip, paddingLeft: true }));
 });

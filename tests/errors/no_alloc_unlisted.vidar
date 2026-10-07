@@ -1,0 +1,12 @@
+// error: 'os.read_entire_file' (core:os) isn't on the list of procs known not to allocate
+package main
+
+import "core:os"
+
+@(no_alloc)
+load :: proc() -> bool {
+	_, ok := os.read_entire_file("x")
+	return ok
+}
+
+main :: proc() { _ = load() }

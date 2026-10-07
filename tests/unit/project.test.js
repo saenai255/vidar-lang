@@ -94,3 +94,41 @@ test("tolerant loading collects errors from every package", () => {
   assert.match(messages, /has no member 'missing'/);
   assert.match(messages, /not captured/);
 });
+
+test("@(hot) warns about -opt decisions against code inside it, only with -opt", () => {
+  const { hotWarnings } = require("../../dist/checks.js");
+  const root = tree({
+    "main.vidar": `package main
+@(hot)
+mix :: proc(a, b: []int, f: closure(int) -> int) -> (t: int) {
+	for i in 0..<len(a) {
+		t += a[i]
+		t += b[i] + f(i)
+		tmp := make([]int, 2)
+		delete(tmp)
+	}
+	return
+}
+cool :: proc(a, b: []int) -> (t: int) {
+	for i in 0..<len(a) do t += b[i]
+	return
+}
+main :: proc() {
+	xs := []int{1}
+	f := proc[](x: int) -> int { return x }
+	_ = mix(xs, xs, f) + cool(xs, xs)
+}
+`,
+  });
+  const warnings = (optimize) => {
+    const p = loadProgram(root, { optimize });
+    emitProgram(p);
+    return hotWarnings(p.analyzer).map((w) => `${w.pos.line}: ${w.message.split(": ").slice(0, 2).join(": ")}`);
+  };
+  assert.deepEqual(warnings(true), [
+    "6: @(hot) 'mix': no bounds proof",
+    "6: @(hot) 'mix': no direct call",
+    "7: @(hot) 'mix': allocates in a loop",
+  ]);
+  assert.deepEqual(warnings(false), []);
+});

@@ -12,13 +12,19 @@ import type { LocalSym, Sym } from "./scope";
  * - `_reserve` on a loop: dynamic arrays it appends to a known number of times, reserved before it
  * Each decision is also an `an.hint`, so -opt-report and the editor show it.
  */
-export function optimizeProc(body: Block, an: Analyzer): void {
+export function optimizeProc(body: Block, an: Analyzer, closureCopies = false): void {
   const facts = collectFacts(body);
   provenIndexes(body, facts, an);
   allocGroups(body, facts, an);
   reserves(body, facts, an);
   soaLocals(body, an);
-  if (an.hints) walk(body, (n) => void (n.k === "Call" && fmtPlan(an, n) && an.hint(n, "fmt inlined", "a compiled format: writes each piece directly, no format parsing or `any` boxing at run time")));
+  if (!an.hints) return;
+  walk(body, (n) => {
+    if (n.k !== "Call") return;
+    if (fmtPlan(an, n)) an.hint(n, "fmt inlined", "a compiled format: writes each piece directly, no format parsing or `any` boxing at run time");
+    // copies made for closure literals call those directly
+    else if (A(n)._closure && !A(n)._closureSpec && !closureCopies) an.hint(n, "no direct call", "a call through a closure value: an indirect call that can't be inlined");
+  });
 }
 
 /** Runs `optimizeProc` on every proc in `files` without emitting them, for the hints. */
@@ -28,7 +34,7 @@ export function optimizeAll(an: Analyzer, files: File[]): void {
       if (n.comptime) return;
       if (n.body && !A(n)._optimized) {
         A(n)._optimized = true;
-        optimizeProc(n.body, an);
+        optimizeProc(n.body, an, !!A(n)._closureCopies);
       }
     }
     for (const c of kids(n)) visit(c);
@@ -161,9 +167,12 @@ function provenIndexes(body: Block, facts: Facts, an: Analyzer): void {
     return { all, any };
   };
   const stmts = (list: Stmt[]) => list.forEach(stmt);
+  let loops = 0;
   const stmt = (s: Stmt): void => {
     const proof = loopProof(s, facts);
     if (proof) proofs.push(proof);
+    const loop = s.k === "For" || s.k === "RangeFor";
+    if (loop) loops++;
     try {
       if (proof || proofs.length) {
         const inner = s.k === "Labeled" || s.k === "DirectiveStmt" ? s.stmt : s;
@@ -181,16 +190,35 @@ function provenIndexes(body: Block, facts: Facts, an: Analyzer): void {
           return;
         }
       }
+      if (loops && !COMPOUND.has(s.k) && an.hints && checkedIndex(s, an))
+        an.hint(s, "no bounds proof", "an index here isn't proven in bounds by its loop, so it keeps its bounds check");
       for (const c of kids(s)) {
         if (c.k === "Block") stmts(c.stmts);
         else if (c.k === "Case") stmts(c.body);
-        else if (c.k === "If" || c.k === "For" || c.k === "RangeFor" || c.k === "Switch" || c.k === "Labeled" || c.k === "DirectiveStmt" || c.k === "When") stmt(c);
+        else if (COMPOUND.has(c.k)) stmt(c as Stmt);
       }
     } finally {
       if (proof) proofs.pop();
+      if (loop) loops--;
     }
   };
   stmts(body.stmts);
+}
+
+const COMPOUND = new Set(["If", "For", "RangeFor", "Switch", "Labeled", "DirectiveStmt", "When"]);
+
+/** Whether `s` indexes anything that has a bounds check: not a map, not a constant into a fixed array. */
+function checkedIndex(s: Node, an: Analyzer): boolean {
+  let found = false;
+  walk(s, (m) => {
+    if (found || m.k !== "Index") return;
+    const t = an.normalize(an.typeOf(m.x, an.global));
+    const what = t?.t === "node" && t.node.k === "TypeExpr" ? t.node.what : undefined;
+    if (what === "map") return;
+    if (what === "array" && !m.slice && m.indices.every((i) => i?.k === "Lit")) return;
+    found = true;
+  });
+  return found;
 }
 
 // ---- grouped allocations ----

@@ -271,6 +271,8 @@ Example: [examples/comptime](examples/comptime).
 | `@(table) f :: proc(x: T) -> R { ... }` | `T` is `bool`, `u8`, `i8` or an enum (without explicit member values): every result is stored once, and `f(x)` becomes a table lookup. Computed at compile time when the body can run there, else at startup. The body must depend only on `x` |
 | `@(specialize) f :: proc(...) { ... }` | each call passing constants to basic or enum parameters calls a copy where those are compile-time (`$p`); a call passing a closure literal to a closure parameter `f`'s body only calls calls a copy that calls the literal's body directly (also without `-opt`); other calls call `f` |
 | `@(no_table)`, `@(no_specialize)` | `-opt` won't make `f` a table / specialize it on its own |
+| `@(no_alloc) f :: proc(...) { ... }` | compile error when `f`, or anything it calls, can allocate (or calls something that can't be checked: a closure, a proc value, an interface with unknown impls, an unlisted `core:` proc); in builds below `-o:size` its allocators also panic |
+| `@(hot) f :: proc(...) { ... }` | with `-opt`, every decision against something inside `f` is a warning: a bounds check left in a loop, an indirect call, a closure not inlined, a vtable call, an allocation in a loop |
 | `Pool(I)` | values of every implementation of interface `I`, one array per type; `I` must not be extended in another package |
 | `append(&pool, v1, v2, ...)` | copies values (not pointers) into their type's array; a statement of its own |
 | `for s in pool { ... }` | one loop per type, `s` is a `^T` and converts to `I`; `break`, `continue` and labels act on the whole loop |

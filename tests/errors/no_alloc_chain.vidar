@@ -1,0 +1,15 @@
+// error: @(no_alloc) 'step' can allocate: append, reached through step -> spawn -> push at no_alloc_chain.vidar:6
+package main
+
+World :: struct { ids: [dynamic]int }
+
+push :: proc(w: ^World, id: int) { append(&w.ids, id) }
+spawn :: proc(w: ^World) { push(w, len(w.ids)) }
+
+@(no_alloc)
+step :: proc(w: ^World) { if len(w.ids) < 10 do spawn(w) }
+
+main :: proc() {
+	w: World
+	step(&w)
+}
