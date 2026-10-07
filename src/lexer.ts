@@ -50,6 +50,8 @@ const OPS = [
 const SEMI_AFTER_KW = new Set(["break", "continue", "fallthrough", "return", "typeid", "or_return", "or_break", "or_continue"]);
 const SEMI_AFTER_OP = new Set([")", "]", "}", "^", "?", "---", "!"]);
 
+const VALUE_DIRECTIVES = new Set(["#procedure", "#file", "#line", "#directory", "#caller_location", "#caller_expression"]);
+
 export function lex(src: string, file: string): Token[] {
   const toks: Token[] = [];
   const brackets: string[] = [];
@@ -77,6 +79,8 @@ export function lex(src: string, file: string): Token[] {
     if (top === "(" || top === "[") return false;
     if (last.kind === "ident" || last.kind === "int" || last.kind === "float" || last.kind === "imag" || last.kind === "string" || last.kind === "rune") return true;
     if (last.kind === "kw") return SEMI_AFTER_KW.has(last.text);
+    // directives that are values on their own (`X :: #procedure`)
+    if (last.kind === "directive") return VALUE_DIRECTIVES.has(last.text);
     if (last.kind === "op") return SEMI_AFTER_OP.has(last.text);
     return false;
   };

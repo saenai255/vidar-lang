@@ -19,6 +19,11 @@ test("semicolon after return, break, continue and diverging results", () => {
   assert.deepEqual(kinds("f :: proc() -> !\n").slice(-2), ["!", "\\n"]);
 });
 
+test("semicolon after a directive that is a value, not after one that prefixes", () => {
+  assert.deepEqual(kinds("X :: #procedure\n"), ["X", "::", "#procedure", "\\n"]);
+  assert.deepEqual(kinds("#partial\nswitch"), ["#partial", "switch"]);
+});
+
 test("block comment containing a newline ends the statement", () => {
   assert.deepEqual(kinds("x := 1 /* a\nb */ y := 2"), ["x", ":=", "1", "\\n", "y", ":=", "2", "\\n"]);
 });
