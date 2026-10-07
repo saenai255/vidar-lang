@@ -17,9 +17,9 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 4 | 21 | Macro expansion on hover | tooling | done |
 | 5 | 19 | Leftovers from the first batch | tooling | done |
 | 6 | 1 | Closure call regression (2.9x slower call through a closure) | bug | done |
-| 7 | 2 | `sched_pending_io` busy loop | bug | blocked |
+| 7 | 2 | `sched_pending_io` busy loop | bug | closed (not reproduced) |
 | 8 | 3 | Dangling by-reference captures in returned closures | bug | merged |
-| 9 | 5 | Intermittent Odin compiler hang | bug | blocked |
+| 9 | 5 | Intermittent Odin compiler hang | bug | closed (not reproduced) |
 | 10 | 6 | Value interfaces / closed unions | perf | merged (as an -opt rewrite) |
 | 11 | 7 | Generated per-type printers and JSON code | perf | merged (no unmarshal) |
 | 12 | 8 | Multithreaded (M:N) scheduler | perf | merged |
@@ -38,6 +38,26 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 25 | 29 | `-opt` decisions panel and code lens | dev tooling | merged |
 | 26 | 30 | `vidar fmt` | dev tooling | merged |
 | 27 | 31 | Debugger support: `vidar build -debug` and a launch config | dev tooling | merged |
+| 28 | 32 | Run the tests in CI before every release | infra | todo |
+| 29 | 33 | Escape analysis through calls | bug | todo |
+| 30 | 34 | Closure arrays returned through named results lose their type | bug | todo |
+| 31 | 35 | Close 2 and 5 as not reproduced | bug | done |
+| 32 | 36 | Goroutine dump and deadlock detection at N threads | scheduler | todo |
+| 33 | 37 | Debug race check at N threads | scheduler | todo |
+| 34 | 38 | Scheduler trace for Perfetto | scheduler | todo |
+| 35 | 39 | Work stealing of goroutines that have run | scheduler | todo |
+| 36 | 40 | Closure bodies that use the enclosing proc's constants, types and `$T` | language | todo |
+| 37 | 41 | Anonymous struct literals everywhere | language | todo |
+| 38 | 42 | Generic impls, and proc groups or polymorphic procs as bound methods | language | todo |
+| 39 | 43 | Resolve field and enum-member uses in the analyzer | editor | todo |
+| 40 | 44 | Forward rewritten lines to ols | editor | todo |
+| 41 | 45 | Index the whole workspace at startup | editor | todo |
+| 42 | 46 | Missing-import fix from `odin root` | editor | todo |
+| 43 | 47 | Generated `json.unmarshal` | perf | todo |
+| 44 | 48 | Hot/cold splitting across procs | perf | todo |
+| 45 | 49 | Loop fusion and pipeline macros | perf | todo |
+| 46 | 50 | `vidar new` | dev tooling | todo |
+| 47 | 51 | Windows support | platform | todo |
 
 ## Tooling
 
@@ -240,12 +260,104 @@ Odin has no `#line` directive, so stepping happens in the generated Odin.
 - The extension adds a `vidar` debug configuration that runs `vidar build -debug` and launches lldb (CodeLLDB) or gdb on the result, plus *Vidar: Show Generated Odin* opening at the line matching the current `.vidar` line so breakpoints can be set there.
 - README section on debugging.
 
+## Wave 5
+
+What was left after the developer tooling: open bugs, scheduler debugging, language limits from README's "Limits", editor gaps, the open perf items, and platforms.
+
+### 32. Tests in CI
+`.github/workflows/build.yml` builds and releases on every push to `main` without running a test.
+- A `test` job on ubuntu-24.04 and macos-14 (arm64): Node 20, Odin from the same nightly the release uses, `npm ci`, `npm test`. The release jobs `needs:` it.
+- `ols` is optional; the LSP suite skips its checks without it.
+- Also run `node scripts/test.js` once with `VIDAR_ODIN_FLAGS="-define:VIDAR_THREADS=4"` and `npm run stress -- tests/cases/sched_pending_io -n 500`, so 2 and 5 get more machines.
+- Upload `$TMPDIR/vidar-stress-*/hang-*.txt` as an artifact on failure.
+
+### 33. Escape analysis through calls
+`src/escape.ts` follows a `&x` closure (and, since 26, an interface value pointing at a local) through locals, but not into calls, so passing one to `sched.go` or to a proc that stores it dangles unnoticed.
+- A per-proc summary: for each parameter, whether the proc lets it escape (returns it, stores it through a pointer, in a field, a global or a slice it doesn't own, appends it to something it doesn't own, passes it to `sched.go`, or passes it to another parameter that escapes). Computed to a fixed point over the call graph, across packages.
+- At a call, an argument holding `&x` of the caller's local goes through the summary. `sched.go` and `sched.go_*` count as escaping.
+- Unknown callees (proc values, foreign, `core:`) are trusted, as now; say so in README's Limits.
+- Error message names the call and the callee's line where it escapes. Cases in `tests/errors/`.
+
+### 34. Closure arrays through named results
+`fs := make_closures()`, where `make_closures` has a named result of type `[8]closure(int) -> int`, loses the closure type; `f(x)` in `for f in fs` then fails in Odin with "Cannot call a non-procedure". Found while writing item 17's bench section.
+- Make the result's declared type flow into `:=` for named results, as it does for unnamed ones. Check fixed arrays, slices and dynamic arrays of closures, and a struct holding one. New case.
+
+### 35. Close 2 and 5
+Neither reproduced: 2000 runs of `sched_pending_io` on the M3 and thousands on linux/amd64 found no hang; the compiler spin never came back on linux. Closed; 32 runs both checks on every push, and they reopen if CI catches one.
+
+### 36. Goroutine dump and deadlock detection at N threads
+- On a deadlock (every goroutine parked, no I/O pending, no timers) and on SIGQUIT (unix), print every goroutine: its id, where it was started (`go` call site, as `.vidar` via the run map), what it is parked on (channel and direction, `Mutex`, `Wait_Group`, `select`, I/O, sleep) and where it parked.
+- At `VIDAR_THREADS>1`, a deadlock waits forever today. Detect it with a global count of runnable goroutines and of threads idle, checked when a thread goes idle; then dump and panic as at 1 thread.
+- Off in `-o:speed` builds unless `-define:VIDAR_SCHED_DEBUG=true`, except the deadlock panic itself, which stays.
+
+### 37. Debug race check at N threads
+`-define:VIDAR_RACE=true` (only with `VIDAR_THREADS>1`): each global and each `&x`-captured local that more than one goroutine can reach gets a shadow word with the last writer's goroutine and a happens-before epoch, bumped by channel operations, `Mutex`, `Wait_Group` and `go`. A write from another goroutine with no ordering between them prints both sites and continues. Cheap and partial, not a full race detector; the docs say what it misses.
+
+### 38. Scheduler trace
+`-define:VIDAR_SCHED_TRACE=true`: a ring buffer per thread of `go`, park (with reason), wake, steal, I/O submit/complete and thread idle, with timestamps. Written at exit (or SIGQUIT) as Chrome trace JSON (`vidar-trace.json`, `VIDAR_TRACE_FILE` overrides), viewable in Perfetto. Zero cost when off.
+
+### 39. Work stealing of goroutines that have run
+A goroutine stays on the thread that first ran it, because LLVM may keep a thread-local's address across the stack switch. Make moving safe, then steal any runnable goroutine:
+- Read the scheduler through a pointer kept in the goroutine's own state (or a non-inlined accessor that LLVM can't cache), so nothing thread-local survives a switch; verify with `-o:speed` and `-build-mode:llvm-ir`.
+- Steal half of another thread's queue when idle; the park/wake handshake needs a state word per goroutine (running, parking, parked, runnable) since the waker may then be on another thread.
+- `examples/fanout` with uneven jobs as the bench; stress at 2 and 4 threads with `-opt -o:speed`.
+
+### 40. Closure bodies and the enclosing proc's declarations
+Closure bodies are lifted to file scope, so they can't use the enclosing proc's local constants or types, or its `$T` parameters.
+- Local constants and types the body uses are lifted with it, renamed (`__Local_N`), when they don't depend on runtime values or on `$T`.
+- Inside a polymorphic proc, the closure's body proc is emitted as a nested proc declaration inside the polymorphic proc instead of at file scope, so `$T` resolves (Odin allows nested procs that use the outer's constants and types).
+- Cases for each; README's Limits updated.
+
+### 41. Anonymous struct literals everywhere
+They only work in `:=` declarations inside procs. Allow them at file scope (`x := struct{...}{...}` globals) and in `if`/`for`/`switch` initializers, and as call arguments where the parameter type is inferred.
+
+### 42. Interfaces: generic impls, proc groups and polymorphic procs
+- `impl Shape for Box($T)` (an impl for a parametric struct): a vtable per instantiation the program uses.
+- A proc group or a polymorphic proc as a bound method: pick the overload, or instantiate, for the impl's type at vtable construction.
+- Errors where a choice is ambiguous.
+
+### 43. Field and enum-member uses
+`x.field` and `.Red` / `Color.Red` aren't resolved by the analyzer, so hover, go to definition, rename, references and semantic tokens don't work on them.
+- Resolve selector fields through the analyzer's types (struct fields, `using` fields, `#soa`, pointers), and implicit enum selectors where the expected type is known (assignments, comparisons, `case`, call arguments, returns).
+- Feed `features.ts` (hover, definition, references, rename) and `semantic.ts` (`property`, `enumMember` at uses).
+
+### 44. Forward rewritten lines to ols
+Lines vidar rewrites (a line that uses a by-reference capture, say) aren't forwarded to ols, so hover and completion on plain Odin parts of them are lost.
+- Use the emitter's column map for rewritten lines: record, for each source token kept in the output, its output column. Forward a request on such a token at its mapped position.
+- Can't be tested here without ols; the tests skip as the others do.
+
+### 45. Workspace index at startup
+The `-opt` report and workspace symbols only cover programs the server has analyzed, which means files that have been opened. On `initialized`, find every package directory under the workspace folders that holds `.vidar` files (skipping `out/`, `node_modules/`, `.git`, `expected/`), and analyze each program root in the background, lowest priority, debounced.
+
+### 46. Missing-import fix from `odin root`
+The quick fix knows about 40 packages from a fixed table. Read `odin root` once (cached), list `core/`, `base/` and `vendor/` package directories, and offer every package whose last path part matches. Keep the table as the fallback when `odin` isn't on PATH.
+
+### 47. Generated `json.unmarshal`
+Item 7 generates `json.marshal` only. Generate `json.unmarshal(data, &x)` for the same shapes: a hand-written parser over the bytes (strings with escapes, numbers, bools, null, nested objects and arrays), fields matched by key (with `json:` tags), unknown keys skipped, and encoding/json's errors for the same inputs. Same `when T ==` guard. Bench against encoding/json in `negative_cost`.
+
+### 48. Hot/cold splitting across procs
+For a `[dynamic]T` whose hot loops (in any proc it is passed to) touch few fields, store the rarely used fields in a parallel array. Interprocedural: every proc the array reaches must be rewritten consistently, or it isn't split. Same refusal rules as reordering (15) for anything that can see the layout. Bench section in `negative_cost`.
+
+### 49. Loop fusion and pipeline macros
+- Macros `map!`, `filter!`, `fold!` (or a `|>` pipeline) over slices and dynamic arrays that expand into one loop with no intermediate arrays.
+- `-opt` fusion of adjacent plain loops over the same range when neither reads what the other writes after it.
+- Bench sections for both.
+
+### 50. `vidar new`
+`vidar new <dir> [--lib]`: `main.vidar` (hello world, or a library package with a test), `.gitignore` (`out/`), a `.vscode/launch.json` with the `vidar` debug configuration, and a README stub. Refuses a non-empty directory.
+
+### 51. Windows
+- Stack-switching assembly for windows/amd64 (Win64 calling convention: callee-saved xmm6 to xmm15, the TIB stack fields) in `vidar:sched`.
+- Paths: the run map, the CLI and the LSP with `\` and drive letters.
+- Can't run here: check that the generated code builds with `odin build -target:windows_amd64` and that `odin check` passes; CI (32) gets a windows job once it runs.
+
 ## Parallel plan
 - **Wave 1 (tooling first):** 17, 20, 18, 21 and 19, plus 2, 3 and 5. These touch mostly separate files. Merge in priority order: 17, 20, 18, 21, 19, then the bugs.
 - **Wave 2:** 1, measured with 17, merged first because it is a small emitter change that the rest build on. Then 6, 7, 9, 10, 11, 13 and 15 in parallel.
   - Expected conflicts: `src/emitter.ts` (1, 6, 7, 11, 15), `src/optimize.ts` (9, 10, 19), `src/autoopt.ts` (13, 18), `src/analyzer.ts` (3, 6, 15, 18).
 - **Wave 3:** 8, after 2 is merged.
 - **Wave 4 (developer tooling):** 22 to 31 in parallel. Expected conflicts: `src/cli.ts` (22, 23, 24, 30, 31), `src/lsp/server.ts` and `src/lsp/features.ts` (25 to 30), `editors/vscode` (25, 27, 29, 31). Merge order: 23, 22, 24, 31, 30, then the language-server items 26, 28, 27, 25, 29.
+- **Wave 5:** 32 to 51, in 10 worktrees: (32, 46, 50), (33, 34), (36, 38, 37, 39) in that order since they share `src/sched.ts`, (40, 41), (42), (43, 45, 44), (47), (48, 49), (51). Expected conflicts: `src/sched.ts` (36 to 39, 51), `src/analyzer.ts` and `src/emitter.ts` (33, 34, 40 to 43, 47 to 49). Merge source, then regenerate fixtures.
 - After each wave: `npm test`, `npm run bench`, and `npm run vsix` if the editor's output changed.
 
 ## Not in this batch
