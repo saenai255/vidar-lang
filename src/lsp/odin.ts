@@ -111,26 +111,29 @@ export class OdinBridge {
         this.disabled = true;
         conn.dispose();
       });
-      conn.listen();
-      const rootUri = pathToFileURL(this.root).toString();
-      conn
-        .sendRequest("initialize", {
-          processId: process.pid,
-          rootUri,
-          workspaceFolders: [{ uri: rootUri, name: "vidar" }],
-          capabilities: {
-            textDocument: {
-              hover: { contentFormat: ["markdown", "plaintext"] },
-              completion: { completionItem: { snippetSupport: true, documentationFormat: ["markdown", "plaintext"] } },
-              signatureHelp: { signatureInformation: { documentationFormat: ["markdown", "plaintext"] } },
-              definition: { linkSupport: false },
+      // only talk to ols once it runs: a write to a missing one rejects, and an unhandled rejection ends the server
+      proc.once("spawn", () => {
+        conn.listen();
+        const rootUri = pathToFileURL(this.root).toString();
+        conn
+          .sendRequest("initialize", {
+            processId: process.pid,
+            rootUri,
+            workspaceFolders: [{ uri: rootUri, name: "vidar" }],
+            capabilities: {
+              textDocument: {
+                hover: { contentFormat: ["markdown", "plaintext"] },
+                completion: { completionItem: { snippetSupport: true, documentationFormat: ["markdown", "plaintext"] } },
+                signatureHelp: { signatureInformation: { documentationFormat: ["markdown", "plaintext"] } },
+                definition: { linkSupport: false },
+              },
             },
-          },
-        })
-        .then(() => {
-          conn.sendNotification("initialized", {});
-          resolve(true);
-        }, () => resolve(false));
+          })
+          .then(() => {
+            conn.sendNotification("initialized", {});
+            resolve(true);
+          }, () => resolve(false));
+      });
     });
     return this.ready;
   }
