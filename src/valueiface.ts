@@ -1,5 +1,5 @@
 import { Block, Expr, Node, Stmt } from "./ast";
-import { A, Analyzer, IfaceMethod, ImplInfo, nodeText, posOf } from "./analyzer";
+import { A, Analyzer, IfaceMethod, ImplInfo, nodeText, parametricImpl, posOf } from "./analyzer";
 import { kids } from "./optimize";
 import { sizeOf } from "./soa";
 import type { GlobalSym, LocalSym, Sym } from "./scope";
@@ -59,6 +59,7 @@ function consider(s: Extract<Stmt, { k: "ValueDecl" }>, body: Block, an: Analyze
   const variants = an.variants(iface);
   if (!variants.length) return;
   for (const v of variants) {
+    if (parametricImpl(v)) return no(`the impl for '${nodeText(v.node.target)}' is for a parametric type, which a union can't hold${v.generic ? " (one per instance)" : ""}`);
     const target: Sym | undefined = A(v.node.target)._sym ?? A(v.node.target)._pkgMember;
     if (target?.kind !== "global") return no(`can't tell what '${nodeText(v.node.target)}' is`);
     const bytes = sizeOf(an, { t: "node", node: v.node.target, scope: target.scope });

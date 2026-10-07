@@ -48,6 +48,10 @@ Example: [examples/closures](examples/closures).
 | `I :: interface { m, n, ... }` | interface declaration: lists its methods, in vtable order |
 | `m :: proc(x: I, a: A) -> R ---` | method declaration: a top-level proc without a body whose first parameter is the interface |
 | `impl I for T { m = t_m, n = t_n }` | implementation: binds every method to a proc declared with a body, taking `^T` first |
+| `impl I for Box($T) { m = box_m }` | generic impl: every instance of the parametric type `Box`, with procs taking `^Box($T)` (or `^$T`) first; a vtable per instance the program converts |
+| `impl I for Box(int) { m = box_int_m }` | an impl for one instance of a parametric type |
+| `impl I for T { m = group }` | a proc group bound: the member taking `^T` with the method's parameter count |
+| `impl I for T { m = poly }` | a polymorphic proc bound (`poly :: proc(x: ^$U)`): instantiated for `T` |
 | `impl pkg.I for T { ... }` | implementing another package's interface (only from that package or one in an import cycle with it) |
 | `m(&x, args)` with `x: T` | static call to `T`'s bound proc; works through pointers, fields, indexes and `&p^` |
 | `m(i, args)` with `i: I` | dynamic call: tests the vtable against each impl and calls its proc directly, else through the vtable |
@@ -77,13 +81,17 @@ Rules:
 - Every listed method must be declared in the interface's package as `m :: proc(x: I, ...) ---`, and every such proc must be listed by its interface. Outside `foreign` blocks, `---` procs are only for interface methods.
 - Each method is an Odin proc group of a vtable dispatcher plus every proc bound to it, so method names are package-level names.
 - Missing, extra or duplicate bindings, a wrong receiver type and wrong parameter counts are vidar errors; parameter and result types are checked by Odin.
-- Bound procs must be plain procs with a body, declared in the impl's package (or its import cycle): no proc literals, proc groups or closures.
+- Bound procs must be procs with a body, or proc groups of them, declared in the impl's package (or its import cycle): no proc literals or closures.
+- A bound proc's receiver is `^T`, or a polymorphic pattern that `^T` is an instance of (`^$U`, `^Box($U)`). A generic impl needs patterns: `^Box(int)` can't implement `Box($T)`.
+- A bound proc group gives the member that fits (receiver and parameter count); an exact `^T` beats polymorphic members. No member fitting, or several fitting equally, is an error.
+- Impls overlap when a generic impl covers another's type (`Box($T)` and `Box(int)`): an error.
+- Values from a generic impl always dispatch through the vtable. `Pool(I)` refuses an `I` with an impl for a parametric type, and `-opt` doesn't store such interfaces inline.
 - Interface values hold a pointer: converting a plain value is an error (use `&x`, or `new_clone(x)` for an owned copy).
 - `x->m()` on an interface value is an error; call `m(x)`.
-- Impl blocks are only allowed at file scope, and impl targets must be named types.
+- Impl blocks are only allowed at file scope, and impl targets must be named types or parametric ones (`Box($T)`, `Box(int)`).
 - `impl I for T` binds every method of `I`, inherited ones included, and also implements each base of `I` declared in the same package (or import cycle). A base in another package is reached by converting an `I` value; `base_method(&x)` static calls need an impl of that base itself.
 - Extending is transitive and may form diamonds; an interface can't extend itself, list a base twice, or get two different methods with the same name.
-- No generic impls. There is no builtin cleanup interface; declare `Destroy :: interface { destroy }` yourself.
+- There is no builtin cleanup interface; declare `Destroy :: interface { destroy }` yourself.
 
 Examples: [examples/interfaces](examples/interfaces), [examples/methods](examples/methods).
 
@@ -276,7 +284,7 @@ Example: [examples/comptime](examples/comptime).
 | `@(no_table)`, `@(no_specialize)`, `@(no_memo)`, `@(no_stack_buffer)`, `@(no_perfect_hash)` | `-opt` won't do that to `f` on its own |
 | `@(no_alloc) f :: proc(...) { ... }` | compile error when `f`, or anything it calls, can allocate (or calls something that can't be checked: a closure, a proc value, an interface with unknown impls, an unlisted `core:` proc); in builds below `-o:size` its allocators also panic |
 | `@(hot) f :: proc(...) { ... }` | with `-opt`, every decision against something inside `f` is a warning: a bounds check left in a loop, an indirect call, a closure not inlined, a vtable call, an allocation in a loop |
-| `Pool(I)` | values of every implementation of interface `I`, one array per type; `I` must not be extended in another package |
+| `Pool(I)` | values of every implementation of interface `I`, one array per type; `I` must not be extended in another package, nor implemented for a parametric type |
 | `append(&pool, v1, v2, ...)` | copies values (not pointers) into their type's array; a statement of its own |
 | `for s in pool { ... }` | one loop per type, `s` is a `^T` and converts to `I`; `break`, `continue` and labels act on the whole loop |
 | `len(pool)`, `clear(&pool)`, `delete(pool)` | as for a dynamic array |

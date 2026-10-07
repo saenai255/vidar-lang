@@ -136,7 +136,9 @@ export function implementations(a: Analysis, index: Index, file: string, p: Posi
   }
   if (valueOf(g)?.k !== "InterfaceType") return [];
   for (const impl of a.analyzer.variants(g)) {
-    const target: Sym | undefined = A(impl.node.target)._sym ?? A(impl.node.target)._pkgMember;
+    // `impl I for Box($T)`: the parametric type
+    const head = impl.node.target.k === "Call" ? impl.node.target.fn : impl.node.target;
+    const target: Sym | undefined = A(head)._sym ?? A(head)._pkgMember;
     const t = target && canonical(target);
     push((t?.kind === "global" && declLocation(t, sources)) || { file: impl.node.toks[impl.node.target.start].pos.file, range: nodeRange(impl.node.target) });
   }

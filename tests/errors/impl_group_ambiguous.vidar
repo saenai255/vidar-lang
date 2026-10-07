@@ -1,0 +1,10 @@
+// error: 'areas' is ambiguous for 'area' on Box(int): 'any_area' (^$T), 'box_area' (^Box($T)) all fit; bind one of them
+package main
+Shape :: interface { area }
+area :: proc(s: Shape) -> f64 ---
+Box :: struct($T: typeid) { v: T }
+any_area :: proc(x: ^$T) -> f64 { return 0 }
+box_area :: proc(b: ^Box($T)) -> f64 { return f64(b.v) }
+areas :: proc{any_area, box_area}
+impl Shape for Box(int) { area = areas }
+main :: proc() {}

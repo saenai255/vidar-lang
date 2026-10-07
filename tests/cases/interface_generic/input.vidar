@@ -1,0 +1,76 @@
+package main
+
+import "core:fmt"
+
+Named :: interface { label }
+Shape :: interface { using Named, area, scale }
+
+label :: proc(n: Named) -> string ---
+area  :: proc(s: Shape) -> f64 ---
+scale :: proc(s: Shape, k: f64) ---
+
+Circle :: struct { r: f64 }
+Square :: struct { side: f64 }
+Box :: struct($T: typeid) { w, h: T }
+Pair :: struct($A: typeid, $B: typeid) { a: A, b: B }
+
+circle_area :: proc(c: ^Circle) -> f64 { return 3 * c.r * c.r }
+square_area :: proc(s: ^Square) -> f64 { return s.side * s.side }
+circle_scale :: proc(c: ^Circle, k: f64) { c.r *= k }
+square_scale :: proc(s: ^Square, k: f64) { s.side *= k }
+
+// proc groups: each impl binds the member that takes its type
+areas  :: proc{circle_area, square_area}
+scales :: proc{circle_scale, square_scale}
+
+// a polymorphic proc: instantiated for each type it is bound for
+type_label :: proc(x: ^$T) -> string { return fmt.tprint(typeid_of(T)) }
+circle_label :: proc(c: ^Circle) -> string { return fmt.tprintf("circle r=%v", c.r) }
+// for Circle, the exact ^Circle wins over ^$T; Square only fits ^$T
+labels :: proc{circle_label, type_label}
+
+// a generic impl: one for every Box(T)
+box_area  :: proc(b: ^Box($T)) -> f64 { return f64(b.w) * f64(b.h) }
+box_scale :: proc(b: ^Box($T), k: f64) { b.w = T(f64(b.w) * k); b.h = T(f64(b.h) * k) }
+
+// an impl for one instance of a parametric type
+pair_area  :: proc(p: ^Pair(int, f64)) -> f64 { return f64(p.a) * p.b }
+pair_scale :: proc(p: ^Pair(int, f64), k: f64) { p.b *= k }
+
+impl Shape for Circle { label = labels, area = areas, scale = scales }
+impl Shape for Square { label = labels, area = areas, scale = scales }
+impl Shape for Box($T) { label = type_label, area = box_area, scale = box_scale }
+impl Shape for Pair(int, f64) { label = type_label, area = pair_area, scale = pair_scale }
+
+// generic code converting to the interface: a vtable for each instance it is called with
+total :: proc(xs: []$T) -> (sum: f64) {
+	for &x in xs {
+		s: Shape = &x
+		sum += area(s)
+	}
+	return
+}
+
+main :: proc() {
+	c := Circle{1}
+	sq := Square{2}
+	bi := Box(int){2, 3}
+	bf := Box(f32){0.5, 4}
+	p := Pair(int, f64){3, 1.5}
+
+	shapes: [dynamic]Shape
+	defer delete(shapes)
+	append(&shapes, &c, &sq, &bi, &bf, &p)
+	for s in shapes do fmt.println(label(s), area(s))
+	for s in shapes do scale(s, 2)
+	for s in shapes do fmt.printf("%s: %.2f\n", label(s), area(s))
+
+	// static calls go to the bound proc, no vtable
+	fmt.println("static:", area(&bi), label(&sq), label(&c), area(&p))
+
+	// a base interface, implied by the generic impl too
+	n: Named = &bf
+	fmt.println("named:", label(n), label(Named(shapes[2])))
+
+	fmt.println("total:", total([]Box(int){{1, 2}, {3, 4}}), total([]Box(f64){{0.5, 0.5}}), total([]Square{{1}, {2}}))
+}

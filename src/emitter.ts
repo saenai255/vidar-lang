@@ -1172,7 +1172,8 @@ export class Emitter {
       if (info.iface.pkg.unit !== iface.pkg.unit) continue;
       for (const path of this.an.basePaths(info.iface, iface)) {
         const fields = path.map((b, i) => "." + baseField(i ? path[i - 1] : info.iface, b)).join("");
-        const proc = info.methods.get(m.name)!.odinName;
+        if (info.generic) continue;
+        const proc = boundName(info, m.name);
         targets.set(proc, [...(targets.get(proc) ?? []), `&__${info.iface.odinName}_vtable_${info.key}${fields}`]);
       }
     }
@@ -1182,27 +1183,59 @@ export class Emitter {
 
   /** `m :: proc(x: I, ...) ---` -> `m :: proc{dispatcher, every bound impl proc}` */
   private methodGroup(lit: ProcLit, m: IfaceMethod): string {
-    const procs = this.an.impls.filter((i) => i.iface === m.iface).map((i) => i.methods.get(m.name)!.odinName);
+    const procs = [...new Set(this.an.impls.filter((i) => i.iface === m.iface).map((i) => boundName(i, m.name)))];
     return keepLines(lit, `proc{${[dispatcherName(m), ...this.inheritors(m).map((d) => derivedDispatcherName(d, m)), ...procs].join(", ")}}`);
+  }
+
+  /** An impl block's target, as Odin: its tokens are blanked where the block was, so emit them as written. */
+  private implType(target: Expr): string {
+    const saved: [Token, string][] = [];
+    for (let i = target.start; i < target.end; i++) {
+      const t = target.toks[i], text = this.an.tokText.get(t);
+      if (text !== undefined) saved.push([t, text]), this.an.tokText.delete(t);
+    }
+    try {
+      return this.emit(target);
+    } finally {
+      for (const [t, text] of saved) this.an.tokText.set(t, text);
+    }
   }
 
   private implHelpers(info: ImplInfo): void {
     const name = info.iface.odinName;
-    const T = this.emit(info.node.target);
+    const T = this.implType(info.node.target);
+    // inside the generic `from` proc, `Box($T)` is `Box(T)`
+    const inst = info.generic ? T.replace(/\$/g, "") : T;
     const vtable = (iface: GlobalSym, indent: string): string => {
       const self = this.qualify(iface, iface.odinName);
       const bases = this.an.basesOf(iface).map((b) => `${indent}\t${baseField(iface, b)} = {\n${vtable(b, indent + "\t")}${indent}\t},\n`);
       const thunks = ((A(this.an.ifaceNode(iface))._methods as IfaceMethod[] | undefined) ?? []).map((m) => {
         const { decl, forward } = this.paramList(m.rest);
         const res = this.results(m.rest);
-        const call = `${info.methods.get(m.name)!.odinName}((^${T})(self.data)${forward.map((f) => ", " + f).join("")})`;
+        const call = `${boundName(info, m.name)}((^${inst})(self.data)${forward.map((f) => ", " + f).join("")})`;
         return `${indent}\t${m.name} = proc(self: ${self}${decl ? ", " + decl : ""})${res} { ${res ? "return " : ""}${call} },\n`;
       });
       return bases.join("") + thunks.join("");
     };
+    // a polymorphic bound proc, reached through a proc taking `^T` alone (written once, by the impl block's own interface)
+    const wrappers = info.implied ? [] : this.an.allMethods(info.iface).filter((m) => info.wrappers.has(m.name)).map((m) => {
+      const { decl, forward } = this.paramList(m.rest);
+      const res = this.results(m.rest);
+      const call = `${info.methods.get(m.name)!.odinName}(${["__self", ...forward].join(", ")})`;
+      return `${info.wrappers.get(m.name)} :: #force_inline proc(__self: ^${T}${decl ? ", " + decl : ""})${res} { ${res ? "return " : ""}${call} }\n\n`;
+    });
+    if (info.generic) {
+      // Odin makes one copy of the proc, and so of its static vtable, per instance the program converts
+      this.helpers.push(
+        wrappers.join("") +
+          `__${name}_from_${info.key} :: proc(p: ^${T}) -> ${name} {\n\t@(static, rodata) vt := __${name}_VTable{\n${vtable(info.iface, "\t")}\t}\n\treturn {data = p, __vtable = &vt}\n}`,
+      );
+      return;
+    }
     const vt = `__${name}_vtable_${info.key}`;
     this.helpers.push(
-      `@(rodata)\n${vt} := __${name}_VTable{\n${vtable(info.iface, "")}}\n\n` +
+      wrappers.join("") +
+        `@(rodata)\n${vt} := __${name}_VTable{\n${vtable(info.iface, "")}}\n\n` +
         `__${name}_from_${info.key} :: proc(p: ^${T}) -> ${name} { return {data = p, __vtable = &${vt}} }`,
     );
   }
@@ -1679,6 +1712,11 @@ function relocate(text: string, line: number): string {
 
 function fromName(iface: GlobalSym): string {
   return `__${iface.odinName}_from`;
+}
+
+/** What an impl's method calls: the bound proc, or the proc taking `^T` alone that wraps a polymorphic one. */
+function boundName(info: ImplInfo, method: string): string {
+  return info.wrappers.get(method) ?? info.methods.get(method)!.odinName;
 }
 
 /** `iface`'s name as seen from `from`'s package, for generated names */

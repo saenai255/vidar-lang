@@ -140,6 +140,8 @@ class AllocFinder {
       return own(`'${fn.name}' isn't known not to allocate`);
     }
     if (sym.kind === "global") return this.global(call, sym);
+    // `T(x)` with a polymorphic type `$T`: a conversion
+    if (sym.kind === "local" && this.an.polyTypes.has(sym)) return null;
     if (sym.kind === "local" && sym.isConst && sym.value) {
       const lit = unwrapProc(sym.value);
       return lit ? this.through(lit, sym.name) : null;

@@ -1,0 +1,81 @@
+package main
+
+import "core:fmt"
+
+// -opt with generic impls and polymorphic or grouped bound procs
+
+Counter :: interface { bump, get }
+bump :: proc(c: Counter, by: int) ---
+get  :: proc(c: Counter) -> int ---
+
+Cell :: struct($T: typeid) { n: T }
+Tally :: struct { hits: [4]int }
+
+cell_bump :: proc(c: ^Cell($T), by: int) { c.n += T(by) }
+cell_get  :: proc(c: ^Cell($T)) -> int { return int(c.n) }
+tally_bump :: proc(t: ^Tally, by: int) { t.hits[0] += by }
+tally_get  :: proc(t: ^Tally) -> int { return t.hits[0] }
+
+impl Counter for Cell($T) { bump = cell_bump, get = cell_get }
+impl Counter for Tally { bump = tally_bump, get = tally_get }
+
+// followed into the generic impl's procs too: nothing allocates
+@(no_alloc)
+bump_all :: proc(cs: []Counter, by: int) -> (sum: int) {
+	for c in cs {
+		bump(c, by)
+		sum += get(c)
+	}
+	return
+}
+
+// not inline: Cell(T) is parametric, so the array keeps interface values
+cells :: proc() -> int {
+	list: [dynamic]Counter
+	defer {
+		for c in list do free(c.data)
+		delete(list)
+	}
+	append(&list, new_clone(Cell(int){1}), new_clone(Cell(f32){2}), new_clone(Tally{}))
+	for c in list do bump(c, 3)
+	total := 0
+	for c in list do total += get(c)
+	return total
+}
+
+// plain types bound to a polymorphic proc and to a proc group: still inline, and devirtualized
+Sized :: interface { size, weight }
+size   :: proc(s: Sized) -> int ---
+weight :: proc(s: Sized, scale: int) -> int ---
+
+Small :: struct { a: u8 }
+Large :: struct { a, b, c: i64 }
+
+byte_size :: proc(x: ^$T) -> int { return size_of(T) }
+small_weight :: proc(s: ^Small, scale: int) -> int { return int(s.a) * scale }
+large_weight :: proc(l: ^Large, scale: int) -> int { return int(l.a + l.b + l.c) * scale }
+weights :: proc{small_weight, large_weight}
+
+impl Sized for Small { size = byte_size, weight = weights }
+impl Sized for Large { size = byte_size, weight = weights }
+
+sizes :: proc() -> int {
+	list: [dynamic]Sized
+	defer delete(list)
+	append(&list, new_clone(Small{3}), new_clone(Large{1, 2, 3}))
+	total := 0
+	for s in list do total += size(s) * 100 + weight(s, 2)
+	return total
+}
+
+main :: proc() {
+	a := Cell(int){10}
+	b := Cell(u8){20}
+	t := Tally{}
+	cs := []Counter{Counter(&a), Counter(&b), Counter(&t)}
+	fmt.println(bump_all(cs, 1), bump_all(cs, 2))
+	fmt.println(a.n, b.n, t.hits[0])
+	fmt.println(cells(), sizes())
+	s: Sized = &Large{4, 5, 6}
+	fmt.println(size(s), weight(s, 3), size(&Small{}), weight(&Small{7}, 1))
+}

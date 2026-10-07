@@ -57,6 +57,50 @@ export interface ImplInfo {
   methods: Map<string, GlobalSym>;
   /** set when implied by an impl of an interface extending this one */
   implied?: boolean;
+  /** `impl I for Box($T)`: one vtable per instantiation, made by Odin; dispatchers can't name them */
+  generic?: boolean;
+  /**
+   * method name -> a generated `__I_m_Key` proc taking `^T`, for a polymorphic bound proc whose
+   * receiver is more general than `^T` (shared by the impls one impl block implies)
+   */
+  wrappers: Map<string, string>;
+}
+
+/** The impl's target is parametric: `Box($T)` or `Box(int)`. */
+export function parametricImpl(info: ImplInfo): boolean {
+  return info.node.target.k === "Call";
+}
+
+/**
+ * Whether the type text `t` is an instance of the pattern `p`, where each `$Name` in `p` stands for
+ * any type (the same one at each use). Both are written without spaces.
+ */
+export function matchType(p: string, t: string): boolean {
+  const binds = new Map<string, string>();
+  const go = (i: number, j: number): boolean => {
+    while (i < p.length) {
+      if (p[i] === "$") {
+        const name = /^\$\w+/.exec(p.slice(i))![0];
+        let k = j, depth = 0;
+        for (; k < t.length; k++) {
+          const c = t[k];
+          if ("([{".includes(c)) depth++;
+          else if (")]}".includes(c)) { if (!depth) break; depth--; }
+          else if (c === "," && !depth) break;
+        }
+        const got = t.slice(j, k);
+        if (!got || (binds.has(name) && binds.get(name) !== got)) return false;
+        binds.set(name, got);
+        i += name.length;
+        j = k;
+        continue;
+      }
+      if (p[i] !== t[j]) return false;
+      i++, j++;
+    }
+    return j === t.length;
+  };
+  return go(0, 0);
 }
 
 /** A direct call, with the scope it is made in. */
@@ -736,7 +780,9 @@ export class Analyzer {
       if (p.value) this.expr(p.value, scope);
       for (const n of p.names) {
         if (n.prefix?.includes("$")) {
-          out.push(this.declareLocal(n.name, scope, { isConst: true, declKind: "param", declTok: toks?.[n.tok] }));
+          const sym = this.declareLocal(n.name, scope, { isConst: true, declKind: "param", declTok: toks?.[n.tok] });
+          if (p.type && nodeText(p.type) === "typeid") this.polyTypes.add(sym);
+          out.push(sym);
         } else if (declare) {
           const ty: Ty | undefined = p.type ? { t: "node", node: p.type, scope } : p.value ? this.typeOf(p.value, scope) : undefined;
           out.push(this.declareLocal(n.name, scope, { ty, declKind: "param", declTok: toks?.[n.tok] }));
@@ -746,9 +792,12 @@ export class Analyzer {
     return out;
   }
 
+  /** `$T` in a parameter's type, and `$T: typeid`: calling one is a conversion */
+  readonly polyTypes = new Set<LocalSym>();
+
   private declarePolys(e: Expr, scope: Scope): void {
     if (e.k === "Poly") {
-      if (!scope.syms.has(e.name)) A(e)._polySym = this.declareLocal(e.name, scope, { isConst: true, declKind: "param", declTok: e.toks[e.start + 1] });
+      if (!scope.syms.has(e.name)) this.polyTypes.add((A(e)._polySym = this.declareLocal(e.name, scope, { isConst: true, declKind: "param", declTok: e.toks[e.start + 1] })));
       return;
     }
     for (const c of children(e)) if (!isStmt(c) && c.k !== "Case") this.declarePolys(c as Expr, scope);
@@ -1092,9 +1141,13 @@ export class Analyzer {
       if (this.typeOf(self, this.global)) this.hint(call, "direct", `not an interface value: calls the proc bound to '${m.name}' directly`);
       return;
     }
-    const tests = this.impls.filter((i) => i.iface.pkg.unit === via.pkg.unit).reduce((n, i) => n + this.basePaths(i.iface, via).length, 0);
-    if (tests && tests <= MAX_DEVIRTUAL) this.hint(call, "devirtualized", `the dispatcher compares the vtable with the ${tests} impl${tests === 1 ? "" : "s"} of '${via.name}' and calls the match directly`);
-    else this.hint(call, "vtable", tests ? `${tests} vtables to test, more than ${MAX_DEVIRTUAL}: an indirect call` : `no impl of '${via.name}' to test for: an indirect call`);
+    const reach = this.impls.filter((i) => i.iface.pkg.unit === via.pkg.unit && this.basePaths(i.iface, via).length);
+    const tests = reach.filter((i) => !i.generic).reduce((n, i) => n + this.basePaths(i.iface, via).length, 0);
+    const generic = [...new Set(reach.filter((i) => i.generic).map((i) => nodeText(i.node.target)))];
+    // a generic impl's vtables are made per instance by Odin, so the dispatcher can't name them
+    const rest = generic.length ? `; values of ${generic.join(", ")} (a generic impl) go through the vtable` : "";
+    if (tests && tests <= MAX_DEVIRTUAL) this.hint(call, "devirtualized", `the dispatcher compares the vtable with the ${tests} impl${tests === 1 ? "" : "s"} of '${via.name}' and calls the match directly${rest}`);
+    else this.hint(call, "vtable", tests ? `${tests} vtables to test, more than ${MAX_DEVIRTUAL}: an indirect call` : generic.length ? `the impls of '${via.name}' are generic (${generic.join(", ")}), with a vtable per instance: an indirect call` : `no impl of '${via.name}' to test for: an indirect call`);
   }
 
   ifaceNode(sym: GlobalSym): Extract<Expr, { k: "InterfaceType" }> {
@@ -1557,6 +1610,9 @@ export class Analyzer {
         posOf(e),
       );
     }
+    const param = this.variants(iface).find(parametricImpl);
+    if (param)
+      throw new CompileError(`Pool(${iface.name}) stores one array per implementing type, and can't for the impl for parametric type '${nodeText(param.node.target)}'; use a [dynamic]${iface.name}`, posOf(e));
     A(e)._pool = iface;
     this.pooled.add(iface);
     return iface;
@@ -1752,6 +1808,29 @@ export class Analyzer {
     throw new CompileError(`'${sym.name}' has no body; only interface methods are declared with '---' (first parameter: the interface)`, pos);
   }
 
+  /**
+   * The member of a proc group bound in an impl: the one taking `^T` (or a pattern of it) first,
+   * with the method's parameter count. An exact `^T` wins over polymorphic ones; anything else is ambiguous.
+   */
+  private pickMember(
+    group: GlobalSym, procs: Expr[], method: string, target: string, want: number,
+    arity: (sig: ProcSig) => number, exact: (lit: ProcLit) => boolean, takes: (lit: ProcLit) => boolean, at: Pos,
+  ): GlobalSym {
+    const members = procs.map((p) => {
+      const sym = this.resolveName(p, group.scope, null);
+      const lit = sym?.kind === "global" && sym.isConst ? sym.decl.values[sym.index] : undefined;
+      return { sym: sym?.kind === "global" ? sym : undefined, lit: lit?.k === "ProcLit" && lit.body && !lit.comptime ? lit : undefined, text: nodeText(p) };
+    });
+    const fits = members.filter((m) => m.sym && m.lit && arity(m.lit.sig) === want && takes(m.lit));
+    const exacts = fits.filter((m) => exact(m.lit!));
+    const pick = fits.length === 1 ? fits : exacts.length === 1 ? exacts : fits;
+    if (pick.length === 1) return pick[0].sym!;
+    const sigs = (ms: typeof members) => ms.map((m) => `'${m.text}'${m.lit?.sig.params[0]?.type ? ` (${nodeText(m.lit.sig.params[0].type)})` : ""}`).join(", ");
+    if (!fits.length)
+      throw new CompileError(`no proc in group '${group.name}' takes ^${target} plus ${want - 1} parameter(s) to implement '${method}'; its members: ${sigs(members)}`, at);
+    throw new CompileError(`'${group.name}' is ambiguous for '${method}' on ${target}: ${sigs(pick)} all fit; bind one of them`, at);
+  }
+
   private resolveImpl(s: ImplBlock, scope: Scope, pkg: PackageInfo): void {
     const pos = posOf(s);
     if (s.iface.k !== "Ident" && s.iface.k !== "Selector") throw new CompileError(`'${nodeText(s.iface)}' is not an interface`, posOf(s.iface));
@@ -1761,35 +1840,67 @@ export class Analyzer {
     if (ifaceSym?.kind !== "global" || ifaceNode?.k !== "InterfaceType") throw new CompileError(`'${nodeText(s.iface)}' is not an interface`, posOf(s.iface));
     if (ifaceSym.pkg.unit !== pkg.unit)
       throw new CompileError(`impl of '${nodeText(s.iface)}' must be in package '${ifaceSym.pkg.name}' (or a package in an import cycle with it)`, pos);
-    if (s.target.k !== "Ident" && s.target.k !== "Selector") throw new CompileError("impl targets must be named types", posOf(s.target));
+    const named = (e: Expr) => e.k === "Ident" || e.k === "Selector";
+    if (!named(s.target) && !(s.target.k === "Call" && named(s.target.fn)))
+      throw new CompileError("impl targets must be named types, or parametric ones: impl I for Box($T)", posOf(s.target));
     this.expr(s.target, scope);
-    const t = this.resolveName(s.target, scope, null);
-    if (t && t.kind !== "global") throw new CompileError(`'${nodeText(s.target)}' is not a type`, posOf(s.target));
-    const key = `${pkg.unit.merged ? pkg.name + "_" : ""}${nodeText(s.target)}`.replace(/\W/g, "_");
+    const head = s.target.k === "Call" ? s.target.fn : s.target;
+    const t = this.resolveName(head, scope, null);
+    if (t && t.kind !== "global") throw new CompileError(`'${nodeText(head)}' is not a type`, posOf(head));
+    if (s.target.k === "Call" && t?.kind === "global") {
+      const ty = t.decl.values[t.index];
+      if ((ty?.k !== "StructType" && ty?.k !== "UnionType") || !ty.polyParams)
+        throw new CompileError(`'${nodeText(head)}' is not a parametric struct or union, so '${nodeText(s.target)}' can't be implemented`, posOf(s.target));
+    }
+    const targetText = nodeText(s.target).replace(/\s+/g, "");
+    const generic = targetText.includes("$");
+    const key = `${pkg.unit.merged ? pkg.name + "_" : ""}${targetText}`.replace(/\$/g, "").replace(/\W+/g, "_").replace(/_+$/, "");
     const prior = this.impls.find((x) => x.iface === ifaceSym && x.key === key);
     if (prior && !prior.implied) throw new CompileError(`'${nodeText(s.target)}' already implements '${ifaceSym.name}'`, pos);
+    if (s.target.k === "Call") {
+      // a generic impl covers every instance of its pattern, so another impl for one of them would be ambiguous
+      for (const x of this.impls) {
+        if (x.iface !== ifaceSym || x.implied || !parametricImpl(x)) continue;
+        const other = nodeText(x.node.target).replace(/\s+/g, "");
+        if (matchType(other, targetText) || matchType(targetText, other))
+          throw new CompileError(`impls of '${ifaceSym.name}' for '${nodeText(x.node.target)}' and '${nodeText(s.target)}' overlap: a generic impl covers every instance of its type`, pos);
+      }
+    }
 
     const wanted = this.allMethods(ifaceSym);
-    const targetText = nodeText(s.target).replace(/\s+/g, "");
     const arity = (sig: ProcSig) => sig.params.reduce((n, p) => n + Math.max(1, p.names.length), 0);
+    const recvText = (lit: ProcLit) => (lit.sig.params[0]?.type ? nodeText(lit.sig.params[0].type).replace(/\s+/g, "") : "");
+    // the receiver is `^T` itself, or a polymorphic pattern that `^T` is an instance of (`^$T`, `^Box($T)`)
+    const exact = (lit: ProcLit) => recvText(lit) === `^${targetText}`;
+    const takes = (lit: ProcLit) => exact(lit) || (recvText(lit).includes("$") && matchType(recvText(lit), `^${targetText}`));
     const methods = new Map<string, GlobalSym>();
+    const wrappers = new Map<string, string>();
     for (const b of s.bindings) {
       const at = s.toks[b.tok].pos;
       const want = wanted.find((m) => m.name === b.name);
       if (!want) throw new CompileError(`'${b.name}' is not a method of interface '${ifaceSym.name}'`, at);
       if (methods.has(b.name)) throw new CompileError(`'${b.name}' is bound twice`, at);
-      const usage = `bind '${b.name}' to a proc declared with a body: ${b.name} = ${targetText.toLowerCase()}_${b.name}`;
+      const usage = `bind '${b.name}' to a proc declared with a body, or a proc group of them: ${b.name} = ${key.toLowerCase()}_${b.name}`;
       if (b.value.k !== "Ident" && b.value.k !== "Selector") throw new CompileError(usage, posOf(b.value));
       this.expr(b.value, scope);
-      const sym = this.resolveName(b.value, scope, null);
+      let sym = this.resolveName(b.value, scope, null);
+      const group = sym?.kind === "global" && sym.isConst ? sym.decl.values[sym.index] : undefined;
+      if (sym?.kind === "global" && group?.k === "ProcGroup") {
+        if (sym.pkg.unit !== pkg.unit) throw new CompileError(`'${nodeText(b.value)}' must be declared in package '${pkg.name}' (or a package in an import cycle with it)`, posOf(b.value));
+        sym = this.pickMember(sym, group.procs, b.name, nodeText(s.target), arity(want.lit.sig), arity, exact, takes, posOf(b.value));
+      }
       const lit = sym?.kind === "global" && sym.isConst ? sym.decl.values[sym.index] : undefined;
       if (sym?.kind !== "global" || lit?.k !== "ProcLit" || !lit.body || lit.comptime || lit.captures) throw new CompileError(usage, posOf(b.value));
       if (sym.pkg.unit !== pkg.unit) throw new CompileError(`'${nodeText(b.value)}' must be declared in package '${pkg.name}' (or a package in an import cycle with it)`, posOf(b.value));
       if (arity(lit.sig) !== arity(want.lit.sig))
         throw new CompileError(`'${sym.name}' must take ^${nodeText(s.target)} plus ${arity(want.rest)} parameter(s) to implement '${b.name}'`, posOf(b.value));
-      const recv = lit.sig.params[0]?.type;
-      if (!recv || nodeText(recv).replace(/\s+/g, "") !== `^${targetText}`)
-        throw new CompileError(`the first parameter of '${sym.name}' must have type ^${nodeText(s.target)} to implement '${b.name}'`, posOf(b.value));
+      if (!takes(lit)) {
+        const recv = recvText(lit);
+        const why = generic && recv && !recv.includes("$") ? ` (a generic impl needs a proc for every instance: proc(x: ^${targetText}, ...))` : "";
+        throw new CompileError(`the first parameter of '${sym.name}' must have type ^${nodeText(s.target)} to implement '${b.name}'${why}`, posOf(b.value));
+      }
+      // `proc(x: ^$T)` would match any pointer in the method's proc group: the group gets a proc for `^T` alone
+      if (!exact(lit)) wrappers.set(b.name, `__${ifaceSym.odinName}_${b.name}_${key}`);
       methods.set(b.name, sym);
     }
     const missing = wanted.filter((m) => !methods.has(m.name)).map((m) => m.name);
@@ -1803,7 +1914,7 @@ export class Analyzer {
         if (diff) throw new CompileError(`'${nodeText(s.target)}' implements '${iface.name}' twice, binding '${diff[0]}' differently`, pos);
         if (implied || other.implied) return;
       }
-      const info: ImplInfo = { node: s, iface, pkg, key, methods: own, implied };
+      const info: ImplInfo = { node: s, iface, pkg, key, methods: own, implied, generic, wrappers };
       this.impls.push(info);
       infos.push(info);
     };

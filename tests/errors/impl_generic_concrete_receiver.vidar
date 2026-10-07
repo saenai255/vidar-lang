@@ -1,0 +1,8 @@
+// error: the first parameter of 'int_area' must have type ^Box($T) to implement 'area' (a generic impl needs a proc for every instance
+package main
+Shape :: interface { area }
+area :: proc(s: Shape) -> f64 ---
+Box :: struct($T: typeid) { v: T }
+int_area :: proc(b: ^Box(int)) -> f64 { return 1 }
+impl Shape for Box($T) { area = int_area }
+main :: proc() {}

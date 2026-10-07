@@ -1,0 +1,11 @@
+// error: no proc in group 'areas' takes ^Sq plus 0 parameter(s) to implement 'area'; its members: 'circle_area' (^Circle), 'sq_scaled' (^Sq)
+package main
+Shape :: interface { area }
+area :: proc(s: Shape) -> f64 ---
+Circle :: struct { r: f64 }
+Sq :: struct { s: f64 }
+circle_area :: proc(c: ^Circle) -> f64 { return c.r }
+sq_scaled :: proc(q: ^Sq, k: f64) -> f64 { return q.s * k }
+areas :: proc{circle_area, sq_scaled}
+impl Shape for Sq { area = areas }
+main :: proc() {}
