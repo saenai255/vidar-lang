@@ -6,7 +6,7 @@ import {
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { mkdtempSync, rmSync, realpathSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { CompileError } from "../lexer";
@@ -25,6 +25,7 @@ import * as N from "./navigation";
 import * as Sem from "./semantic";
 import * as R from "./optreport";
 import { expandAt } from "./expand";
+import { WorkspaceIndex } from "./workspace";
 
 // editors usually pass --stdio; default to it so `vidar-lsp` alone works too
 if (!process.argv.some((a) => /^--(stdio|node-ipc|socket|pipe)/.test(a))) process.argv.push("--stdio");
@@ -41,11 +42,16 @@ interface PackageState {
   /** @(hot) warnings, from the -opt analysis */
   hotWarnings: CompileError[];
   odinDiagnostics: Map<string, Diagnostic[]>;
+  /** analyzed by the workspace index only: no diagnostics published */
+  quiet?: boolean;
 }
 
 const packages = new Map<string, PackageState>();
 const timers = new Map<string, NodeJS.Timeout>();
-let settings = { odinCheckOnSave: true, odinPath: "odin", ols: true, olsPath: "ols", optHints: "on" as string | boolean, optCodeLens: true };
+let settings = { odinCheckOnSave: true, odinPath: "odin", ols: true, olsPath: "ols", optHints: "on" as string | boolean, optCodeLens: true, indexWorkspace: true };
+/** workspace folders, for the workspace index; `folderEvents`: the client sends folder changes */
+let workspaceRoots: string[] = [];
+let folderEvents = false;
 let ols: OdinBridge | undefined;
 let hintRefresh = false;
 let semanticRefresh = false;
@@ -77,7 +83,11 @@ function toDiagnostic(err: CompileError, source: string, severity: DiagnosticSev
   };
 }
 
-function analyzePackage(dir: string): PackageState {
+/**
+ * `quiet`: a program found by the workspace index, with no file open: analyzed for workspace symbols and the
+ * `-opt` report, without diagnostics, ols or `@(hot)` warnings until a file of it is opened.
+ */
+function analyzePackage(dir: string, quiet = false): PackageState {
   const state = pkg(dir);
   let a: Analysis;
   try {
@@ -91,6 +101,8 @@ function analyzePackage(dir: string): PackageState {
   state.current = a;
   state.index = new F.Index(a);
   if (!a.errors.length) state.lastGood = a;
+  state.quiet = quiet;
+  if (quiet) return state;
   const opt = a.analyzer.hotProcs.size && !a.errors.length ? optAnalysis(state, dir) : undefined;
   state.hotWarnings = opt ? hotWarnings(opt.analyzer) : [];
   if (ols) syncOdin(dir, a);
@@ -121,18 +133,41 @@ function publish(dir: string, state: PackageState): void {
   }
 }
 
+/** Whether a file of the package in `dir` is open in the editor. */
+function isOpen(dir: string): boolean {
+  return documents.all().some((d) => d.uri.startsWith("file:") && dirname(toPath(d.uri)) === dir);
+}
+
 function schedule(dir: string): void {
+  Idx.touch();
   clearTimeout(timers.get(dir));
-  timers.set(dir, setTimeout(() => analyzePackage(dir), 150));
+  // a program only the workspace index knows stays quiet while none of its root package's files is open
+  timers.set(dir, setTimeout(() => analyzePackage(dir, !!pkg(dir).quiet && !isOpen(dir)), 150));
 }
 
 function stateFor(uri: string): { state: PackageState; path: string } {
+  Idx.touch();
   const path = toPath(uri);
   const dir = dirname(path);
   const state = pkg(dir);
   if (!state.current) analyzePackage(dir);
   return { state, path };
 }
+
+// ---- the workspace index: every program under the workspace folders, analyzed in the background ----
+
+const Idx = new WorkspaceIndex({
+  analyzed: (dir) => [...packages.values()].some((st) => st.current?.packages.some((p) => p.dir === dir)),
+  analyze: (dir) => {
+    const state = analyzePackage(dir, true);
+    // the -opt report without a uri covers every program: have it ready
+    if (state.current && !state.current.errors.length) optAnalysis(state, dir);
+  },
+  forget: (root) => {
+    for (const [dir, st] of packages) if (st.quiet && !isOpen(dir) && (dir === root || dir.startsWith(root + sep))) packages.delete(dir);
+  },
+  log: (m) => connection.console.log(m),
+});
 
 // ---- odin check on save ----
 
@@ -196,8 +231,12 @@ connection.onInitialize((params): InitializeResult => {
   semanticRefresh = !!params.capabilities.workspace?.semanticTokens?.refreshSupport;
   lensRefresh = !!params.capabilities.workspace?.codeLens?.refreshSupport;
   if (settings.ols) ols = new OdinBridge(settings.olsPath, (m) => connection.console.warn(m));
+  const roots = params.workspaceFolders?.map((f) => f.uri) ?? (params.rootUri ? [params.rootUri] : params.rootPath ? [pathToFileURL(params.rootPath).toString()] : []);
+  workspaceRoots = roots.filter((u) => u.startsWith("file:")).map(toPath);
+  folderEvents = !!params.capabilities.workspace?.workspaceFolders;
   return {
     capabilities: {
+      workspace: { workspaceFolders: { supported: true, changeNotifications: true } },
       textDocumentSync: { openClose: true, change: TextDocumentSyncKind.Incremental, save: { includeText: false } },
       hoverProvider: true,
       definitionProvider: true,
@@ -219,6 +258,17 @@ connection.onInitialize((params): InitializeResult => {
   };
 });
 
+connection.onInitialized(() => {
+  if (!settings.indexWorkspace) return;
+  Idx.addRoots(workspaceRoots);
+  if (folderEvents) {
+    connection.workspace.onDidChangeWorkspaceFolders((e) => {
+      Idx.removeRoots(e.removed.filter((f) => f.uri.startsWith("file:")).map((f) => toPath(f.uri)));
+      Idx.addRoots(e.added.filter((f) => f.uri.startsWith("file:")).map((f) => toPath(f.uri)));
+    });
+  }
+});
+
 /** Every analyzed program that contains `path` (its own package, plus programs importing it). */
 function programsWith(path: string): string[] {
   const dirs = new Set([dirname(path)]);
@@ -236,7 +286,7 @@ documents.onDidChangeContent((e) => {
 documents.onDidSave((e) => {
   for (const dir of programsWith(toPath(e.document.uri))) {
     clearTimeout(timers.get(dir));
-    analyzePackage(dir);
+    analyzePackage(dir, !!pkg(dir).quiet && !isOpen(dir));
   }
   odinCheck(dirname(toPath(e.document.uri)));
 });
@@ -495,7 +545,10 @@ connection.onRequest("vidar/expandAt", ({ uri, position, opt }: { uri: string; p
   }
 });
 
-connection.onShutdown(() => ols?.shutdown());
+connection.onShutdown(() => {
+  Idx.stop();
+  ols?.shutdown();
+});
 process.on("exit", () => ols?.shutdown());
 
 documents.listen(connection);

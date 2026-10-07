@@ -1,0 +1,18 @@
+package main
+
+import "core:fmt"
+
+// -opt makes this an automatic table
+index_tool_bits :: proc(b: u8) -> int {
+	n := int(b)
+	c := 0
+	for n != 0 {
+		c += n & 1
+		n >>= 1
+	}
+	return c
+}
+
+main :: proc() {
+	fmt.println(index_tool_bits(7))
+}

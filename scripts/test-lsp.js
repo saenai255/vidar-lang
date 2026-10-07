@@ -1,6 +1,6 @@
 // End-to-end language server test: drives dist/lsp/server.js over stdio.
 const { spawn, spawnSync } = require("node:child_process");
-const { mkdtempSync, readFileSync, writeFileSync, realpathSync, cpSync } = require("node:fs");
+const { mkdtempSync, mkdirSync, readFileSync, writeFileSync, realpathSync, cpSync } = require("node:fs");
 const { dirname, join } = require("node:path");
 const { tmpdir } = require("node:os");
 const { pathToFileURL } = require("node:url");
@@ -85,7 +85,7 @@ function change(text) {
 }
 
 (async () => {
-  const init = await request("initialize", { processId: null, rootUri: pathToFileURL(dir).toString(), capabilities: {} });
+  const init = await request("initialize", { processId: null, rootUri: pathToFileURL(dir).toString(), capabilities: { workspace: { workspaceFolders: true } } });
   const semLegend = init.result?.capabilities?.semanticTokensProvider?.legend ?? { tokenTypes: [], tokenModifiers: [] };
   notify("initialized", {});
   const firstDiags = nextDiagnostics();
@@ -966,6 +966,39 @@ function change(text) {
   notify("textDocument/didChange", { textDocument: { uri: fUri, version: 2 }, contentChanges: [{ text: "x := `unterminated\n" }] });
   const fBad = await request("textDocument/formatting", { textDocument: { uri: fUri }, options: { tabSize: 4, insertSpaces: false } });
   check("formatting a file that doesn't lex gives no edits", Array.isArray(fBad.result) && fBad.result.length === 0, JSON.stringify(fBad));
+
+  // ---- the workspace index: programs under a workspace folder, never opened (tests/lsp/index) ----
+  {
+    const idxDir = realpathSync(mkdtempSync(join(tmpdir(), "vidar-lsp-index-")));
+    cpSync("tests/lsp/index", idxDir, { recursive: true });
+    // directories the index skips (out/ can't be checked in)
+    for (const [sub, name] of [["out", "out"], ["node_modules/pkg", "node"], [".hidden", "hidden"], ["tool/expected", "expected"]]) {
+      mkdirSync(join(idxDir, sub), { recursive: true });
+      writeFileSync(join(idxDir, sub, "x.vidar"), `package skipped\n\nindex_skipped_${name} :: proc() {}\n`);
+    }
+    const idxUri = pathToFileURL(idxDir).toString();
+    const sent = diagnostics.length;
+    notify("workspace/didChangeWorkspaceFolders", { event: { added: [{ uri: idxUri, name: "index" }], removed: [] } });
+    let found = [];
+    for (let i = 0; i < 100 && !["index_app_main", "index_lib_helper", "index_tool_bits"].every((n) => found.includes(n)); i++) {
+      await new Promise((r) => setTimeout(r, 150));
+      found = ((await request("workspace/symbol", { query: "index_" })).result ?? []).map((s) => s.name);
+    }
+    check("workspace symbols find programs whose files were never opened, and what they import", ["index_app_main", "index_lib_helper", "index_tool_bits"].every((n) => found.includes(n)), JSON.stringify(found));
+    check("the workspace index skips out/, node_modules/, hidden and expected/ directories", !found.some((n) => n.startsWith("index_skipped")), JSON.stringify(found));
+    const toolUri = pathToFileURL(join(idxDir, "tool", "main.vidar")).toString();
+    const idxReport = (await request("vidar/optReport", {})).result;
+    const toolReport = idxReport?.files?.find((f) => f.uri === toolUri);
+    check("optReport without a uri covers a program only the workspace index analyzed", toolReport?.procs.some((p) => p.name === "index_tool_bits" && p.decisions.some((d) => d.label === "table")), JSON.stringify(idxReport?.files?.map((f) => f.uri)));
+    check("programs only the workspace index analyzed get no diagnostics", !diagnostics.slice(sent).some((d) => d.uri.startsWith(idxUri)), JSON.stringify(diagnostics.slice(sent).map((d) => d.uri)));
+    const toolDiag = nextDiagnostics((d) => d.uri === toolUri);
+    notify("textDocument/didOpen", { textDocument: { uri: toolUri, languageId: "vidar", version: 1, text: readFileSync(join(idxDir, "tool", "main.vidar"), "utf8") } });
+    check("opening a file of an indexed program publishes its diagnostics", (await toolDiag).diagnostics.length === 0, "");
+    notify("workspace/didChangeWorkspaceFolders", { event: { added: [], removed: [{ uri: idxUri, name: "index" }] } });
+    await new Promise((r) => setTimeout(r, 100));
+    const afterRemove = ((await request("workspace/symbol", { query: "index_" })).result ?? []).map((s) => s.name);
+    check("removing a workspace folder drops its unopened programs", !afterRemove.includes("index_app_main") && afterRemove.includes("index_tool_bits"), JSON.stringify(afterRemove));
+  }
 
   writeFileSync(file, original);
   const restored = nextDiagnostics((d) => d.uri === uri && d.diagnostics.length === 0);

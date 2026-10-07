@@ -1,0 +1,12 @@
+package main
+
+import "core:fmt"
+import "../lib"
+
+index_app_main :: proc() {
+	fmt.println(lib.index_lib_helper())
+}
+
+main :: proc() {
+	index_app_main()
+}

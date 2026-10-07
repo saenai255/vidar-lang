@@ -1,0 +1,5 @@
+package lib
+
+index_lib_helper :: proc() -> int {
+	return 42
+}
