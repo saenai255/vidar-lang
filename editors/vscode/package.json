@@ -70,8 +70,35 @@
       {
         "command": "vidar.restartServer",
         "title": "Vidar: Restart Language Server"
+      },
+      {
+        "command": "vidar.showOptReport",
+        "title": "Vidar: Show Optimization Report"
+      },
+      {
+        "command": "vidar.refreshOptReport",
+        "title": "Vidar: Refresh Optimization Report",
+        "icon": "$(refresh)"
       }
     ],
+    "views": {
+      "explorer": [
+        {
+          "id": "vidar.optReport",
+          "name": "Vidar: Optimization Report",
+          "when": "vidar.active"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "vidar.refreshOptReport",
+          "when": "view == vidar.optReport",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "Vidar",
       "properties": {
@@ -106,6 +133,11 @@
           "enumDescriptions": ["Show what -opt does: tables, specialized copies, unchecked indexing, grouped allocations, compiled fmt calls, devirtualized interface calls.", "Also show what -opt considered and didn't do, with the reason in the tooltip.", "No -opt inlay hints."],
           "default": "on",
           "description": "Inlay hints showing what `-opt` decides, without building with it. Hover a hint for the reason."
+        },
+        "vidar.optCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "A code lens over each proc with `-opt` decisions, \"N optimizations, M not\", that opens the Optimization Report on that proc. None while `vidar.optHints` is off."
         }
       }
     }

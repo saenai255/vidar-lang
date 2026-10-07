@@ -2,6 +2,7 @@ const vscode = require("vscode");
 const fs = require("node:fs");
 const path = require("node:path");
 const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
+const optReport = require("./optreport");
 
 let client;
 let extensionPath;
@@ -58,6 +59,7 @@ async function activate(context) {
       await start();
     }),
   );
+  optReport.register(context, () => client);
   await start();
 }
 

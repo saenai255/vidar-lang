@@ -366,12 +366,12 @@ function change(text) {
     return { name: it.name, uri: it.uri, lines: c.fromRanges.map((r) => r.start.line) };
   });
   const callNames = (cs) => cs.map((c) => c.name).sort().join(",");
-  const [report] = await prepare(nMain, nAt(nMain, "report :: proc", "report"));
-  check("call hierarchy prepares on a proc's declaration", report?.name === "report" && report.uri === nMain && report.selectionRange.start.line === nLine(nMain, "report :: proc"), JSON.stringify(report));
-  const repOut = await calls("outgoing", report);
+  const [repItem] = await prepare(nMain, nAt(nMain, "report :: proc", "report"));
+  check("call hierarchy prepares on a proc's declaration", repItem?.name === "report" && repItem.uri === nMain && repItem.selectionRange.start.line === nLine(nMain, "report :: proc"), JSON.stringify(repItem));
+  const repOut = await calls("outgoing", repItem);
   check("outgoing calls go through proc groups and macro expansions, at the macro call",
     callNames(repOut) === "doubled,grow_cube,grow_sq,sq_area" && repOut.find((c) => c.name === "sq_area")?.lines[0] === nLine(nMain, "return doubled!") && repOut.find((c) => c.name === "grow_sq")?.uri === nShapes, JSON.stringify(repOut));
-  const repIn = await calls("incoming", report);
+  const repIn = await calls("incoming", repItem);
   check("incoming calls of a proc", callNames(repIn) === "main" && repIn[0].lines[0] === nLine(nMain, "fmt.println(shapes.total"), JSON.stringify(repIn));
   // from the other package's file: callers in the importing package are found too
   notify("textDocument/didOpen", { textDocument: { uri: nShapes, languageId: "vidar", version: 1, text: nText[nShapes] } });
@@ -642,6 +642,32 @@ function change(text) {
   notify("workspace/didChangeConfiguration", { settings: { vidar: { optHints: "off" } } });
   check("optHints: off shows none", (await optHints()).length === 0, "");
   notify("workspace/didChangeConfiguration", { settings: { vidar: { optHints: "on" } } });
+
+  // ---- vidar/optReport and code lenses: -opt decisions by proc ----
+  const reportRes = await request("vidar/optReport", { uri: oUri });
+  const report = reportRes.result;
+  const rs = JSON.stringify(reportRes).slice(0, 400);
+  const procOf = (name) => report?.files?.[0]?.procs.find((p) => p.name === name);
+  check("optReport covers just the file asked for", report?.files?.length === 1 && report.files[0].uri === oUri, rs);
+  check("optReport puts a proc's own decision under it", procOf("bits")?.decisions.some((d) => d.label === "table" && !d.against && d.tooltip?.includes("256 results") && d.range.start.line === oEnd("bits :: proc").line), rs);
+  check("optReport marks decisions against and counts both", procOf("double")?.decisions.some((d) => d.label === "no table" && d.against) && procOf("double").against === 1 && procOf("double").optimizations === 0, JSON.stringify(procOf("double")));
+  check("optReport groups decisions in a body under the enclosing proc", ["stack buffer", "fmt inlined", "devirtualized", "direct"].every((l) => procOf("main")?.decisions.some((d) => d.label === l)) && procOf("main").decisions.some((d) => d.label === "unchecked" && d.range.start.line === oEnd("sum_all!(out)").line), JSON.stringify(procOf("main")?.decisions.map((d) => d.label)));
+  check("optReport gives each proc its name's range", procOf("sum")?.selectionRange.start.line === oEnd("sum :: proc").line && procOf("sum").selectionRange.start.character === 0, JSON.stringify(procOf("sum")));
+  const all = (await request("vidar/optReport", {})).result;
+  check("optReport without a uri covers every analyzed program", all?.files?.some((f) => f.uri === oUri), JSON.stringify(all?.files?.map((f) => f.uri)));
+  const lenses = async () => (await request("textDocument/codeLens", { textDocument: { uri: oUri } })).result ?? [];
+  let ls = await lenses();
+  const lensAt = (name) => ls.find((l) => l.command?.arguments?.[1] === name);
+  check("a code lens over each proc with decisions", ["bits", "double", "blur", "sum", "main"].every((n) => lensAt(n)?.range.start.line === oEnd(`${n} :: proc`).line) && !lensAt("sq_area"), JSON.stringify(ls.map((l) => [l.command?.title, l.range.start.line])));
+  check("code lens counts optimizations and decisions against", lensAt("double")?.command.title === "0 optimizations, 1 not" && lensAt("bits")?.command.title === "1 optimization, 0 not", JSON.stringify(ls.map((l) => l.command?.title)));
+  check("code lens opens the report on its proc", lensAt("bits")?.command.command === "vidar.showOptReport" && lensAt("bits").command.arguments[0] === oUri && lensAt("bits").command.arguments[2] === oEnd("bits :: proc").line, JSON.stringify(lensAt("bits")));
+  notify("workspace/didChangeConfiguration", { settings: { vidar: { optHints: "off" } } });
+  check("no code lenses while optHints is off", (await lenses()).length === 0, "");
+  notify("workspace/didChangeConfiguration", { settings: { vidar: { optHints: "on", optCodeLens: false } } });
+  check("optCodeLens: false turns the lenses off", (await lenses()).length === 0, "");
+  notify("workspace/didChangeConfiguration", { settings: { vidar: { optHints: "on", optCodeLens: true } } });
+  ls = await lenses();
+  check("optCodeLens: true brings them back", ls.length > 0, "");
 
   const shifted = nextDiagnostics((d) => d.uri === oUri);
   notify("textDocument/didChange", { textDocument: { uri: oUri, version: 2 }, contentChanges: [{ text: "\n" + oText }] });

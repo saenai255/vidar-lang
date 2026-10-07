@@ -19,6 +19,7 @@ import * as F from "./features";
 import { OdinBridge } from "./odin";
 import * as N from "./navigation";
 import * as Sem from "./semantic";
+import * as R from "./optreport";
 
 // editors usually pass --stdio; default to it so `vidar-lsp` alone works too
 if (!process.argv.some((a) => /^--(stdio|node-ipc|socket|pipe)/.test(a))) process.argv.push("--stdio");
@@ -39,10 +40,11 @@ interface PackageState {
 
 const packages = new Map<string, PackageState>();
 const timers = new Map<string, NodeJS.Timeout>();
-let settings = { odinCheckOnSave: true, odinPath: "odin", ols: true, olsPath: "ols", optHints: "on" as string | boolean };
+let settings = { odinCheckOnSave: true, odinPath: "odin", ols: true, olsPath: "ols", optHints: "on" as string | boolean, optCodeLens: true };
 let ols: OdinBridge | undefined;
 let hintRefresh = false;
 let semanticRefresh = false;
+let lensRefresh = false;
 
 const toPath = (uri: string) => fileURLToPath(uri);
 const toUri = (path: string) => pathToFileURL(path === PRELUDE_PATH ? preludeSourcePath() : path).toString();
@@ -184,6 +186,7 @@ connection.onInitialize((params): InitializeResult => {
   settings = { ...settings, ...opts };
   hintRefresh = !!params.capabilities.workspace?.inlayHint?.refreshSupport;
   semanticRefresh = !!params.capabilities.workspace?.semanticTokens?.refreshSupport;
+  lensRefresh = !!params.capabilities.workspace?.codeLens?.refreshSupport;
   if (settings.ols) ols = new OdinBridge(settings.olsPath, (m) => connection.console.warn(m));
   return {
     capabilities: {
@@ -200,6 +203,7 @@ connection.onInitialize((params): InitializeResult => {
       implementationProvider: true,
       callHierarchyProvider: true,
       semanticTokensProvider: { legend: Sem.LEGEND, full: true, range: true },
+      codeLensProvider: { resolveProvider: false },
     },
     serverInfo: { name: "vidar-lsp", version: "0.1.0" },
   };
@@ -320,6 +324,8 @@ connection.onCompletion(async ({ textDocument, position }) => {
 });
 
 connection.onDidChangeConfiguration(({ settings: s }) => {
+  if (s?.vidar?.optCodeLens !== undefined) settings.optCodeLens = s.vidar.optCodeLens;
+  if (lensRefresh && (s?.vidar?.optCodeLens !== undefined || s?.vidar?.optHints !== undefined)) connection.sendRequest("workspace/codeLens/refresh").catch(() => {});
   if (s?.vidar?.optHints === undefined) return;
   settings.optHints = s.vidar.optHints;
   if (hintRefresh) connection.languages.inlayHint.refresh().catch(() => {});
@@ -350,6 +356,30 @@ connection.languages.inlayHint.on(({ textDocument, range }) => {
   return F.optHints(program, path, settings.optHints === "all")
     .filter((h) => inRange(h.position))
     .map((h) => ({ position: h.position, label: h.label, tooltip: h.tooltip, paddingLeft: true }));
+});
+
+/** Custom request: every -opt decision, grouped by file and enclosing proc; `uri` limits it to one file. */
+connection.onRequest("vidar/optReport", ({ uri }: { uri?: string } = {}) => {
+  const dirs = uri ? [dirname(toPath(uri))] : [...packages.keys()];
+  const files = new Map<string, R.OptFile>();
+  for (const dir of dirs) {
+    const state = uri ? stateFor(uri).state : pkg(dir);
+    const program = state.current ? optAnalysis(state, dir) : undefined;
+    for (const f of program ? R.optReport(program, uri ? [toPath(uri)] : undefined) : []) if (!files.has(f.file)) files.set(f.file, f);
+  }
+  return { files: [...files.values()].map((f) => ({ uri: toUri(f.file), procs: f.procs })) };
+});
+
+/** Over each proc with -opt decisions: "N optimizations, M not", opening the report on it. */
+connection.onCodeLens(({ textDocument }) => {
+  if (!settings.optCodeLens || settings.optHints === "off" || settings.optHints === false) return [];
+  const { state, path } = stateFor(textDocument.uri);
+  const program = state.current ? optAnalysis(state, dirname(path)) : undefined;
+  if (!program) return [];
+  return R.optReport(program, [path]).flatMap((f) => f.procs).filter((p) => p.name !== R.TOP_LEVEL).map((p) => ({
+    range: p.selectionRange,
+    command: { title: R.lensTitle(p), command: "vidar.showOptReport", arguments: [textDocument.uri, p.name, p.selectionRange.start.line] },
+  }));
 });
 
 /** Custom request: the Odin code vidar generates for a file. */
