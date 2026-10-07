@@ -40,7 +40,7 @@ const step = (cmd, cmdArgs) => {
     process.exit(2);
   }
 };
-step("node", [join(__dirname, "../dist/cli.js"), "build", entry, "-o", join(work, "src"), ...(optimize ? ["-opt"] : [])]);
+step("node", [join(__dirname, "../dist/cli.js"), "build", entry, "-o", join(work, "src"), ...(optimize ? ["-opt"] : []), ...odinFlags.filter((f) => f.startsWith("-define:"))]);
 step("odin", ["build", join(work, "src"), `-out:${prog}`, ...odinFlags]);
 console.log(`built ${prog}; ${RUNS} runs, ${JOBS} at a time, ${TIMEOUT / 1000} s each`);
 

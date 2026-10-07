@@ -1,0 +1,27 @@
+{
+  "stdout": "locked: 4001 stats: 4000 passed: 2002\n",
+  "runs": [
+    {
+      "name": "4 threads",
+      "flags": ["-define:VIDAR_RACE=true", "-define:VIDAR_THREADS=4"],
+      "stderr": ["vidar:sched: race: goroutine ", " wrote it at ", "and no channel operation, sched.Mutex, sched.Wait_Group or sched.go orders the two"],
+      "stderrCount": { "vidar:sched: race: ": 2 }
+    },
+    {
+      "name": "2 threads, -opt -o:speed",
+      "opt": true,
+      "flags": ["-define:VIDAR_RACE=true", "-define:VIDAR_THREADS=2", "-o:speed"],
+      "stderrCount": { "vidar:sched: race: ": 2 }
+    },
+    {
+      "name": "1 thread",
+      "flags": ["-define:VIDAR_RACE=true"],
+      "stderrCount": { "vidar:sched: race: ": 2 }
+    },
+    {
+      "name": "4 threads, off",
+      "flags": ["-define:VIDAR_THREADS=4"],
+      "stderrCount": { "vidar:sched: race: ": 0 }
+    }
+  ]
+}

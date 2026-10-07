@@ -1,0 +1,65 @@
+package main
+
+import "core:fmt"
+import "vidar:sched"
+
+// Writes the race check must report (a global and a captured local written by two goroutines with
+// nothing between them), and writes it must not (ordered by a Mutex, a channel, a Wait_Group and
+// sched.go; a field of a captured struct behind a Mutex).
+
+hits: int
+Stats :: struct { a, b: int }
+
+main :: proc() {
+	// racy: two goroutines bump a global, and a captured local, with no lock
+	wg: sched.Wait_Group
+	racy := 0
+	sched.add(&wg, 2)
+	for _ in 0..<2 do sched.go(proc[&wg, &racy]() {
+		for _ in 0..<1000 {
+			hits += 1
+			racy += 1
+			sched.yield()
+		}
+		sched.done(&wg)
+	})
+	sched.wait(&wg)
+
+	// ordered: a Mutex
+	mu: sched.Mutex
+	locked := 0
+	stats: Stats
+	sched.add(&wg, 4)
+	for _ in 0..<4 do sched.go(proc[&wg, &mu, &locked, &stats]() {
+		for _ in 0..<1000 {
+			sched.lock(&mu)
+			locked += 1
+			stats.a += 1
+			sched.unlock(&mu)
+			sched.yield()
+		}
+		sched.done(&wg)
+	})
+	sched.wait(&wg)
+	locked += 1
+
+	// ordered: a token passed on a channel, then go and a wait group
+	tok := sched.make_chan(int, 1)
+	passed := 0
+	sched.add(&wg, 4)
+	sched.send(tok, 0)
+	for _ in 0..<4 do sched.go(proc[&wg, tok, &passed]() {
+		for _ in 0..<500 {
+			sched.recv(tok)
+			passed += 1
+			sched.send(tok, 0)
+		}
+		sched.done(&wg)
+	})
+	sched.wait(&wg)
+	passed += 1
+	sched.add(&wg, 1)
+	sched.go(proc[&passed, &wg]() { passed += 1; sched.done(&wg) })
+	sched.wait(&wg)
+	fmt.println("locked:", locked, "stats:", stats.a, "passed:", passed)
+}

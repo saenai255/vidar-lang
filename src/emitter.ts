@@ -586,6 +586,10 @@ export class Emitter {
     if (up) text = `${this.qualify(up.from, upcastName(up.from, up.to), `convert '${up.from.name}' to '${up.to.name}'`)}(${text})`;
     const fix: { prefix: string; suffix: string } | undefined = A(n)._fix;
     if (fix) text = fix.prefix + text + fix.suffix;
+    // -define:VIDAR_RACE=true: a write the race check watches, and the declaration of a captured local (race.ts)
+    if (A(n)._race) text = `${this.schedRef()}.__race_w(&${text})^`;
+    const raceDecl: string[] | undefined = A(n)._raceDecl;
+    if (raceDecl) text += raceDecl.map((name) => `; ${this.schedRef()}.__race_decl(&${name})`).join("");
     // -opt: every index in the statement is proven in bounds (Odin takes the directive on a block, not a call)
     if (A(n)._noBounds) text = n.k === "ExprStmt" ? `#no_bounds_check { ${text} }` : `#no_bounds_check ${text}`;
     // -opt: the bounds checks of a loop's indexes, done once before it (a statement of its own, so LLVM still vectorizes the loop)
@@ -962,6 +966,16 @@ export class Emitter {
     for (let i = 2; this.extraImports.has(alias); i++) alias = `__${p.name}${i}`;
     this.extraImports.set(alias, path);
     return alias;
+  }
+
+  /** The name of vidar:sched in this file; imported under a new name when this file lacks it. */
+  private schedRef(): string {
+    const sched = this.an.packages.find((p) => p.unit?.outDir === "vidar_sched")!;
+    for (const s of this.pkg.fileScopes.get(this.file)?.syms.values() ?? []) if (s.kind === "pkg" && s.target?.unit === sched.unit) return s.name;
+    const path = relImport(this.unit.outDir, sched.unit.outDir);
+    for (const [alias, imported] of this.extraImports) if (imported === path) return alias;
+    this.extraImports.set("__vidar_sched", path);
+    return "__vidar_sched";
   }
 
   private symRef(sym: Sym): string {

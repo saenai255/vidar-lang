@@ -103,7 +103,7 @@ export function main(argv: string[]): number | Promise<number> {
   let program: Program | undefined;
   let out: Output;
   try {
-    program = loadProgram(input, { optimize });
+    program = loadProgram(input, { optimize, race: defines.some((d) => /^-define:VIDAR_RACE=(true|1)$/.test(d)) });
     out = emitProgram(program);
     if (report) printReport(program.analyzer.hints);
     for (const w of hotWarnings(program.analyzer)) console.error(formatError(w, program, "warning"));

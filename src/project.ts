@@ -11,6 +11,7 @@ import type { File, Node } from "./ast";
 import { PackageInfo, Scope, Unit } from "./scope";
 import { PRELUDE_PATH, PRELUDE_SOURCE } from "./prelude";
 import { SCHED_ASM, SCHED_IMPORT, SCHED_SOURCE } from "./sched";
+import { markRaces } from "./race";
 
 export interface Source {
   path: string;
@@ -36,6 +37,8 @@ export interface LoadOptions {
   overrides?: Map<string, string>;
   /** rewrite plain Odin for speed: specialized fmt calls, proven bounds checks, grouped allocations, tables and specialized procs; what it decided goes in `analyzer.hints` */
   optimize?: boolean;
+  /** -define:VIDAR_RACE=true: mark the writes vidar:sched's race check watches (race.ts) */
+  race?: boolean;
 }
 
 const SOURCE_EXTS = [".vidar", ".odin"];
@@ -167,6 +170,7 @@ export function loadProgram(entry: string | Source[], opts: LoadOptions = {}): P
   const units = groupCycles(root, packages);
   analyzer.resolveImport = (fromDir, path) => (path === SCHED_IMPORT ? byDir.get(dirname(schedSourcePath())) ?? null : isRelativeImport(path) ? byDir.get(resolve(fromDir, path)) ?? null : null);
   analyzer.run([preludePackage(analyzer), ...packages]);
+  if (opts.race) markRaces(analyzer);
   return { entry: root, packages, units, analyzer, sources, errors };
 }
 

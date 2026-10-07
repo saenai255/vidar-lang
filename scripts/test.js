@@ -247,7 +247,7 @@ async function testSchedDebug() {
       const log = (logs[i] = []);
       let out;
       try {
-        out = emitProgram(loadProgram(entry, { optimize: !!r.opt }));
+        out = emitProgram(loadProgram(entry, { optimize: !!r.opt, race: r.flags.includes("-define:VIDAR_RACE=true") }));
       } catch (err) {
         report(false, label, `  transpile error: ${err.message}`, log);
         continue;
@@ -272,6 +272,10 @@ async function testSchedDebug() {
       if (check.stdout !== undefined && p.stdout !== check.stdout) problems.push(`stdout:\n${p.stdout}`);
       for (const t of r.stderr ?? []) if (!pattern(t).test(stderr)) problems.push(`stderr lacks: ${JSON.stringify(t)}`);
       for (const t of r.notStderr ?? []) if (pattern(t).test(stderr)) problems.push(`stderr has: ${JSON.stringify(t)}`);
+      for (const [t, n] of Object.entries(r.stderrCount ?? {})) {
+        const got = stderr.split(t).length - 1;
+        if (got !== n) problems.push(`stderr has ${JSON.stringify(t)} ${got} times, not ${n}`);
+      }
       if (r.json) {
         const file = r.json.replace("{dir}", dir);
         try {

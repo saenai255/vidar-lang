@@ -62,7 +62,18 @@ TRACE_EVENTS :: #config(VIDAR_TRACE_EVENTS, 1 << 16)
 #assert(TRACE_EVENTS > 0 && TRACE_EVENTS & (TRACE_EVENTS - 1) == 0, "VIDAR_TRACE_EVENTS must be a power of two")
 // goroutines get numbers, and record what they wait on
 @(private)
-IDS :: SCHED_DEBUG || TRACE
+IDS :: SCHED_DEBUG || TRACE || RACE
+// -define:VIDAR_RACE=true, given to vidar too (it marks the writes to watch): reports two writes to
+// a global or a captured local, from different goroutines, with nothing ordering them
+RACE :: #config(VIDAR_RACE, false)
+// the size of each vector clock (goroutine numbers share slots modulo this), and of the table of
+// watched addresses
+@(private)
+RACE_SLOTS :: 64 when RACE else 0
+RACE_TABLE :: #config(VIDAR_RACE_TABLE, 1 << 16)
+#assert(RACE_TABLE > 0 && RACE_TABLE & (RACE_TABLE - 1) == 0, "VIDAR_RACE_TABLE must be a power of two")
+@(private)
+Clock :: [RACE_SLOTS]u32
 
 @(private)
 G :: struct {
@@ -83,6 +94,9 @@ G :: struct {
 	wait_cases: []Select_Case,
 	wait_loc:   runtime.Source_Code_Location,
 	all_prev, all_next: ^G,
+	// with RACE: its own clock, and the clocks of others it knows it comes after
+	clock: u32,
+	vc:    Clock,
 }
 
 @(private)
@@ -163,6 +177,7 @@ sched_init :: proc() {
 		// the program's main goroutine; scheduler threads' own stacks aren't goroutines
 		if !sched.is_proc {
 			sched.main.id = sync.atomic_add(&next_gid, 1) + 1
+			sched.main.clock = 1
 			track(&sched.main)
 			sync.once_do(&sigquit_once, install_sigquit)
 		}
@@ -394,6 +409,15 @@ go :: proc(task: closure(), loc := #caller_location) {
 	}
 	g.stack = new_stack()
 	g.task = task
+	when RACE {
+		// everything the parent did so far comes before the child
+		parent := sched.cur
+		s := race_slot(parent.id)
+		parent.vc[s] = max(parent.vc[s], parent.clock)
+		g.vc = parent.vc
+		g.clock = 1
+		parent.clock += 1
+	}
 	g.ctx = context
 	top := (uintptr(raw_data(g.stack)) + uintptr(len(g.stack))) &~ 15
 	when ODIN_ARCH == .arm64 {
@@ -622,6 +646,105 @@ io_what :: proc(op: ^nbio.Operation) -> Wait {
 	case .Stat:      return .IO_Stat
 	}
 	return .IO
+}
+
+// ---- debugging: the race check ----
+
+@(private)
+race_slot :: #force_inline proc "contextless" (id: int) -> int { return id & (RACE_SLOTS - 1) }
+
+// A channel operation, Mutex or Wait_Group call on an object with clock vc: the current goroutine
+// comes after everything that synchronized through it before, and everything after comes after
+// this goroutine's past. Joining both ways orders more than the operation does, so the check
+// misses some races but never reports two writes that are ordered.
+@(private)
+race_sync :: #force_inline proc(vc: ^Clock) {
+	when RACE {
+		g := sched.cur
+		if g == nil do return
+		s := race_slot(g.id)
+		g.vc[s] = max(g.vc[s], g.clock)
+		for i in 0..<RACE_SLOTS {
+			m := max(g.vc[i], vc[i])
+			g.vc[i], vc[i] = m, m
+		}
+		g.clock += 1
+	}
+}
+
+// race_sync, after a park: takes the guard again.
+@(private)
+race_sync_locked :: #force_inline proc(guard: ^sync.Mutex, vc: ^Clock) {
+	when RACE {
+		mlock(guard)
+		race_sync(vc)
+		munlock(guard)
+	}
+}
+
+@(private)
+Race_Entry :: struct {
+	addr:     uintptr,
+	gid:      i32,
+	clock:    u32,
+	reported: bool,
+	loc:      runtime.Source_Code_Location,
+}
+
+@(private)
+race_table: []Race_Entry
+@(private)
+race_used: int
+@(private)
+race_lock: sync.Mutex
+
+// Generated for a watched write: __race_w(&x)^ = v.
+__race_w :: #force_inline proc(p: ^$T, loc := #caller_location) -> ^T {
+	when RACE do race_write(uintptr(p), loc, false)
+	return p
+}
+
+// Generated after the declaration of a captured local: its address may have held another variable.
+__race_decl :: #force_inline proc(p: ^$T, loc := #caller_location) {
+	when RACE do race_write(uintptr(p), loc, true)
+}
+
+@(private)
+race_write :: proc(addr: uintptr, loc: runtime.Source_Code_Location, decl: bool) {
+	when RACE {
+		g := sched.cur
+		// not a goroutine: a blocking closure on a worker, or code before the scheduler started
+		if g == nil || !sched.inited do return
+		sync.mutex_lock(&race_lock)
+		defer sync.mutex_unlock(&race_lock)
+		if race_table == nil do race_table = make([]Race_Entry, RACE_TABLE, runtime.heap_allocator())
+		i := int((addr >> 3) * 0x9E3779B97F4A7C15 >> 16) & (RACE_TABLE - 1)
+		for race_table[i].addr != addr && race_table[i].addr != 0 do i = (i + 1) & (RACE_TABLE - 1)
+		e := &race_table[i]
+		if e.addr == 0 {
+			if race_used >= RACE_TABLE * 3 / 4 {
+				if race_used == RACE_TABLE * 3 / 4 do runtime.print_string("vidar:sched: the race check watches no more addresses (-define:VIDAR_RACE_TABLE=<power of two>)\n")
+				race_used = RACE_TABLE * 3 / 4 + 1
+				return
+			}
+			race_used += 1
+			e.addr = addr
+		} else if !decl && e.gid != i32(g.id) && !e.reported && e.clock > g.vc[race_slot(int(e.gid))] {
+			e.reported = true
+			runtime.print_string("\nvidar:sched: race: goroutine ")
+			runtime.print_int(g.id)
+			runtime.print_string(" writes ")
+			print_hex(rawptr(addr))
+			runtime.print_string(" at ")
+			runtime.print_caller_location(loc)
+			runtime.print_string("\n\tgoroutine ")
+			runtime.print_int(int(e.gid))
+			runtime.print_string(" wrote it at ")
+			runtime.print_caller_location(e.loc)
+			runtime.print_string("\n\tand no channel operation, sched.Mutex, sched.Wait_Group or sched.go orders the two\n\n")
+		}
+		e.gid, e.clock, e.loc = i32(g.id), g.clock, loc
+	}
 }
 
 // ---- debugging: the trace ----
@@ -1078,6 +1201,7 @@ Mutex :: struct {
 	locked:  bool,
 	waiters: Wait_Queue,
 	guard:   sync.Mutex,
+	vc:      Clock,
 }
 
 // Parking after the guard is released is safe: only the goroutine's own thread runs it, so a
@@ -1087,6 +1211,7 @@ lock :: proc(m: ^Mutex, loc := #caller_location) {
 	mlock(&m.guard)
 	if !m.locked {
 		m.locked = true
+		race_sync(&m.vc)
 		munlock(&m.guard)
 		return
 	}
@@ -1095,6 +1220,7 @@ lock :: proc(m: ^Mutex, loc := #caller_location) {
 	waiting(.Mutex, m, loc)
 	munlock(&m.guard)
 	park()
+	race_sync_locked(&m.guard, &m.vc)
 }
 
 // Hands the lock straight to the longest waiter, if any.
@@ -1102,6 +1228,7 @@ unlock :: proc(m: ^Mutex) {
 	mlock(&m.guard)
 	defer munlock(&m.guard)
 	assert(m.locked, "unlock of an unlocked sched.Mutex")
+	race_sync(&m.vc)
 	if w := dequeue(&m.waiters); w != nil {
 		ready(w.g)
 	} else {
@@ -1114,6 +1241,7 @@ try_lock :: proc(m: ^Mutex) -> bool {
 	defer munlock(&m.guard)
 	if m.locked do return false
 	m.locked = true
+	race_sync(&m.vc)
 	return true
 }
 
@@ -1183,6 +1311,7 @@ Raw_Chan :: struct {
 	closed:       bool,
 	recvq, sendq: Wait_Queue,
 	guard:        sync.Mutex,
+	vc:           Clock,
 }
 
 // A channel is a handle: copies share one queue. The zero Chan is nil and blocks forever.
@@ -1253,6 +1382,7 @@ chan_send :: proc(c: Chan($T), v: T, loc := #caller_location) {
 	v := v
 	if c.raw == nil do block_forever(.Chan_Send_Nil, loc)
 	mlock(&c.raw.guard)
+	race_sync(&c.raw.vc)
 	if try_send_raw(c.raw, &v) {
 		munlock(&c.raw.guard)
 		return
@@ -1262,6 +1392,7 @@ chan_send :: proc(c: Chan($T), v: T, loc := #caller_location) {
 	waiting(.Chan_Send, c.raw, loc)
 	munlock(&c.raw.guard)
 	park()
+	race_sync_locked(&c.raw.guard, &c.raw.vc)
 	if !w.ok do panic("send on closed channel")
 }
 
@@ -1270,6 +1401,7 @@ chan_recv :: proc(c: Chan($T), loc := #caller_location) -> (v: T, ok: bool) #opt
 	sched_init()
 	if c.raw == nil do block_forever(.Chan_Recv_Nil, loc)
 	mlock(&c.raw.guard)
+	race_sync(&c.raw.vc)
 	if done, got := try_recv_raw(c.raw, &v); done {
 		munlock(&c.raw.guard)
 		return v, got
@@ -1279,6 +1411,7 @@ chan_recv :: proc(c: Chan($T), loc := #caller_location) -> (v: T, ok: bool) #opt
 	waiting(.Chan_Recv, c.raw, loc)
 	munlock(&c.raw.guard)
 	park()
+	race_sync_locked(&c.raw.guard, &c.raw.vc)
 	return v, w.ok
 }
 
@@ -1289,6 +1422,7 @@ chan_close :: proc(c: Chan($T)) {
 	defer munlock(&c.raw.guard)
 	if c.raw.closed do panic("close of closed channel")
 	c.raw.closed = true
+	race_sync(&c.raw.vc)
 	for w := dequeue(&c.raw.recvq); w != nil; w = dequeue(&c.raw.recvq) {
 		mem.zero(w.elem, c.raw.elem_size)
 		w.ok = false
@@ -1379,6 +1513,7 @@ select_raw :: proc(cases: []Select_Case, nonblocking: bool, loc: runtime.Source_
 	select_lock(cases, true)
 	locked := true
 	defer if locked do select_lock(cases, false)
+	when RACE do for c in cases do if c.ch != nil do race_sync(&c.ch.vc)
 	for &c, i in cases {
 		if c.ch == nil do continue
 		if c.is_send {
@@ -1404,6 +1539,7 @@ select_raw :: proc(cases: []Select_Case, nonblocking: bool, loc: runtime.Source_
 	park()
 	select_lock(cases, true)
 	locked = true
+	when RACE do for c in cases do if c.ch != nil do race_sync(&c.ch.vc)
 	for &c, i in cases {
 		if c.ch == nil || i == sel.fired do continue
 		q := &c.ch.sendq if c.is_send else &c.ch.recvq
@@ -1423,11 +1559,13 @@ Wait_Group :: struct {
 	count:   int,
 	waiters: Wait_Queue,
 	guard:   sync.Mutex,
+	vc:      Clock,
 }
 
 add :: proc(wg: ^Wait_Group, n := 1) {
 	mlock(&wg.guard)
 	defer munlock(&wg.guard)
+	race_sync(&wg.vc)
 	wg.count += n
 	if wg.count < 0 do panic("negative wait group counter")
 	if wg.count == 0 {
@@ -1441,6 +1579,7 @@ wait :: proc(wg: ^Wait_Group, loc := #caller_location) {
 	sched_init()
 	mlock(&wg.guard)
 	if wg.count == 0 {
+		race_sync(&wg.vc)
 		munlock(&wg.guard)
 		return
 	}
@@ -1449,6 +1588,7 @@ wait :: proc(wg: ^Wait_Group, loc := #caller_location) {
 	waiting(.Wait_Group, wg, loc)
 	munlock(&wg.guard)
 	park()
+	race_sync_locked(&wg.guard, &wg.vc)
 }
 `;
 
