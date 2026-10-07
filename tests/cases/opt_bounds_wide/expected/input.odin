@@ -54,17 +54,17 @@ main :: proc() {
 	__dst_buf: [6]int; dst := __dst_buf[:]
 	/* delete(dst): dst is on the stack */
 	add_into(dst, a, 6)
-	__fmt_1(dst)
+	__fmt_2(dst)
 	__out_buf: [5]int; out := __out_buf[:]
 	/* delete(out): out is on the stack */
 	diffs(a, out)
-	__fmt_0(out, back(a))
-	__fmt_0(first_negative({3, -1, 2}, 10), guarded(a, 6))
+	__fmt_3(out, back(a))
+	__fmt_4(first_negative({3, -1, 2}, 10), guarded(a, 6))
 	// a loop that runs zero times checks nothing
 	// a constant 0 bound: no copy where n is compile-time (Odin rejects `0..<0`)
 	__fmt_1(scale(a, 0))
 	__fmt_1(nested(a, 3, 2))
-	__fmt_0(runes("ab", {1, 2}), fixed({1, 2, 3, 4}, {1, 1, 1, 1}))
+	__fmt_4(runes("ab", {1, 2}), fixed({1, 2, 3, 4}, {1, 1, 1, 1}))
 }
 
 // a string's index is a byte offset: no check before the loop; a fixed array gets one
@@ -107,7 +107,7 @@ __fmt_0 :: proc(a0: $T0, a1: $T1) -> (n: int) {
 	w := __vidar.std_writer(&bw, buf[:], false)
 	n += __vidar.w_v(w, a0)
 	n += __vidar.w_str(w, " ")
-	n += __vidar.w_v(w, a1)
+	when T1 == []int { n += __print_sl_int(w, a1) } else { n += __vidar.w_spec(w, a1, "%v") }
 	n += __vidar.w_str(w, "\n")
 	__vidar.w_flush(w)
 	return
@@ -121,5 +121,57 @@ __fmt_1 :: proc(a0: $T0) -> (n: int) {
 	n += __vidar.w_v(w, a0)
 	n += __vidar.w_str(w, "\n")
 	__vidar.w_flush(w)
+	return
+}
+
+// fmt.println
+__fmt_2 :: proc(a0: $T0) -> (n: int) {
+	buf: [1024]byte
+	bw: __vidar.File_Writer
+	w := __vidar.std_writer(&bw, buf[:], false)
+	when T0 == []int { n += __print_sl_int(w, a0) } else { n += __vidar.w_spec(w, a0, "%v") }
+	n += __vidar.w_str(w, "\n")
+	__vidar.w_flush(w)
+	return
+}
+
+// fmt.println
+__fmt_3 :: proc(a0: $T0, a1: $T1) -> (n: int) {
+	buf: [1024]byte
+	bw: __vidar.File_Writer
+	w := __vidar.std_writer(&bw, buf[:], false)
+	when T0 == []int { n += __print_sl_int(w, a0) } else { n += __vidar.w_spec(w, a0, "%v") }
+	n += __vidar.w_str(w, " ")
+	n += __vidar.w_v(w, a1)
+	n += __vidar.w_str(w, "\n")
+	__vidar.w_flush(w)
+	return
+}
+
+// fmt.println
+__fmt_4 :: proc(a0: $T0, a1: $T1) -> (n: int) {
+	buf: [1024]byte
+	bw: __vidar.File_Writer
+	w := __vidar.std_writer(&bw, buf[:], false)
+	n += __vidar.w_v(w, a0)
+	n += __vidar.w_str(w, " ")
+	n += __vidar.w_v(w, a1)
+	n += __vidar.w_str(w, "\n")
+	__vidar.w_flush(w)
+	return
+}
+
+// fmt's %v for the types printed here, written out
+__print_sl_int :: proc(w: __vidar.Writer, x: []int) -> (n: int) {
+	if raw_data(x) == nil && len(x) > 0 {
+		__vidar.w_str(w, "nil")
+		return
+	}
+	n += __vidar.w_str(w, "[")
+	for e, i in x {
+		if i > 0 do n += __vidar.w_str(w, ", ")
+		n += __vidar.w_v(w, e)
+	}
+	n += __vidar.w_str(w, "]")
 	return
 }

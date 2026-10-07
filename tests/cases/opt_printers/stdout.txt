@@ -1,0 +1,81 @@
+same Outer{name = "rock", r = a, f = 1.5, g = 0.1, b = true, c = "Green", in_ = Inner{a = 2, s = "z"}, arr = [1, 2, 3], sl = ["a", "b"], dy = [Inner{a = 1, s = "q\"x\n"}, Inner{a = 0, s = ""}], u = 200, i = -5, e = Empty{}, anon = {x = 3, y = 4}, colors = ["Blue", "Red"], none = []}
+same Outer{name = "rock", r = a, f = 1.5, g = 0.1, b = true, c = "Green", in_ = Inner{a = 2, s = "z"}, arr = [1, 2, 3], sl = ["a", "b"], dy = [Inner{a = 1, s = "q\"x\n"}, Inner{a = 0, s = ""}], u = 200, i = -5, e = Empty{}, anon = {x = 3, y = 4}, colors = ["Blue", "Red"], none = []}
+same Outer{
+	name = "rock",
+	r = a,
+	f = 1.5,
+	g = 0.1,
+	b = true,
+	c = "Green",
+	in_ = Inner{
+		a = 2,
+		s = "z",
+	},
+	arr = [
+		1,
+		2,
+		3,
+	],
+	sl = [
+		"a",
+		"b",
+	],
+	dy = [
+		Inner{
+			a = 1,
+			s = "q\"x\n",
+		},
+		Inner{
+			a = 0,
+			s = "",
+		},
+	],
+	u = 200,
+	i = -5,
+	e = Empty{},
+	anon = {
+		x = 3,
+		y = 4,
+	},
+	colors = [
+		"Blue",
+		"Red",
+	],
+	none = [],
+}
+same Node{name = "root", children = [Node{name = "leaf", children = []}, Node{name = "mid", children = [Node{name = "deep", children = []}]}]}
+same Node{
+	name = "root",
+	children = [
+		Node{
+			name = "leaf",
+			children = [],
+		},
+		Node{
+			name = "mid",
+			children = [
+				Node{
+					name = "deep",
+					children = [],
+				},
+			],
+		},
+	],
+}
+same Blue %!(BAD ENUM VALUE=7) ["Red", %!(BAD ENUM VALUE=9)]
+same [Inner{a = 1, s = "q\"x\n"}, Inner{a = 0, s = ""}] [Inner{a = 0, s = ""}, Inner{a = 0, s = ""}] Empty{}
+same [
+	Inner{
+		a = 1,
+		s = "q\"x\n",
+	},
+	Inner{
+		a = 0,
+		s = "",
+	},
+]|[]|Empty{}
+same Mapped{p = 0x0, n = 1}
+Outer{name = "rock", r = a, f = 1.5, g = 0.1, b = true, c = "Green", in_ = Inner{a = 2, s = "z"}, arr = [1, 2, 3], sl = ["a", "b"], dy = [Inner{a = 1, s = "q\"x\n"}, Inner{a = 0, s = ""}], u = 200, i = -5, e = Empty{}, anon = {x = 3, y = 4}, colors = ["Blue", "Red"], none = []}
+Outer{name = "rock", r = a, f = 1.5, g = 0.1, b = true, c = "Green", in_ = Inner{a = 2, s = "z"}, arr = [1, 2, 3], sl = ["a", "b"], dy = [Inner{a = 1, s = "q\"x\n"}, Inner{a = 0, s = ""}], u = 200, i = -5, e = Empty{}, anon = {x = 3, y = 4}, colors = ["Blue", "Red"], none = []}
+true 241
+<Node{name = "root", children = [Node{name = "leaf", children = []}, Node{name = "mid", children = [Node{name = "deep", children = []}]}]}>

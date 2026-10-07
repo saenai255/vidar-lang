@@ -21,7 +21,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 8 | 3 | Dangling by-reference captures in returned closures | bug | merged |
 | 9 | 5 | Intermittent Odin compiler hang | bug | blocked |
 | 10 | 6 | Value interfaces / closed unions | perf | todo |
-| 11 | 7 | Generated per-type printers and JSON code | perf | todo |
+| 11 | 7 | Generated per-type printers and JSON code | perf | in progress |
 | 12 | 8 | Multithreaded (M:N) scheduler | perf | todo |
 | 13 | 9 | Constant-size `make` on the stack | perf | merged |
 | 14 | 10 | Wider bounds-check elimination | perf | merged |
@@ -181,6 +181,13 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **7, generated printers (first half)** merged; JSON is next.
+  - `src/printers.ts`. In a lowered fmt call, a `%v` / `%#v` argument whose type resolves to a plain struct (no parameters, directives, `using`, tags or `any` fields), an enum without explicit values, or a fixed array, slice or dynamic array of those, strings and numbers, goes to generated `__print_T(w, x)` / `__printh_T(w, x, indent)` procs. They follow `fmt_struct` / `fmt_write_array` exactly: `Name{a = 1, b = 2}`, strings and enum names quoted inside composites, runes raw, `%!(BAD ENUM VALUE=n)` through fmt, `nil` for a nil slice with a length, `%#v`'s tabs and trailing commas, and the count, which leaves out the ", " between fields as fmt's does.
+  - Each call sits under `when T0 == <type>`, with fmt as the `else`, so an analyzer type that's off (it calls `dy[:]` a dynamic array) costs nothing but the optimization. Programs that call `register_user_formatter` keep fmt everywhere.
+  - Floats now go to `fmt.fmt_float` directly (`w_float`), in printers and for `%v` of a plain float.
+  - `negative_cost` "fmt %v of a struct" (`sbprintf` of a 5-field struct with a `[3]f32` and a `[]string`), plain vs `-opt`: 90 → 63 ms. The rest is the leaves, which stay fmt's code: quoted strings and floats.
+  - New case `opt_printers` checks each shape against fmt called through a proc value (which `-opt` leaves alone), the returned counts, and a builder sink.
+  - Found on the way, in Odin: `any(o)` inside a big slice literal (`[]string{fmt.tprint(any(o)), ...}`) gets a garbage data pointer and crashes fmt; and a slice literal inside a struct literal doesn't outlive its statement. The test avoids both.
 - **13, automatic `@(memo)` and two-parameter `@(table)`** merged.
   - 2D tables: `@(table)` takes two `bool`/`u8`/`i8` parameters (`table[x][y]`, computed at compile time or filled at startup). `-opt` makes one on its own under the one-parameter rules (pure integer code, a loop or 24+ operations) when there are at most 4096 results, since each is computed at compile time; past that it hints `no table 2D`.
   - `@(memo)` (`src/memo.ts`): the declaration becomes `__f_memo_body(..., __memo)` in place, with its calls to itself going to `__f_memo`; the helpers add `f` (makes the table, frees it on return) and `__f_memo` (look up, or compute and store). An array of `done`/`value` when every parameter is `bool`/`u8`/`i8` and there are at most 4096 results, else a map, keyed by a struct for several parameters. By hand on any proc with basic or enum parameters and one result; `-opt` adds it to pure integer procs (`integerOnly`) that call themselves at least twice, unless the program has `@(no_alloc)` procs (the table allocates, which their checks wouldn't see). `@(no_memo)` opts out. Hints `memo` / `no memo`.

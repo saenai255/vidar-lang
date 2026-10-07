@@ -1,0 +1,75 @@
+package main
+
+import "core:fmt"
+import "core:strings"
+
+Color :: enum { Red, Green, Blue }
+
+Inner :: struct { a: int, s: string }
+
+Empty :: struct {}
+
+Node :: struct {
+	name: string,
+	children: []Node,
+}
+
+Outer :: struct {
+	name: string,
+	r: rune,
+	f: f64,
+	g: f32,
+	b: bool,
+	c: Color,
+	in_: Inner,
+	arr: [3]int,
+	sl: []string,
+	dy: [dynamic]Inner,
+	u: u8,
+	i: i64,
+	e: Empty,
+	anon: struct { x, y: int },
+	colors: [2]Color,
+	none: [0]int,
+}
+
+// not generated: a pointer field; fmt prints it
+Mapped :: struct { p: ^int, n: int }
+
+main :: proc() {
+	dy: [dynamic]Inner
+	defer delete(dy)
+	append(&dy, Inner{1, "q\"x\n"}, Inner{})
+	// slices point at named arrays: a slice literal inside a struct literal doesn't outlive its statement
+	names := [2]string{"a", "b"}
+	o := Outer{name = "rock", r = 'a', f = 1.5, g = 0.1, b = true, c = .Green, in_ = {2, "z"}, arr = {1, 2, 3}, sl = names[:], dy = dy, u = 200, i = -5, anon = {3, 4}, colors = {.Blue, .Red}}
+	deep := [1]Node{{"deep", nil}}
+	kids := [2]Node{{"leaf", nil}, {"mid", deep[:]}}
+	tree := Node{"root", kids[:]}
+	colors := [2]Color{.Red, Color(9)}
+
+	// every way a value reaches %v, compared with fmt's own output: fmt called through a proc value,
+	// which -opt leaves alone
+	tp := fmt.tprint
+	tpf := fmt.tprintf
+	check :: proc(got, want: string) { fmt.println(got == want ? "same" : "DIFFERENT", got) }
+	check(fmt.tprint(o), tp(o))
+	check(fmt.tprintf("%v", o), tpf("%v", o))
+	check(fmt.tprintf("%#v", o), tpf("%#v", o))
+	check(fmt.tprint(tree), tp(tree))
+	check(fmt.tprintf("%#v", tree), tpf("%#v", tree))
+	check(fmt.tprint(Color.Blue, Color(7), colors[:]), tp(Color.Blue, Color(7), colors[:]))
+	check(fmt.tprint(dy[:], [2]Inner{}, Empty{}), tp(dy[:], [2]Inner{}, Empty{}))
+	check(fmt.tprintf("%#v|%#v|%#v", dy, [0]Inner{}, Empty{}), tpf("%#v|%#v|%#v", dy, [0]Inner{}, Empty{}))
+	check(fmt.tprint(Mapped{n = 1}), tp(Mapped{n = 1}))
+
+	// the byte counts fmt returns, and a builder sink
+	n := fmt.println(o)
+	pl := fmt.println
+	m := pl(o)
+	fmt.println(n == m, n)
+	b := strings.builder_make()
+	defer strings.builder_destroy(&b)
+	fmt.sbprintf(&b, "<%v>", tree)
+	fmt.println(strings.to_string(b))
+}

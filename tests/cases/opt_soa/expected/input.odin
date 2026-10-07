@@ -152,7 +152,7 @@ __fmt_0 :: proc(a0: $T0, a1: $T1, a2: $T2, a3: $T3, a4: $T4) -> (n: int) {
 	n += __vidar.w_str(w, " ")
 	n += __vidar.w_v(w, a3)
 	n += __vidar.w_str(w, " ")
-	n += __vidar.w_v(w, a4)
+	when T4 == Particle { n += __print_main_Particle(w, a4) } else { n += __vidar.w_spec(w, a4, "%v") }
 	n += __vidar.w_str(w, "\n")
 	__vidar.w_flush(w)
 	return
@@ -166,7 +166,7 @@ __fmt_1 :: proc(a0: $T0, a1: $T1) -> (n: int) {
 	n += __vidar.w_str(w, "fixed: ")
 	n += __vidar.w_v(w, a0)
 	n += __vidar.w_str(w, " ")
-	n += __vidar.w_v(w, a1)
+	when T1 == Particle { n += __print_main_Particle(w, a1) } else { n += __vidar.w_spec(w, a1, "%v") }
 	n += __vidar.w_str(w, "\n")
 	__vidar.w_flush(w)
 	return
@@ -180,7 +180,7 @@ __fmt_2 :: proc(a0: $T0, a1: $T1) -> (n: int) {
 	n += __vidar.w_str(w, "slice: ")
 	n += __vidar.w_v(w, a0)
 	n += __vidar.w_str(w, " ")
-	n += __vidar.w_v(w, a1)
+	when T1 == Particle { n += __print_main_Particle(w, a1) } else { n += __vidar.w_spec(w, a1, "%v") }
 	n += __vidar.w_str(w, "\n")
 	__vidar.w_flush(w)
 	return
@@ -208,7 +208,7 @@ __fmt_4 :: proc(a0: $T0, a1: $T1, a2: $T2) -> (n: int) {
 	n += __vidar.w_str(w, " ")
 	n += __vidar.w_v(w, a1)
 	n += __vidar.w_str(w, " ")
-	n += __vidar.w_v(w, a2)
+	when T2 == Particle { n += __print_main_Particle(w, a2) } else { n += __vidar.w_spec(w, a2, "%v") }
 	n += __vidar.w_str(w, "\n")
 	__vidar.w_flush(w)
 	return
@@ -268,7 +268,7 @@ __fmt_9 :: proc(a0: $T0) -> (n: int) {
 	bw: __vidar.File_Writer
 	w := __vidar.std_writer(&bw, buf[:], false)
 	n += __vidar.w_str(w, "narrow: ")
-	n += __vidar.w_v(w, a0)
+	when T0 == Pair { n += __print_main_Pair(w, a0) } else { n += __vidar.w_spec(w, a0, "%v") }
 	n += __vidar.w_str(w, "\n")
 	__vidar.w_flush(w)
 	return
@@ -280,7 +280,7 @@ __fmt_10 :: proc(a0: $T0) -> (n: int) {
 	bw: __vidar.File_Writer
 	w := __vidar.std_writer(&bw, buf[:], false)
 	n += __vidar.w_str(w, "whole: ")
-	n += __vidar.w_v(w, a0)
+	when T0 == Particle { n += __print_main_Particle(w, a0) } else { n += __vidar.w_spec(w, a0, "%v") }
 	n += __vidar.w_str(w, "\n")
 	__vidar.w_flush(w)
 	return
@@ -343,5 +343,40 @@ __fmt_14 :: proc(a0: $T0) -> (n: int) {
 	n += __vidar.w_v(w, a0)
 	n += __vidar.w_str(w, "\n")
 	__vidar.w_flush(w)
+	return
+}
+
+// fmt's %v for the types printed here, written out
+__print_main_Particle :: proc(w: __vidar.Writer, x: Particle) -> (n: int) {
+	n += __vidar.w_str(w, "Particle{")
+	n += __vidar.w_str(w, "x = ")
+	n += __vidar.w_float(w, x.x)
+	__vidar.w_str(w, ", ")
+	n += __vidar.w_str(w, "y = ")
+	n += __vidar.w_float(w, x.y)
+	__vidar.w_str(w, ", ")
+	n += __vidar.w_str(w, "vx = ")
+	n += __vidar.w_float(w, x.vx)
+	__vidar.w_str(w, ", ")
+	n += __vidar.w_str(w, "vy = ")
+	n += __vidar.w_float(w, x.vy)
+	__vidar.w_str(w, ", ")
+	n += __vidar.w_str(w, "id = ")
+	n += __vidar.w_v(w, x.id)
+	__vidar.w_str(w, ", ")
+	n += __vidar.w_str(w, "alive = ")
+	n += __vidar.w_v(w, x.alive)
+	n += __vidar.w_str(w, "}")
+	return
+}
+
+__print_main_Pair :: proc(w: __vidar.Writer, x: Pair) -> (n: int) {
+	n += __vidar.w_str(w, "Pair{")
+	n += __vidar.w_str(w, "a = ")
+	n += __vidar.w_v(w, x.a)
+	__vidar.w_str(w, ", ")
+	n += __vidar.w_str(w, "b = ")
+	n += __vidar.w_v(w, x.b)
+	n += __vidar.w_str(w, "}")
 	return
 }

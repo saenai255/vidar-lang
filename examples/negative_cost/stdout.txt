@@ -7,6 +7,7 @@ bounds, lockstep           22114880
 bounds, offsets            61
 string switch              487500
 fib, memoized              6765
+fmt %v of a struct         179890
 scratch allocations        108319
 append in a loop           1030000
 blur, radius at run time   28708

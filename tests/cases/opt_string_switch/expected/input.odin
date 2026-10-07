@@ -160,7 +160,7 @@ __fmt_1 :: proc(a0: $T0) -> (n: int) {
 	buf: [1024]byte
 	bw: __vidar.File_Writer
 	w := __vidar.std_writer(&bw, buf[:], false)
-	n += __vidar.w_v(w, a0)
+	when T0 == Token { n += __print_main_Token(w, a0) } else { n += __vidar.w_spec(w, a0, "%v") }
 	n += __vidar.w_str(w, " ")
 	__vidar.w_flush(w)
 	return
@@ -225,5 +225,25 @@ __fmt_6 :: proc(a0: $T0, a1: $T1, a2: $T2, a3: $T3) -> (n: int) {
 	n += __vidar.w_v(w, a3)
 	n += __vidar.w_str(w, "\n")
 	__vidar.w_flush(w)
+	return
+}
+
+// fmt's %v for the types printed here, written out
+__print_main_Token :: proc(w: __vidar.Writer, x: Token) -> (n: int) {
+	switch x {
+	case .Ident: n += __vidar.w_str(w, "Ident")
+	case .If: n += __vidar.w_str(w, "If")
+	case .Else: n += __vidar.w_str(w, "Else")
+	case .For: n += __vidar.w_str(w, "For")
+	case .In: n += __vidar.w_str(w, "In")
+	case .Return: n += __vidar.w_str(w, "Return")
+	case .Proc: n += __vidar.w_str(w, "Proc")
+	case .Struct: n += __vidar.w_str(w, "Struct")
+	case .Enum: n += __vidar.w_str(w, "Enum")
+	case .Switch: n += __vidar.w_str(w, "Switch")
+	case .Case: n += __vidar.w_str(w, "Case")
+	case .Defer: n += __vidar.w_str(w, "Defer")
+	case: n += __vidar.w_spec(w, x, "%v")
+	}
 	return
 }

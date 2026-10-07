@@ -197,7 +197,7 @@ __fmt_7 :: proc(a0: $T0, a1: $T1, a2: $T2, a3: $T3, a4: $T4, a5: $T5, a6: $T6, a
 	n += __vidar.w_str(w, "] [")
 	n += __vidar.w_v(w, a3)
 	n += __vidar.w_str(w, "] [")
-	n += __vidar.w_v(w, a4)
+	when T4 == Point { n += __print_main_Point(w, a4) } else { n += __vidar.w_spec(w, a4, "%v") }
 	n += __vidar.w_str(w, "] [")
 	n += __vidar.w_v(w, a5)
 	n += __vidar.w_str(w, "] [")
@@ -443,5 +443,17 @@ __fmt_31 :: proc(a0: $T0) -> (n: int) {
 	n += __vidar.w_d(w, a0)
 	n += __vidar.w_str(w, "\n")
 	__vidar.w_flush(w)
+	return
+}
+
+// fmt's %v for the types printed here, written out
+__print_main_Point :: proc(w: __vidar.Writer, x: Point) -> (n: int) {
+	n += __vidar.w_str(w, "Point{")
+	n += __vidar.w_str(w, "x = ")
+	n += __vidar.w_v(w, x.x)
+	__vidar.w_str(w, ", ")
+	n += __vidar.w_str(w, "y = ")
+	n += __vidar.w_v(w, x.y)
+	n += __vidar.w_str(w, "}")
 	return
 }

@@ -170,7 +170,7 @@ __fmt_4 :: proc(a0: $T0) -> (n: int) {
 	bw: __vidar.File_Writer
 	w := __vidar.std_writer(&bw, buf[:], false)
 	n += __vidar.w_str(w, "filter_map: ")
-	n += __vidar.w_v(w, a0)
+	when T0 == [dynamic]int { n += __print_dyn_int(w, a0) } else { n += __vidar.w_spec(w, a0, "%v") }
 	n += __vidar.w_str(w, "\n")
 	__vidar.w_flush(w)
 	return
@@ -576,4 +576,19 @@ repeat__closure14 :: proc(n: int) -> int {
 	s := 0
 	for i in 0..<n do s += __repeat__closure14_f(i)
 	return s
+}
+
+// fmt's %v for the types printed here, written out
+__print_dyn_int :: proc(w: __vidar.Writer, x: [dynamic]int) -> (n: int) {
+	if raw_data(x) == nil && len(x) > 0 {
+		__vidar.w_str(w, "nil")
+		return
+	}
+	n += __vidar.w_str(w, "[")
+	for e, i in x {
+		if i > 0 do n += __vidar.w_str(w, ", ")
+		n += __vidar.w_v(w, e)
+	}
+	n += __vidar.w_str(w, "]")
+	return
 }

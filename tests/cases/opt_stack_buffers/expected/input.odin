@@ -92,7 +92,7 @@ main :: proc() {
 		__r_buf: [4]int; r := __r_buf[:]
 		/* delete(r): r is on the stack */
 		r[round] += round + 1
-		__fmt_2(r)
+		__fmt_3(r)
 	}
 }
 
@@ -147,4 +147,30 @@ __closure_0 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env)) {
 		call = proc(__env_raw: __vidar.Env) { __env := transmute(__Env)__env_raw; worker(__env.done) },
 		env = transmute(__vidar.Env)__Env{__caps = {__c0}},
 	}
+}
+
+// fmt.println
+__fmt_3 :: proc(a0: $T0) -> (n: int) {
+	buf: [1024]byte
+	bw: __vidar.File_Writer
+	w := __vidar.std_writer(&bw, buf[:], false)
+	when T0 == []int { n += __print_sl_int(w, a0) } else { n += __vidar.w_spec(w, a0, "%v") }
+	n += __vidar.w_str(w, "\n")
+	__vidar.w_flush(w)
+	return
+}
+
+// fmt's %v for the types printed here, written out
+__print_sl_int :: proc(w: __vidar.Writer, x: []int) -> (n: int) {
+	if raw_data(x) == nil && len(x) > 0 {
+		__vidar.w_str(w, "nil")
+		return
+	}
+	n += __vidar.w_str(w, "[")
+	for e, i in x {
+		if i > 0 do n += __vidar.w_str(w, ", ")
+		n += __vidar.w_v(w, e)
+	}
+	n += __vidar.w_str(w, "]")
+	return
 }

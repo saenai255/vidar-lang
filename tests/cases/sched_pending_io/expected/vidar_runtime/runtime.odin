@@ -197,6 +197,28 @@ w_spec :: proc(w: io.Writer, x: $T, spec: string) -> int { return fmt.wprintf(w,
 
 w_flush :: #force_inline proc(w: io.Writer) { io.flush(w) }
 
+// -opt: generated printers for %v of known types
+w_quoted :: #force_inline proc(w: io.Writer, s: string) -> (n: int) {
+	n, _ = io.write_quoted_string(w, s)
+	return
+}
+
+w_tabs :: proc(w: io.Writer, count: int) -> (n: int) {
+	for _ in 0..<count do n += w_str(w, "	")
+	return
+}
+
+sb_writer :: #force_inline proc(b: ^strings.Builder) -> io.Writer { return strings.to_writer(b) }
+
+// %v of a float, as fmt writes it
+w_float :: proc(w: io.Writer, x: $T) -> int where intrinsics.type_is_float(T) {
+	fi := fmt.Info{writer = w}
+	fmt.fmt_float(&fi, f64(x), 8 * size_of(T), 'v')
+	return fi.n
+}
+
+sb_float :: proc(b: ^strings.Builder, x: $T) where intrinsics.type_is_float(T) { w_float(strings.to_writer(b), x) }
+
 sb_v :: #force_inline proc(b: ^strings.Builder, x: $T) {
 	when T == string {
 		strings.write_string(b, x)
@@ -208,6 +230,8 @@ sb_v :: #force_inline proc(b: ^strings.Builder, x: $T) {
 		strings.write_i64(b, i64(x), 10)
 	} else when T == uint || T == u8 || T == u16 || T == u32 || T == u64 {
 		strings.write_u64(b, u64(x), 10)
+	} else when intrinsics.type_is_float(T) {
+		sb_float(b, x)
 	} else {
 		fmt.sbprintf(b, "%v", x)
 	}
@@ -224,6 +248,8 @@ w_v :: #force_inline proc(w: io.Writer, x: $T) -> (n: int) {
 		n, _ = io.write_i64(w, i64(x), 10)
 	} else when T == uint || T == u8 || T == u16 || T == u32 || T == u64 {
 		n, _ = io.write_u64(w, u64(x), 10)
+	} else when intrinsics.type_is_float(T) {
+		n = w_float(w, x)
 	} else {
 		n = fmt.wprintf(w, "%v", x, flush = false)
 	}

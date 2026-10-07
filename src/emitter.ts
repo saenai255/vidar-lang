@@ -8,6 +8,7 @@ import { AllocGroup, BoundsGuard, Reserve, optimizeProc } from "./optimize";
 import type { StackBuf } from "./stackbuf";
 import { StrHash, strHashProc } from "./strswitch";
 import { MemoInfo, memoHelpers } from "./memo";
+import { Printers, registersFormatters } from "./printers";
 import type { CaptureSym, GlobalSym, LocalSym, PackageInfo, PkgSym, Sym, Ty, Unit } from "./scope";
 
 type ProcLit = Extract<Expr, { k: "ProcLit" }>;
@@ -218,7 +219,9 @@ function fmtRuntime(): string {
     [ints, `strings.write_i64(b, i64(x), ${base})`, `n, _ = io.write_i64(w, i64(x), ${base})`],
     [uints, `strings.write_u64(b, u64(x), ${base})`, `n, _ = io.write_u64(w, u64(x), ${base})`],
   ];
-  const verbs: Record<string, Fast[]> = { v: [str, bool, rune, ...num(10)], d: num(10), s: [str], x: num(16), t: [bool], c: [rune] };
+  // floats go to fmt's own float formatter, without the format parsing and `any` boxing
+  const float: Fast = ["intrinsics.type_is_float(T)", "sb_float(b, x)", "n = w_float(w, x)"];
+  const verbs: Record<string, Fast[]> = { v: [str, bool, rune, ...num(10), float], d: num(10), s: [str], x: num(16), t: [bool], c: [rune] };
   const chain = (fast: Fast[], pick: 1 | 2, slow: string) =>
     fast.map(([cond, ...code], i) => `${i ? " else " : "\t"}when ${cond} {\n\t\t${code[pick - 1]}\n\t}`).join("") + ` else {\n\t\t${slow}\n\t}`;
   const procs = Object.entries(verbs).map(([verb, fast]) =>
@@ -258,6 +261,28 @@ w_str :: #force_inline proc(w: io.Writer, s: string) -> (n: int) {
 w_spec :: proc(w: io.Writer, x: $T, spec: string) -> int { return fmt.wprintf(w, spec, x, flush = false) }
 
 w_flush :: #force_inline proc(w: io.Writer) { io.flush(w) }
+
+// -opt: generated printers for %v of known types
+w_quoted :: #force_inline proc(w: io.Writer, s: string) -> (n: int) {
+	n, _ = io.write_quoted_string(w, s)
+	return
+}
+
+w_tabs :: proc(w: io.Writer, count: int) -> (n: int) {
+	for _ in 0..<count do n += w_str(w, "\t")
+	return
+}
+
+sb_writer :: #force_inline proc(b: ^strings.Builder) -> io.Writer { return strings.to_writer(b) }
+
+// %v of a float, as fmt writes it
+w_float :: proc(w: io.Writer, x: $T) -> int where intrinsics.type_is_float(T) {
+	fi := fmt.Info{writer = w}
+	fmt.fmt_float(&fi, f64(x), 8 * size_of(T), 'v')
+	return fi.n
+}
+
+sb_float :: proc(b: ^strings.Builder, x: $T) where intrinsics.type_is_float(T) { w_float(strings.to_writer(b), x) }
 
 ${procs.join("\n")}`;
 }
@@ -300,6 +325,8 @@ export class Emitter {
   private hoistedText = new Map<Node, string[]>();
   private fileUsesRuntime = false;
   private helpers: string[] = [];
+  /** -opt: printers for %v of known types; null when the program registers its own formatters */
+  private printers: Printers | null | undefined = undefined;
   /** -opt: string switches through a perfect hash, and their helper procs */
   private strSwitches = new Map<Node, string>();
   private callHelpers = new Map<string, string>();
@@ -343,6 +370,7 @@ export class Emitter {
     this.file = f;
     this.pkg = pkg;
     this.helpers = [];
+    this.printers = undefined;
     this.callHelpers.clear();
     this.extraImports.clear();
     this.fileUsesRuntime = false;
@@ -351,6 +379,8 @@ export class Emitter {
     const root = { k: "Block", toks: f.toks, start: 0, end: f.toks.length, stmts: f.stmts } as Block;
     let out = f.toks[0].pre + this.generic(root, 0, f.toks.length, f.stmts);
     while (this.cloneJobs.length) this.helpers.push(this.cloneJobs.shift()!());
+    const printers = this.printers as Printers | null | undefined;
+    if (printers?.procs.size) this.helpers.push(`// fmt's %v for the types printed here, written out\n` + [...printers.procs.values()].join("\n\n"));
     const runtime = (this.fileUsesRuntime ? `; import ${RUNTIME_ALIAS} "${relImport(this.unit.outDir, "vidar_runtime")}"` : "") +
       [...this.extraImports].map(([alias, path]) => `; import ${alias} "${path}"`).join("");
     out = out.replace(RUNTIME_MARK, runtime);
@@ -472,7 +502,8 @@ export class Emitter {
         if (this.pretty && this.tok(n.toks[n.start]) === "{") return this.compact ? `{ ${n.stmts.map((s) => this.withPre(s)).join("; ")} }` : this.prettyBlock(n);
         if (this.tok(n.toks[n.start]) !== "do") return this.block(n);
         // statements hoisted before the body, or a prologue, must stay under the `do`
-        if (n.stmts.some((s) => A(s)._pre?.length || A(s)._boundsGuard) || this.prologue.has(n)) {
+        // (Odin also rejects `do #no_bounds_check { call }`)
+        if (n.stmts.some((s) => A(s)._pre?.length || A(s)._boundsGuard || (A(s)._noBounds && s.k === "ExprStmt")) || this.prologue.has(n)) {
           const lines = this.prologue.get(n) ?? [];
           this.prologue.delete(n);
           return `{ ${[...lines, ...n.stmts.map((s) => this.withPre(s))].join("; ")} }`;
@@ -859,6 +890,14 @@ export class Emitter {
   }
 
   /** `name` declared in `owner`'s package, as spelled from the file being emitted. */
+  /** How this file names global `sym`, or undefined when it can't (a package it doesn't import, or a private name). */
+  private typeRef(sym: GlobalSym): string | undefined {
+    if (sym.pkg.unit === this.unit) return sym.odinName;
+    if (sym.isPrivate) return undefined;
+    for (const s of this.pkg.fileScopes.get(this.file)?.syms.values() ?? []) if (s.kind === "pkg" && s.target?.unit === sym.pkg.unit) return `${s.name}.${sym.odinName}`;
+    return undefined;
+  }
+
   private qualify(owner: GlobalSym, name: string, what = `use interface '${owner.name}'`): string {
     if (owner.pkg.unit === this.unit) return name;
     const scope = this.pkg.fileScopes.get(this.file);
@@ -1287,6 +1326,7 @@ export class Emitter {
   private fmtCall(c: Call): string | undefined {
     const plan = fmtPlan(this.an, c);
     if (!plan) return undefined;
+    if (this.printers === undefined) this.printers = registersFormatters(this.an) ? null : new Printers(this.an, (sym) => this.typeRef(sym));
     const { entry, lead, values, pieces } = plan;
     const fn = c.fn as Extract<Expr, { k: "Selector" }>;
 
@@ -1312,7 +1352,12 @@ export class Emitter {
       flush();
       const arg = `a${kept.length}`;
       kept.push(v);
-      if (FAST_VERBS.has(p.verb) && p.spec === "%" + p.verb) write(p.verb, arg);
+      const printer = (p.spec === "%v" || p.spec === "%#v") && this.printers && this.printers.write(v, p.spec === "%#v", sink === "w" ? "w" : `__vidar.sb_writer(${sink})`, arg);
+      if (printer) {
+        const count = sink === "w" ? "n += " : "";
+        const fallback = sink === "w" ? `n += __vidar.w_spec(w, ${arg}, ${encodeString(p.spec)})` : `__vidar.sb_spec(${sink}, ${arg}, ${encodeString(p.spec)})`;
+        writes.push(`\twhen T${kept.length - 1} == ${printer.type} { ${count}${printer.call} } else { ${fallback} }\n`);
+      } else if (FAST_VERBS.has(p.verb) && p.spec === "%" + p.verb) write(p.verb, arg);
       else write("spec", arg, `, ${encodeString(p.spec)}`);
     }
     flush();
