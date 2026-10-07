@@ -19,13 +19,6 @@ interface Dangling {
  * followed; calls it is passed to are not.
  */
 export function checkEscapes(an: Analyzer, p: ProcLit, ctx: Ctx): void {
-  if (!p.body) return;
-  const results = new Set<LocalSym>(A(p)._results ?? []);
-  const held = new Map<LocalSym, Dangling>();
-  let report = false;
-
-  const ownLocal = (s: Sym | undefined): s is LocalSym => s?.kind === "local" && s.ctx === ctx;
-
   const dangling = (lit: ProcLit): Dangling | undefined => {
     const cap = ((A(lit)._captures ?? []) as CaptureSym[]).find((c) => {
       if (!c.byRef) return false;
@@ -34,12 +27,41 @@ export function checkEscapes(an: Analyzer, p: ProcLit, ctx: Ctx): void {
     });
     return cap && { lit, cap };
   };
+  walk<Dangling>(an, p, ctx, (e) => (e.k === "ProcLit" && e.captures ? dangling(e) : undefined), (d, what, at) => {
+    const name = d.cap.name;
+    const line = posOf(at).line;
+    throw new CompileError(
+      `this closure captures &${name} and ${what} (line ${line}), but '${name}' lives in this proc's frame and is gone once it returns. Capture a pointer from new_clone(${name}) instead`,
+      d.cap.declTok?.pos ?? posOf(d.lit),
+    );
+  });
+}
 
-  /** The dangling closure `e` evaluates to, or holds. */
-  const carried = (e: Expr | null | undefined): Dangling | undefined => {
+/**
+ * How the interface value `value` (made from a plain value in `p`'s frame) would outlive `p`, by
+ * the same rules as a closure holding `&x`: "is returned (line 12)", or undefined when it doesn't.
+ */
+export function ifaceEscape(an: Analyzer, p: ProcLit, ctx: Ctx, value: Expr): string | undefined {
+  let found: string | undefined;
+  walk<true>(an, p, ctx, (e) => (e === value || undefined), (_, what, at) => void (found ??= `${what} (line ${posOf(at).line})`));
+  return found;
+}
+
+/** Follows each value `source` picks out through `p`'s locals, calling `escaped` where one leaves the proc. */
+function walk<T>(an: Analyzer, p: ProcLit, ctx: Ctx, source: (e: Expr) => T | undefined, escaped: (d: T, what: string, at: Node) => void): void {
+  if (!p.body) return;
+  const results = new Set<LocalSym>(A(p)._results ?? []);
+  const held = new Map<LocalSym, T>();
+  let report = false;
+
+  const ownLocal = (s: Sym | undefined): s is LocalSym => s?.kind === "local" && s.ctx === ctx;
+
+  /** The tracked value `e` evaluates to, or holds. */
+  const carried = (e: Expr | null | undefined): T | undefined => {
     if (!e) return undefined;
+    const d = source(e);
+    if (d !== undefined) return d;
     switch (e.k) {
-      case "ProcLit": return e.captures ? dangling(e) : undefined;
       case "Paren": return carried(e.x);
       case "Ident": {
         const s: Sym | undefined = A(e)._sym;
@@ -58,23 +80,17 @@ export function checkEscapes(an: Analyzer, p: ProcLit, ctx: Ctx): void {
     }
   };
 
-  const fail = (d: Dangling, what: string, at: Node): void => {
-    if (!report) return;
-    const name = d.cap.name;
-    const line = posOf(at).line;
-    throw new CompileError(
-      `this closure captures &${name} and ${what} (line ${line}), but '${name}' lives in this proc's frame and is gone once it returns. Capture a pointer from new_clone(${name}) instead`,
-      d.cap.declTok?.pos ?? posOf(d.lit),
-    );
+  const fail = (d: T, what: string, at: Node): void => {
+    if (report) escaped(d, what, at);
   };
 
-  const hold = (s: LocalSym, d: Dangling, at: Node): void => {
+  const hold = (s: LocalSym, d: T, at: Node): void => {
     if (results.has(s)) return fail(d, "is returned", at);
     if (!held.has(s)) held.set(s, d);
   };
 
   /** `target = <d>`, or an append to `target`. */
-  const store = (target: Expr, d: Dangling, at: Node, appended = false): void => {
+  const store = (target: Expr, d: T, at: Node, appended = false): void => {
     const into = appended ? "is appended to" : "is stored in";
     let e = target;
     for (;;) {

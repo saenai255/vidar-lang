@@ -1,10 +1,10 @@
-import { CompileError, Pos, Token } from "./lexer";
+import { CompileError, ErrorFix, Pos, Token } from "./lexer";
 import { Block, Expr, File, Node, Param, ProcSig, Stmt, children } from "./ast";
 import { Parser } from "./parser";
 import { CaptureSym, Ctx, GlobalSym, LocalSym, PackageInfo, PkgSym, Scope, Sym, Ty } from "./scope";
 import { autoOptimize } from "./autoopt";
 import { checkNoAlloc } from "./checks";
-import { checkEscapes } from "./escape";
+import { checkEscapes, ifaceEscape } from "./escape";
 import { MemoInfo, memoPlan } from "./memo";
 import { CallSpan, Interp, NotConstant, Val, joinTokens, repeatable, respace, valueToTokens, tokensOf } from "./comptime";
 
@@ -171,6 +171,8 @@ export class Analyzer {
   private pendingIfaces: { node: Extract<Expr, { k: "InterfaceType" }>; sym: GlobalSym }[] = [];
   private bodiless: { sym: GlobalSym; lit: ProcLit }[] = [];
   private resultStack: { sig: ProcSig; scope: Scope; proc: ProcLit }[] = [];
+  /** tooling: plain values of a proc's frame converted to an interface, checked for escaping once its body is done */
+  private frameValues: { fix: Extract<ErrorFix, { code: "iface-value" }>; value: Expr; proc: ProcLit }[] = [];
   private errCounter = 0;
   private anonCounter = 0;
   /** method declaration -> its interface method */
@@ -602,7 +604,7 @@ export class Analyzer {
           throw new CompileError(`'${fnSym!.name}' is a comptime proc: call it as '${fnSym!.name}!(...)'`, posOf(e));
         if (ifaceVal?.k === "InterfaceType") {
           A(e)._ifaceConv = fnSym;
-          if (e.args.length === 1 && !this.upcast(e.args[0], fnSym)) this.requirePointer(e.args[0], fnSym);
+          if (e.args.length === 1 && !this.upcast(e.args[0], fnSym)) this.requirePointer(e.args[0], fnSym, e);
           return;
         }
         if (e.fn.k === "Ident" && !fnSym && this.poolCall(e, scope)) return;
@@ -692,7 +694,7 @@ export class Analyzer {
           target.refCaptured = true;
         }
         if (!c.byRef && this.capturesClosure(target))
-          throw new CompileError(`'${c.name}' is a closure, and a closure can't hold a copy of another one (it would need more room than it has). Capture &${c.name}, or a pointer from new_clone(${c.name}) if it must outlive this frame`, p.toks[c.tok].pos);
+          throw new CompileError(`'${c.name}' is a closure, and a closure can't hold a copy of another one (it would need more room than it has). Capture &${c.name}, or a pointer from new_clone(${c.name}) if it must outlive this frame`, p.toks[c.tok].pos, { code: "capture-by-value", name: c.name, at: p.toks[c.tok].pos });
         const sym: CaptureSym = { kind: "capture", name: c.name, byRef: c.byRef, target, ctx, declTok: p.toks[c.tok] };
         root.syms.set(c.name, sym);
         return sym;
@@ -705,6 +707,7 @@ export class Analyzer {
         this.stmt(p.body, new Scope(root));
       } finally {
         this.resultStack.pop();
+        if (this.frameValues.length) this.checkFrameValues(p, ctx);
       }
       checkEscapes(this, p, ctx);
     }
@@ -1205,7 +1208,8 @@ export class Analyzer {
     }
     const sym: Sym | undefined = root.k === "Ident" ? A(root)._sym : undefined;
     if (sym?.kind === "capture" && !sym.byRef)
-      throw new CompileError(`'${sym.name}' is captured by value: each call gets a fresh copy, so a change would be lost. Capture &${sym.name}, or a pointer, to change it`, posOf(e));
+      throw new CompileError(`'${sym.name}' is captured by value: each call gets a fresh copy, so a change would be lost. Capture &${sym.name}, or a pointer, to change it`, posOf(e),
+        sym.declTok && { code: "capture-by-value", name: sym.name, at: sym.declTok.pos });
   }
 
   /** Removes vidar's own attributes from a declaration (Odin rejects unknown ones) and returns those found. */
@@ -1633,12 +1637,62 @@ export class Analyzer {
   }
 
   /** Interface values refer to their data; converting a plain value would hide a heap copy. */
-  private requirePointer(e: Expr, iface: GlobalSym): void {
+  private requirePointer(e: Expr, iface: GlobalSym, value: Expr = e): void {
     const n = this.normalize(this.typeOf(e, this.global));
     const isValue = e.k === "CompoundLit" || (n?.t === "node" && (n.node.k === "StructType" || n.node.k === "UnionType"));
     if (!isValue) return;
     const text = nodeText(e);
-    throw new CompileError(`'${text}' is a value; '${iface.name}' needs a pointer: &${text}, or new_clone(${text}) for a heap copy you own`, posOf(e));
+    const top = this.resultStack[this.resultStack.length - 1];
+    const fix = this.valueFix(e, top?.scope.procRoot ?? null);
+    const err = new CompileError(`'${text}' is a value; '${iface.name}' needs a pointer: &${text}, or new_clone(${text}) for a heap copy you own`, posOf(e), fix?.fix);
+    // tooling: go on with the proc, so whether &x would outlive it is known once its body is done
+    if (!this.errors || !top) throw err;
+    const same = (x: CompileError) => x.message === err.message && x.pos?.file === err.pos?.file && x.pos?.line === err.pos?.line && x.pos?.col === err.pos?.col;
+    if (!this.errors.some(same)) this.errors.push(err);
+    if (fix?.inFrame) this.frameValues.push({ fix: fix.fix, value, proc: top.proc });
+  }
+
+  /** Where a value converted to an interface is written, whether `&` applies to it, and whether it lives in the frame of the proc `ctx`. */
+  private valueFix(e: Expr, ctx: Ctx | null): { fix: Extract<ErrorFix, { code: "iface-value" }>; inFrame: boolean } | undefined {
+    const toks = e.toks.slice(e.start, e.end);
+    const first = toks[0], last = toks[toks.length - 1];
+    if (!first || toks.some((t) => t.pos.file !== first.pos.file)) return undefined;
+    const lines = last.text.split("\n");
+    const end = { file: last.pos.file, line: last.pos.line + lines.length - 1, col: (lines.length > 1 ? 1 : last.pos.col) + lines[lines.length - 1].length };
+    const through = (x: Expr) => this.typeName(this.typeOf(x, A(x)._scope ?? this.global));
+    // the value's own storage: through fields and fixed-array elements, not through pointers
+    let root = e;
+    for (;;) {
+      if (root.k === "Paren") root = root.x;
+      else if (root.k === "Selector" && !A(root)._pkgMember && !through(root.x)?.startsWith("^")) root = root.x;
+      else if (root.k === "Index" && !root.slice && isFixedArray(through(root.x))) root = root.x;
+      else break;
+    }
+    let base: Expr = root;
+    for (;;) {
+      if (base.k === "Paren" || base.k === "Selector" || base.k === "Index" || base.k === "Deref") base = base.x;
+      else break;
+    }
+    const sym: Sym | undefined = root.k === "Ident" ? A(root)._sym : undefined;
+    let addressable = base.k === "Ident" || base.k === "CompoundLit";
+    let why = addressable ? undefined : "it isn't stored in a variable, so it has no address";
+    if (sym?.kind === "local" && (sym.declKind === "param" || sym.declKind === "range")) {
+      addressable = false;
+      why = sym.declKind === "param" ? `Odin can't take the address of the parameter '${sym.name}'` : `Odin can't take the address of the loop value '${sym.name}' (unless it is \`for &${sym.name} in\`)`;
+    }
+    const inFrame = !!ctx && (root.k === "CompoundLit" || (sym?.kind === "local" && sym.ctx === ctx) || (sym?.kind === "capture" && !sym.byRef && sym.ctx === ctx));
+    return { fix: { code: "iface-value", start: first.pos, end, addressable, why }, inFrame };
+  }
+
+  /** Records, for each plain value of `p`'s frame converted to an interface, whether `&x` would outlive `p`. */
+  private checkFrameValues(p: ProcLit, ctx: Ctx): void {
+    for (const v of this.frameValues) {
+      if (v.proc !== p) continue;
+      try {
+        v.fix.dangles = ifaceEscape(this, p, ctx, v.value);
+      } catch {}
+    }
+    this.frameValues = this.frameValues.filter((v) => v.proc !== p);
   }
 
   private convertArgs(args: Expr[], ft: Extract<Ty, { t: "sig" }>, skip = 0): void {

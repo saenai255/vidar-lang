@@ -15,8 +15,19 @@ export interface Token {
   origPre?: string;
 }
 
+/** What the language server needs to offer a quick fix for an error, so it never parses messages. */
+export type ErrorFix =
+  /**
+   * A plain value converted to an interface: `start`..`end` is the value's source. `&x` is ruled out
+   * when it isn't `addressable` (with `why`) or when it would `dangle` (how the interface value
+   * leaves the proc whose frame holds the value).
+   */
+  | { code: "iface-value"; start: Pos; end: Pos; addressable: boolean; why?: string; dangles?: string }
+  /** A by-value capture that should be by reference: `&` goes before the capture's name at `at`. */
+  | { code: "capture-by-value"; name: string; at: Pos };
+
 export class CompileError extends Error {
-  constructor(message: string, public pos?: Pos) {
+  constructor(message: string, public pos?: Pos, public fix?: ErrorFix) {
     super(message);
   }
 }

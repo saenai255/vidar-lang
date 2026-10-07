@@ -1,0 +1,45 @@
+package main
+
+import "core:strings"
+
+Shape :: interface { area }
+area :: proc(s: Shape) -> f64 ---
+
+Sq :: struct { s: f64 }
+sq_area :: proc(q: ^Sq) -> f64 { return q.s * q.s }
+impl Shape for Sq { area = sq_area }
+
+bits :: proc(b: u8) -> int {
+	n := int(b)
+	c := 0
+	for n != 0 {
+		c += n & 1
+		n >>= 1
+	}
+	return c
+}
+
+make_shape :: proc() -> Shape {
+	built := Sq{3}
+	return built
+}
+
+of_param :: proc(p: Sq) -> f64 {
+	return area(Shape(p))
+}
+
+counter :: proc() -> int {
+	n := 0
+	inc := proc[n]() { n += 1 }
+	inc()
+	return n
+}
+
+main :: proc() {
+	sq := Sq{2}
+	s: Shape = sq
+	fmt.println(area(s), bits(7), strings.to_upper("x"))
+	_ = make_shape()
+	_ = of_param(sq)
+	_ = counter()
+}

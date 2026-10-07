@@ -783,6 +783,72 @@ function change(text) {
   await exBroken;
   ex = await exExpand(exAt("total += xs[i]", "total"));
   check("expandAt on a program with errors says so", /^fix 1 error/.test(ex.error ?? ""), JSON.stringify(ex));
+  // ---- code actions: quick fixes for errors, opt-outs from -opt decisions ----
+  {
+  const actDir = realpathSync(mkdtempSync(join(tmpdir(), "vidar-lsp-actions-")));
+  cpSync("tests/lsp/actions", actDir, { recursive: true });
+  const aUri = pathToFileURL(join(actDir, "main.vidar")).toString();
+  const aText = readFileSync(join(actDir, "main.vidar"), "utf8");
+  const aLines = aText.split("\n");
+  const aLine = (has) => aLines.findIndex((l) => l.includes(has));
+  /** LSP text edits applied to `text`, last first */
+  const applyEdits = (text, edits) => {
+    const offset = (p) => text.split("\n").slice(0, p.line).reduce((n, l) => n + l.length + 1, 0) + p.character;
+    const sorted = [...edits].sort((x, y) => offset(y.range.start) - offset(x.range.start));
+    for (const e of sorted) text = text.slice(0, offset(e.range.start)) + e.newText + text.slice(offset(e.range.end));
+    return text;
+  };
+  const aDiag = nextDiagnostics((d) => d.uri === aUri);
+  notify("textDocument/didOpen", { textDocument: { uri: aUri, languageId: "vidar", version: 1, text: aText } });
+  const ad = (await aDiag).diagnostics;
+  const ads = JSON.stringify(ad.map((d) => [d.code, d.range.start.line, d.message.slice(0, 60)]));
+  const diagOn = (has, code) => ad.find((d) => d.code === code && d.range.start.line === aLine(has));
+  check("interface conversion errors carry a code, one per conversion in a proc", diagOn("s: Shape = sq", "iface-value") && diagOn("return built", "iface-value") && diagOn("area(Shape(p))", "iface-value"), ads);
+  check("the diagnostic says why &x would dangle", diagOn("return built", "iface-value")?.message.includes("&x would dangle: the interface value is returned (line"), ads);
+  check("the diagnostic says why a parameter can't be pointed to", diagOn("area(Shape(p))", "iface-value")?.message.includes("Odin can't take the address of the parameter 'p'"), ads);
+  check("a by-value capture write carries a code", diagOn("inc := proc[n]", "capture-by-value"), ads);
+  check("a core package used without its import is an error", diagOn("fmt.println", "missing-import")?.message.includes('"core:fmt"') && !ad.some((d) => d.code === "missing-import" && d.message.includes("strings")), ads);
+
+  const actionsOn = async (has, only) => {
+    const line = aLine(has);
+    const range = { start: { line, character: 0 }, end: { line, character: aLines[line].length } };
+    return (await request("textDocument/codeAction", { textDocument: { uri: aUri }, range, context: { diagnostics: ad.filter((d) => d.range.start.line === line), ...(only ? { only } : {}) } })).result ?? [];
+  };
+  const titles = (acts) => JSON.stringify(acts.map((x) => [x.title, x.isPreferred]));
+  const edited = (act) => applyEdits(aText, act?.edit?.changes?.[aUri] ?? []);
+  const NEW_CLONE = "Allocate a heap copy (new_clone, caller frees)";
+
+  let acts = await actionsOn("s: Shape = sq");
+  const addr = acts.find((x) => x.title.includes("&sq"));
+  const clone = acts.find((x) => x.title === NEW_CLONE);
+  check("interface conversion: &x is the preferred quick fix", addr?.isPreferred === true && addr.kind === "quickfix" && edited(addr).includes("s: Shape = &sq\n") && addr.diagnostics?.[0]?.code === "iface-value", titles(acts));
+  check("interface conversion: new_clone is offered separately, never preferred", clone && clone.isPreferred !== true && edited(clone).includes("s: Shape = new_clone(sq)\n"), titles(acts));
+  acts = await actionsOn("return built");
+  check("when &x would dangle, only new_clone is offered", acts.length === 1 && acts[0].title === NEW_CLONE && acts[0].isPreferred !== true && edited(acts[0]).includes("return new_clone(built)"), titles(acts));
+  acts = await actionsOn("area(Shape(p))");
+  check("a parameter gets only new_clone", acts.length === 1 && acts[0].title === NEW_CLONE && edited(acts[0]).includes("area(Shape(new_clone(p)))"), titles(acts));
+  acts = await actionsOn("n += 1");
+  check("a write to a by-value capture: capture by reference", acts.some((x) => x.isPreferred && edited(x).includes("inc := proc[&n]() { n += 1 }")), titles(acts));
+  acts = await actionsOn("fmt.println");
+  const imp = acts.find((x) => x.title === 'Add import "core:fmt"');
+  check("a missing import is added after the last one", imp?.isPreferred && edited(imp).includes('import "core:strings"\nimport "core:fmt"\n'), titles(acts));
+  acts = await actionsOn("bits :: proc");
+  const noTable = acts.find((x) => x.title.includes("@(no_table)"));
+  check("an automatic table can be turned off with @(no_table)", noTable && !noTable.isPreferred && edited(noTable).includes("@(no_table)\nbits :: proc"), titles(acts));
+
+  const everyLine = (await request("textDocument/codeAction", { textDocument: { uri: aUri }, range: { start: { line: 0, character: 0 }, end: { line: aLines.length, character: 0 } }, context: { diagnostics: ad } })).result ?? [];
+  check("new_clone is never a preferred fix", everyLine.some((x) => x.title === NEW_CLONE) && everyLine.every((x) => !(x.isPreferred && JSON.stringify(x.edit).includes("new_clone"))), titles(everyLine));
+  const all = await actionsOn("package main", ["source.fixAll"]);
+  const fixedAll = edited(all[0]);
+  check("fix all applies the preferred fixes and never allocates", all.length === 1 && !fixedAll.includes("new_clone") && fixedAll.includes("s: Shape = &sq") && fixedAll.includes("proc[&n]") && fixedAll.includes('import "core:fmt"') && fixedAll.includes("return built"), fixedAll);
+
+  // fixed by hand where no preferred fix applies: the program has no errors left
+  const fixedText = fixedAll.replace("return built", "return new_clone(built)").replace("area(Shape(p))", "area(Shape(new_clone(p)))");
+  const aFixed = nextDiagnostics((d) => d.uri === aUri);
+  notify("textDocument/didChange", { textDocument: { uri: aUri, version: 2 }, contentChanges: [{ text: fixedText }] });
+  const afd = (await aFixed).diagnostics;
+  check("after the fixes the file has no errors", afd.length === 0, JSON.stringify(afd.map((d) => d.message)));
+  }
 
   writeFileSync(file, original);
   const restored = nextDiagnostics((d) => d.uri === uri && d.diagnostics.length === 0);

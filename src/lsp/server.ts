@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import {
-  CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, DocumentSymbol, InitializeResult, ProposedFeatures,
+  CodeActionKind, CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, DocumentSymbol, InitializeResult, ProposedFeatures,
   SymbolKind as LspSymbolKind, TextDocumentSyncKind, TextDocuments, TextEdit, createConnection,
 } from "vscode-languageserver/node";
 import { TextDocument } from "vscode-languageserver-textdocument";
@@ -16,6 +16,7 @@ import { hotWarnings } from "../checks";
 import { PRELUDE_PATH } from "../prelude";
 import { writeOutput } from "../cli";
 import * as F from "./features";
+import * as Actions from "./actions";
 import { OdinBridge } from "./odin";
 import * as N from "./navigation";
 import * as Sem from "./semantic";
@@ -68,7 +69,8 @@ function toDiagnostic(err: CompileError, source: string, severity: DiagnosticSev
     range: { start: { line, character: col }, end: { line, character: col + 1 } },
     severity,
     source,
-    message: err.message,
+    ...(Actions.fixCode(err) ? { code: Actions.fixCode(err) } : {}),
+    message: err.message + Actions.fixNote(err),
   };
 }
 
@@ -110,6 +112,7 @@ function publish(dir: string, state: PackageState): void {
   for (const s of a.sources) {
     const diags = a.errors.filter((e) => (e.pos?.file ?? a.sources[0].path) === s.path).map((e) => toDiagnostic(e, "vidar"));
     diags.push(...state.hotWarnings.filter((w) => w.pos?.file === s.path).map((w) => toDiagnostic(w, "vidar", DiagnosticSeverity.Warning)));
+    diags.push(...Actions.importDiagnostics(a, s.path, s.text));
     diags.push(...(state.odinDiagnostics.get(s.path) ?? []));
     connection.sendDiagnostics({ uri: toUri(s.path), diagnostics: diags });
   }
@@ -205,6 +208,7 @@ connection.onInitialize((params): InitializeResult => {
       callHierarchyProvider: true,
       semanticTokensProvider: { legend: Sem.LEGEND, full: true, range: true },
       codeLensProvider: { resolveProvider: false },
+      codeActionProvider: { codeActionKinds: [CodeActionKind.QuickFix, CodeActionKind.SourceFixAll] },
     },
     serverInfo: { name: "vidar-lsp", version: "0.1.0" },
   };
@@ -381,6 +385,14 @@ connection.onCodeLens(({ textDocument }) => {
     range: p.selectionRange,
     command: { title: R.lensTitle(p), command: "vidar.showOptReport", arguments: [textDocument.uri, p.name, p.selectionRange.start.line] },
   }));
+});
+
+/** Quick fixes for vidar's errors and opt-outs from -opt's decisions; see actions.ts. */
+connection.onCodeAction(({ textDocument, range, context }) => {
+  const { state, path } = stateFor(textDocument.uri);
+  const text = textOf(state, textDocument.uri, path);
+  if (!state.current || text === undefined) return [];
+  return Actions.codeActions({ a: state.current, uri: textDocument.uri, file: path, text, range, context, opt: () => optAnalysis(state, dirname(path)) });
 });
 
 /** Custom request: the Odin code vidar generates for a file. */
