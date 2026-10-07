@@ -1,7 +1,0 @@
-// error: closure bodies are lifted to file scope and cannot use the local constant 'N'
-package main
-main :: proc() {
-	N :: 4
-	x := 1
-	f := proc[x]() -> int { return x * N }
-}

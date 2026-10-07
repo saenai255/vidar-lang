@@ -1,0 +1,65 @@
+package main
+
+import "core:fmt"
+
+// Closures inside polymorphic procs: their bodies use $T, $N and local types
+// built from them, so each closure's helper is declared inside the proc.
+
+sum_with :: proc(xs: []$T, k: T) -> T {
+	add := proc[k](a, b: T) -> T { return a + b + k }
+	acc: T
+	for x in xs do acc = add(acc, x)
+	return acc
+}
+
+Box :: struct($T: typeid) { value: T }
+
+boxes :: proc(xs: []$T, scale: T) -> [dynamic]Box(T) {
+	Item :: Box(T)
+	WIDTH :: size_of(T)
+	out: [dynamic]Item
+	wrap := proc[scale](x: T) -> Item { return Item{x * scale + T(WIDTH)} }
+	for x in xs do append(&out, wrap(x))
+	return out
+}
+
+fill :: proc($N: int, start: int) -> (out: [N]int) {
+	count := 0
+	step := proc[&count](i: int) -> int {
+		count += 1
+		// a closure inside a closure, both using $N
+		inner := proc[i]() -> int { return i * N }
+		return inner()
+	}
+	for i in 0..<N do out[i] = start + step(i)
+	fmt.println("steps:", count)
+	return
+}
+
+apply :: proc(x: $T, f: closure(T) -> T) -> T { return f(f(x)) }
+
+twice_plus :: proc(x: $T, d: T) -> T {
+	// passed straight to a proc, and with no captures
+	r := apply(x, proc[d](v: T) -> T { return v + d })
+	zero := proc[]() -> T { return T(0) }
+	return r + zero()
+}
+
+each :: proc(xs: []int, f: closure(int)) { for x in xs do f(x) }
+
+// with -opt, each isn't copied for this closure: the copy would be at file scope, where T isn't
+count_as :: proc($T: typeid, xs: []int) -> T {
+	acc: T
+	each(xs, proc[&acc](x: int) { acc += T(x) / 2 })
+	return acc
+}
+
+main :: proc() {
+	fmt.println(sum_with([]int{1, 2, 3}, 1), sum_with([]f64{0.5, 1.5}, 0.25))
+	bs := boxes([]int{1, 2}, 10)
+	defer delete(bs)
+	fmt.println(bs[0].value, bs[1].value)
+	fmt.println(fill(4, 100))
+	fmt.println(twice_plus(1, 2), twice_plus(f32(1.5), 1))
+	fmt.println(count_as(int, []int{1, 2, 3}), count_as(f64, []int{1, 2, 3}))
+}

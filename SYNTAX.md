@@ -33,7 +33,7 @@ Rules:
 - Using an outer local without capturing it is a compile error that suggests the fix.
 - Each name may appear once in a capture list. Only locals can be captured: globals and constants are visible without capturing, and listing one is an error.
 - A nested closure can capture what its enclosing closure captured.
-- Closure bodies are lifted to file scope, so they cannot use the enclosing proc's local constants, local types or `$T` parameters.
+- A closure body can use the enclosing proc's local constants, local types and `$T` parameters without capturing them.
 - A closure is a value: its captures are copied into it (room for 128 bytes, `-define:VIDAR_CLOSURE_ENV=<bytes>` to change), so it can be returned, stored and copied freely and never allocates. Captures that don't fit are a compile error.
 - By-value captures are read-only (each call gets a fresh copy); capture `&x` or a pointer to change state.
 - A closure can't capture another closure by value: capture `&f`, or `new_clone(f)` if it outlives the frame.

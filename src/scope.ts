@@ -5,6 +5,8 @@ import type { Val } from "./comptime";
 export interface Ctx {
   /** the closure literal this context belongs to (null for plain procs) */
   closure: boolean;
+  /** the closure literal itself, for closures */
+  lit?: Extract<Expr, { k: "ProcLit" }>;
 }
 
 /** A group of packages emitted as one Odin package: a single package, or an import cycle merged together. */
@@ -58,6 +60,10 @@ export interface LocalSym {
   closureCalled?: boolean;
   declKind: "decl" | "param" | "range" | "other";
   declTok?: Token;
+  /** a constant: the declaration it comes from */
+  constDecl?: Extract<Stmt, { k: "ValueDecl" }>;
+  /** a constant a closure body uses, moved to file scope with it (as `__Local_N`) */
+  lifted?: boolean;
 }
 
 export interface CaptureSym {

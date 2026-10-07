@@ -1,0 +1,53 @@
+package main
+
+import "core:fmt"
+
+// Closure bodies using the enclosing proc's constants and types. Ones that
+// depend on nothing local move to file scope with the body.
+
+Shape :: enum { Circle, Square }
+
+each :: proc(xs: []int, f: closure(int)) { for x in xs do f(x) }
+
+main :: proc() {
+	SCALE :: 3
+	LIMIT :: SCALE * 4
+	RATE : f32 : 1.5
+	Vec :: struct { x, y: int }
+	Kind :: enum { Small, Big }
+	Pair :: struct { v: Vec, kind: Kind, shape: Shape }
+	clamp :: proc(x: int) -> int { return min(x, LIMIT) }
+
+	offset := 10
+	scale := proc[offset](v: Vec) -> int { return clamp(v.x * SCALE + v.y + offset) }
+	fmt.println(scale(Vec{1, 2}), scale(Vec{5, 5}))
+
+	classify := proc[offset](v: Vec) -> Pair {
+		k := Kind.Big if v.x + offset > LIMIT else Kind.Small
+		return Pair{v, k, .Square}
+	}
+	p := classify(Vec{1, 1})
+	fmt.println(p.kind, p.shape, classify(Vec{3, 0}).kind)
+
+	// a nested closure, and one with no captures
+	total := 0
+	add := proc[&total](n: int) {
+		twice := proc[n]() -> int { return n * SCALE * 2 }
+		total += twice()
+	}
+	add(1); add(2)
+	half := proc[]() -> f32 { return RATE / 2 }
+	fmt.println(total, half(), f32(SCALE) * RATE)
+
+	// with -opt, a copy of each calls the body directly; it uses the lifted names too
+	sum := 0
+	each([]int{1, 2, 3}, proc[&sum](x: int) { sum += clamp(x * LIMIT) })
+	fmt.println(sum)
+
+	// a constant that would change meaning at file scope stays where it is: the helper goes in main
+	WHERE :: (#procedure)
+	buf: [4]int
+	fill := proc[&buf](x: int) { for i in 0..<len(buf) do buf[i] = x + i * SCALE; fmt.println(WHERE) }
+	fill(7)
+	fmt.println(buf)
+}

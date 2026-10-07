@@ -380,6 +380,7 @@ export class Analyzer {
   /** Resolves `name` from `scope`, enforcing closure capture rules. */
   lookup(name: string, scope: Scope, at: Node | null): Sym | undefined {
     let crossed = "none" as "none" | "plain" | "closure";
+    const closures: Ctx[] = [];
     for (let s: Scope | null = scope; s; s = s.parent) {
       const sym = s.syms.get(name);
       if (sym) {
@@ -393,11 +394,12 @@ export class Analyzer {
               posOf(at),
             );
           }
-          if (crossed === "closure")
-            throw new CompileError(`closure bodies are lifted to file scope and cannot use the local constant '${name}'; move it to file scope`, posOf(at));
+          // the closures crossed take it with their bodies: lifted to file scope, or their helper nested in the proc
+          for (const c of closures) ((A(c.lit!)._outerConsts ??= new Set<LocalSym>()) as Set<LocalSym>).add(sym as LocalSym);
         }
         return sym;
       }
+      if (s.procRoot?.closure && s.procRoot.lit) closures.push(s.procRoot);
       if (s.procRoot) crossed = s.procRoot.closure || crossed === "closure" ? "closure" : "plain";
     }
     return undefined;
@@ -583,7 +585,7 @@ export class Analyzer {
       if (s.type) ty = { t: "node", node: s.type, scope };
       else if (s.values.length === s.names.length) ty = this.typeOf(s.values[i], scope);
       else if (multi?.t === "sig") ty = this.resultTy(multi, i);
-      return this.declareLocal(n.name, scope, { isConst: s.isConst, ty, value: s.isConst ? s.values[i] : undefined, declTok: s.toks[n.tok] });
+      return this.declareLocal(n.name, scope, { isConst: s.isConst, ty, value: s.isConst ? s.values[i] : undefined, declTok: s.toks[n.tok], ...(s.isConst ? { constDecl: s } : {}) });
     });
   }
 
@@ -724,7 +726,7 @@ export class Analyzer {
 
   private proc(p: ProcLit, scope: Scope): void {
     if (p.comptime) return;
-    const ctx: Ctx = { closure: !!p.captures };
+    const ctx: Ctx = { closure: !!p.captures, ...(p.captures ? { lit: p } : {}) };
     const root = new Scope(scope, null, ctx);
     if (p.captures) {
       A(p)._captures = p.captures.map((c) => {
@@ -757,6 +759,48 @@ export class Analyzer {
       }
       checkEscapes(this, p, ctx);
     }
+    if (p.captures) this.placeClosure(p);
+  }
+
+  /**
+   * A closure body using the enclosing proc's constants or types: they move to file scope with it
+   * (`__Local_N`) when they depend on nothing local; otherwise (`$T`, a runtime value) the closure's
+   * helper is declared inside the proc, before the statement, where they are in scope.
+   */
+  private placeClosure(p: ProcLit): void {
+    const outer: Set<LocalSym> | undefined = A(p)._outerConsts;
+    if (!outer?.size) return;
+    // `proc[]` is written inline, where the proc's names are in scope; it only can't be moved into a copy
+    if (!p.captures!.length) return void (A(p)._nestHelper = true);
+    const lift = new Set<LocalSym>();
+    if ([...outer].every((s) => this.liftable(s, lift))) for (const s of lift) s.lifted = true;
+    else A(p)._nestHelper = true;
+  }
+
+  /** A local constant that means the same at file scope: it uses only globals, and local constants that do. */
+  private liftable(sym: LocalSym, lift: Set<LocalSym>): boolean {
+    if (lift.has(sym)) return true;
+    const d = sym.constDecl;
+    if (!sym.isConst || sym.declKind !== "decl" || !d || !sym.value || sym.value.toks !== d.toks) return false;
+    lift.add(sym);
+    const inside = (t: Token | undefined) => {
+      const i = t ? d.toks.indexOf(t) : -1;
+      return i >= d.start && i < d.end;
+    };
+    const ok = (n: Node): boolean => {
+      if (n.k === "Poly" || n.k === "MacroCall" || n.k === "Quote") return false;
+      if (n.k === "Directive" && /^#(procedure|location|caller_location|line|file|directory|load|load_hash|load_directory)$/.test(n.name)) return false;
+      if (A(n)._expansion) return false;
+      const used: Sym | undefined = n.k === "Ident" ? A(n)._sym : undefined;
+      if (used?.kind === "capture") return false;
+      if (used?.kind === "local" && !inside(used.declTok) && !this.liftable(used, lift)) return false;
+      return children(n).every(ok);
+    };
+    if (!(d.type ? ok(d.type) : true) || !ok(sym.value)) {
+      lift.delete(sym);
+      return false;
+    }
+    return true;
   }
 
   private capturesClosure(target: Sym): boolean {
@@ -1467,7 +1511,8 @@ export class Analyzer {
     const params = this.calledOnlyParams(lit, sym.scope);
     const names = lit.sig.params.flatMap((p) => p.names.map((n) => n.name));
     e.args.forEach((a, i) => {
-      if (a.k === "ProcLit" && a.captures && a.body && params.has(names[i]) && !params.get(names[i])) out.set(names[i], a);
+      // a closure whose helper must stay inside its proc (it uses $T or a local value's type) can't move
+      if (a.k === "ProcLit" && a.captures && a.body && !A(a)._nestHelper && params.has(names[i]) && !params.get(names[i])) out.set(names[i], a);
     });
     return out;
   }
@@ -1480,6 +1525,7 @@ export class Analyzer {
       for (const [i, a] of e.args.entries()) {
         if (!(a.k === "ProcLit" && a.captures)) continue;
         if (params.get(names[i])) return params.get(names[i]);
+        if (params.has(names[i]) && A(a)._nestHelper) return `the closure at line ${posOf(a).line} uses its procedure's polymorphic parameters or constants that only exist there`;
         const why = params.has(names[i]) && this.cannotMove(sym, lit, e);
         if (why) return why;
       }

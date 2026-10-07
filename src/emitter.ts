@@ -385,6 +385,13 @@ export class Emitter {
   private foreign = false;
   /** imports the file's copies of procs from other files need, by alias */
   private extraImports = new Map<string, string>();
+  /** local constants and types closure bodies took to file scope, by their new name; and those already written */
+  private liftedNames = new Map<LocalSym, string>();
+  private liftedWritten = new Set<LocalSym>();
+  /** while a closure body that goes to file scope is written: lifted constants are named by their new name */
+  private liftDepth = 0;
+  /** closure helpers to declare before the statement being listed, inside its proc (they use its `$T`) */
+  private nestedHelpers: string[] | null = null;
 
   constructor(private an: Analyzer, private unit: Unit) {}
 
@@ -497,6 +504,7 @@ export class Emitter {
         if (!sym && n.name === RUNTIME_ALIAS) this.fileUsesRuntime = this.usesRuntime = true; // used by built-in macros
         if (this.foreign && sym?.kind === "global" && sym.pkg.unit !== this.unit) return this.qualify(sym, sym.odinName, `use '${sym.name}'`);
         if (this.foreign && sym?.kind === "pkg") return this.pkgRef(sym);
+        if (this.liftDepth && sym?.kind === "local" && sym.lifted) return this.liftedName(sym);
         return sym ? this.symRef(sym) : this.generic(n);
       }
       case "Selector": {
@@ -574,6 +582,7 @@ export class Emitter {
         const spec = declared?.kind === "global" ? this.an.specialized.get(declared) : undefined;
         if (spec) for (const [key, consts] of spec.clones) this.helpers.push(this.specClone(declared!, spec, key, consts));
         if (A(n)._allocGrouped) return `/* ${n.names[0].name}: allocated together with ${A(n)._allocGrouped} */` + this.skipLines(n);
+        if (n.isConst && (A(n)._syms as Sym[] | undefined)?.some((x) => x.kind === "local" && x.lifted)) return this.liftedDecl(n);
         const text = hoisted + (A(n)._orReturn ? this.orReturn(n) : this.valueDecl(n));
         return hoisted ? keepLines(n, text) : text;
       }
@@ -725,10 +734,11 @@ export class Emitter {
    * hoisted in front of it each go on their own line before it.
    */
   private listStmt(s: Stmt, indent: string): string {
-    const outer = { notes: this.notes, indent: this.indent, listed: this.listed };
+    const outer = { notes: this.notes, indent: this.indent, listed: this.listed, nestedHelpers: this.nestedHelpers };
     this.notes = [];
     this.indent = indent;
     this.listed = s;
+    this.nestedHelpers = [];
     try {
       const hoisted: Stmt[] = A(s)._pre ?? [];
       const before = hoisted.length ? this.inPretty(s, () => hoisted.map((h): [number, string] => [this.lineOf(h), this.hoisted(h)])) : [];
@@ -737,12 +747,13 @@ export class Emitter {
       });
       const body = this.emit(s);
       const reserves = ((A(s)._reserve as Reserve[] | undefined) ?? []).map((r): [number, string] => [-Math.abs(this.lineOf(s)), this.reserve(r)]);
-      const lines: [number, string][] = [...this.notes.map((c) => [-Math.abs(this.lineOf(s)), c] as [number, string]), ...before, ...reserves];
+      const nested = this.nestedHelpers.map((h): [number, string] => [-Math.abs(this.lineOf(s)), h]);
+      const lines: [number, string][] = [...this.notes.map((c) => [-Math.abs(this.lineOf(s)), c] as [number, string]), ...nested, ...before, ...reserves];
       if (!lines.length) return body;
       const head = lines.map(([, text], i) => (i ? nl(lines[i][0]) + indent : "") + text).join("");
       return body ? head + nl(this.lineOf(s)) + indent + body : head;
     } finally {
-      ({ notes: this.notes, indent: this.indent, listed: this.listed } = outer);
+      ({ notes: this.notes, indent: this.indent, listed: this.listed, nestedHelpers: this.nestedHelpers } = outer);
     }
   }
 
@@ -1326,6 +1337,15 @@ export class Emitter {
     const ps: LocalSym[] = A(p)._params ?? [];
     const shadowed = [...ps.filter((s) => s.refCaptured).map(addressable), ...ps.filter(callHoisted).map(hoistCall)];
     if (shadowed.length) this.prologue.set(p.body!, shadowed);
+    this.liftDepth++;
+    try {
+      return this.liftedClosureText(p, name, caps);
+    } finally {
+      this.liftDepth--;
+    }
+  }
+
+  private liftedClosureText(p: ProcLit, name: string, caps: CaptureSym[]): string {
     let paren = p.start;
     while (!(p.toks[paren].kind === "op" && p.toks[paren].text === "]")) paren++;
     const signature = this.generic(p, paren + 1, p.body!.start);
@@ -1564,30 +1584,77 @@ export class Emitter {
     }
     if (!p.body) throw new CompileError("closure literal needs a body", posOf(p));
     const caps: CaptureSym[] = A(p)._captures;
-    const sigText = this.closureType(p.sig);
-    let paren = p.start;
-    while (!(p.toks[paren].kind === "op" && p.toks[paren].text === "]")) paren++;
-    paren++;
-    const signature = this.generic(p, paren, p.body.start);
-    const envParam = `__env_raw: ${RUNTIME_ALIAS}.Env`;
-    const withEnv = /^\(\s*\)/.test(signature) ? signature.replace(/^\(\s*\)/, `(${envParam})`) : signature.replace(/^\(/, `(${envParam}, `);
-    this.prologue.set(p.body, [...(caps.length ? ["__env := transmute(__Env)__env_raw"] : []), ...shadowedParams]);
-    const body = this.emit(p.body);
-    const procText = `proc${withEnv} ${body}`;
+    // a body that goes to file scope (in a helper) names the constants it took along by their new names
+    if (caps.length) this.liftDepth++;
+    let sigText: string, procText: string;
+    try {
+      sigText = this.closureType(p.sig);
+      let paren = p.start;
+      while (!(p.toks[paren].kind === "op" && p.toks[paren].text === "]")) paren++;
+      paren++;
+      const signature = this.generic(p, paren, p.body.start);
+      const envParam = `__env_raw: ${RUNTIME_ALIAS}.Env`;
+      const withEnv = /^\(\s*\)/.test(signature) ? signature.replace(/^\(\s*\)/, `(${envParam})`) : signature.replace(/^\(/, `(${envParam}, `);
+      this.prologue.set(p.body, [...(caps.length ? ["__env := transmute(__Env)__env_raw"] : []), ...shadowedParams]);
+      const body = this.emit(p.body);
+      procText = `proc${withEnv} ${body}`;
+    } finally {
+      if (caps.length) this.liftDepth--;
+    }
     if (!caps.length) return `${sigText}{call = ${procText}}`;
 
     const helper = `__closure_${this.closureCount++}`;
     const { file, line } = posOf(p);
     const room = `${RUNTIME_ALIAS}.CLOSURE_ENV`;
     const fits = `closure at ${posix.basename(file)}:${line}: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>`;
-    this.helpers.push(
-      `${helper} :: proc(${caps.map((c, i) => `__c${i}: $T${i}`).join(", ")}) -> ${sigText} {\n` +
-        `\t__Caps :: struct {\n${caps.map((c, i) => `\t\t${c.name}: T${i},\n`).join("")}\t}\n` +
-        `\t#assert(size_of(__Caps) <= ${room}, ${JSON.stringify(fits)})\n` +
-        `\t__Env :: struct { using __caps: __Caps, __pad: [${room} - size_of(__Caps)]byte }\n` +
-        `\treturn ${sigText}{\n\t\tcall = ${procText},\n\t\tenv = transmute(${RUNTIME_ALIAS}.Env)__Env{__caps = {${caps.map((_, i) => `__c${i}`).join(", ")}}},\n\t}\n}`,
-    );
+    // inside a proc whose `$T` (or a local value's type) the closure uses, the helper is declared there, before the statement
+    const nested = !!A(p)._nestHelper;
+    if (nested && !this.nestedHelpers) throw new CompileError("this closure uses the enclosing procedure's polymorphic parameters or local types here, where vidar can't declare its helper; move it to a statement of its own", posOf(p));
+    const lines = [
+      `${helper} :: proc(${caps.map((c, i) => `__c${i}: $T${i}`).join(", ")}) -> ${sigText} {`,
+      `\t__Caps :: struct {`,
+      ...caps.map((c, i) => `\t\t${c.name}: T${i},`),
+      `\t}`,
+      `\t#assert(size_of(__Caps) <= ${room}, ${JSON.stringify(fits)})`,
+      `\t__Env :: struct { using __caps: __Caps, __pad: [${room} - size_of(__Caps)]byte }`,
+      `\treturn ${sigText}{`,
+      `\t\tcall = ${nested ? relocate(procText, p.toks[p.start].pos.line) : procText},`,
+      `\t\tenv = transmute(${RUNTIME_ALIAS}.Env)__Env{__caps = {${caps.map((_, i) => `__c${i}`).join(", ")}}},`,
+      `\t}`,
+      `}`,
+    ];
+    if (nested) this.nestedHelpers!.push(lines.join(nl(-line) + this.indent));
+    else this.helpers.push(lines.join("\n"));
     return `${helper}(${caps.map((c) => this.captureArg(c)).join(", ")})` + this.skipLines(p);
+  }
+
+  /** The file-scope name of a local constant a closure body took along. */
+  private liftedName(sym: LocalSym): string {
+    let name = this.liftedNames.get(sym);
+    if (!name) this.liftedNames.set(sym, (name = `__Local_${this.liftedNames.size}`));
+    return name;
+  }
+
+  /** `N :: 4` used by a closure body -> `N :: __Local_0` here, and `__Local_0 :: 4` at file scope. */
+  private liftedDecl(n: Extract<Stmt, { k: "ValueDecl" }>): string {
+    const syms = A(n)._syms as LocalSym[];
+    const values = n.values.map((v, i) => {
+      const sym = syms[i];
+      if (!sym?.lifted) return this.emit(v);
+      const name = this.liftedName(sym);
+      if (!this.liftedWritten.has(sym)) {
+        this.liftedWritten.add(sym);
+        this.liftDepth++;
+        try {
+          const type = n.type ? ` : ${this.emit(n.type)} :` : " ::";
+          this.helpers.push(`// ${sym.name}, from line ${posOf(n).line}, used by a closure body\n${name}${type} ${this.emit(v)}`);
+        } finally {
+          this.liftDepth--;
+        }
+      }
+      return name;
+    });
+    return keepLines(n, `${this.generic(n, n.start, n.values[0].start)}${this.ws(n.toks[n.values[0].start].pre)}${values.join(", ")}`);
   }
 
   /** The value handed to a closure constructor for one capture, as seen at the creation site. */
