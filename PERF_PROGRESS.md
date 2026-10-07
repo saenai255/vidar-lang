@@ -30,7 +30,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 17 | 15 | Struct field reordering, then hot/cold splitting | perf | merged (reordering only) |
 | 18 | 22 | `vidar test` | dev tooling | todo |
 | 19 | 23 | Run-time crash locations mapped to `.vidar` | dev tooling | todo |
-| 20 | 24 | `--watch` for `run`, `check` and `test` | dev tooling | todo |
+| 20 | 24 | `--watch` for `run`, `check` and `test` | dev tooling | merged |
 | 21 | 25 | Expand-at-cursor view of generated Odin | dev tooling | todo |
 | 22 | 26 | Code actions (quick fixes) | dev tooling | todo |
 | 23 | 27 | Semantic tokens | dev tooling | todo |
@@ -252,6 +252,8 @@ Odin has no `#line` directive, so stepping happens in the generated Odin.
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **24, `--watch`** merged. `src/watch.ts`: `vidar run --watch` / `check --watch` rerun the whole `vidar` command as a child (own process group, SIGTERM then SIGKILL on a change, so what `odin run` started dies too). Watches each project package directory with `fs.watch` (rename-saves work, no recursive watch needed), falls back to `fs.watchFile` polling; the file set is reloaded in tolerant mode before each run, so new imports and broken programs are handled. 100 ms debounce, `--clear`. `.odin` files in project packages count too. `test --watch` is one line (`WATCH_COMMANDS`) once `vidar test` exists. 8 unit tests in `tests/unit/watch.test.js`.
+  - Also fixed: the `@(hot)` unit test expected `no bounds proof` on `b[i]`, which item 10 now proves (it indexes with `a[i]` now), and `npm test` / `test:unit` pass a glob to `node --test`, since a directory fails on Node 22.
 - **8, multithreaded scheduler** merged, started before 2 on request (2 is still open).
   - `-define:VIDAR_THREADS=N`, default 1. At 1, every new lock is a `when MULTI` that compiles to nothing, and `pick` is the old loop, so existing programs are unchanged.
   - At N: thread 0 (the first to call into `sched`) starts N-1 scheduler threads, each parked forever on its own stack so it only runs goroutines. Each thread has its own run queue (behind a mutex), event loop and stack pool. `go` hands goroutines out round robin and wakes that thread (`sema_post` and `nbio.wake_up`). A thread with nothing to run takes an unstarted goroutine from another thread's queue, then waits on its semaphore or its event loop for up to 10 ms (`IDLE_POLL`) and looks again.
