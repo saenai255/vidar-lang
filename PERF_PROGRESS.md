@@ -14,19 +14,20 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 1 | 17 | Benchmark regression check | tooling | done |
 | 2 | 20 | One command to rebuild and reinstall the VS Code extension | tooling | done |
 | 3 | 18 | `@(no_alloc)` and `@(hot)` checks | tooling | done |
-| 4 | 19 | Leftovers from the first batch | tooling | todo |
-| 5 | 1 | Closure call regression (2.9x slower call through a closure) | bug | todo |
-| 6 | 2 | `sched_pending_io` busy loop | bug | todo |
-| 7 | 3 | Dangling by-reference captures in returned closures | bug | todo |
-| 8 | 5 | Intermittent Odin compiler hang | bug | todo |
-| 9 | 6 | Value interfaces / closed unions | perf | todo |
-| 10 | 7 | Generated per-type printers and JSON code | perf | todo |
-| 11 | 8 | Multithreaded (M:N) scheduler | perf | todo |
-| 12 | 9 | Constant-size `make` on the stack | perf | todo |
-| 13 | 10 | Wider bounds-check elimination | perf | todo |
-| 14 | 11 | String `switch` through a perfect hash | perf | todo |
-| 15 | 13 | Automatic `@(memo)` and two-parameter `@(table)` | perf | todo |
-| 16 | 15 | Struct field reordering, then hot/cold splitting | perf | todo |
+| 4 | 21 | Macro expansion on hover | tooling | todo |
+| 5 | 19 | Leftovers from the first batch | tooling | todo |
+| 6 | 1 | Closure call regression (2.9x slower call through a closure) | bug | todo |
+| 7 | 2 | `sched_pending_io` busy loop | bug | todo |
+| 8 | 3 | Dangling by-reference captures in returned closures | bug | todo |
+| 9 | 5 | Intermittent Odin compiler hang | bug | todo |
+| 10 | 6 | Value interfaces / closed unions | perf | todo |
+| 11 | 7 | Generated per-type printers and JSON code | perf | todo |
+| 12 | 8 | Multithreaded (M:N) scheduler | perf | todo |
+| 13 | 9 | Constant-size `make` on the stack | perf | todo |
+| 14 | 10 | Wider bounds-check elimination | perf | todo |
+| 15 | 11 | String `switch` through a perfect hash | perf | todo |
+| 16 | 13 | Automatic `@(memo)` and two-parameter `@(table)` | perf | todo |
+| 17 | 15 | Struct field reordering, then hot/cold splitting | perf | todo |
 
 ## Tooling
 
@@ -57,6 +58,15 @@ Closures no longer allocate, so a proc can now be proven allocation-free. These 
 - As a run-time backstop in builds without `-o:speed`, a `@(no_alloc)` proc sets `context.allocator` and `context.temp_allocator` to a panicking allocator on entry. Allocations the analysis missed then fail loudly in tests.
 - `@(hot)` turns every `-opt` decision against something inside the proc into a warning: a bounds check left in, an indirect call, an allocation in a loop, a closure not inlined, `no table`. A missed optimization then shows up at build time and as an editor diagnostic, not only in `-opt-report`.
 - Both read the existing `an.hint` decisions. They live in `src/autoopt.ts` and `src/analyzer.ts`.
+
+### 21. Macro expansion on hover
+Hovering a macro call shows the macro's signature, but not the code it generates. To see that today, you run *Vidar: Show Generated Odin* and find the spot in the whole file.
+- Hovering the name of a macro call that generates code (`name!(...)`, `pkg.name!(...)`, a statement macro, a trailing-block call) adds the expansion below the signature, as an `odin` code block. Built-in macros from the prelude (`do!`, `dbg!`, `scoped!`, ...) count too.
+- The text is what the emitter writes for that call: the analyzer's `_expansion` (or the statement block for a statement macro), printed the way the emitter prints macro output (`Pretty` in `src/emitter.ts`), with hygienic names as they come out. A macro used inside another macro's expansion shows its own expansion.
+- Calls that generate no code show nothing extra: comptime procs called with `!` that return a value (`fib!(10)` shows the value it folded to, if that is cheap to add), and calls inside `comptime!` blocks.
+- Long expansions are cut at about 40 lines, ending with a note on how many lines were left out.
+- Lives in `src/lsp/features.ts` (hover). Add checks to `scripts/test-lsp.js` for an expression macro, a statement macro, a built-in macro and a macro from another package.
+- No effect on generated code, so no fixture changes. Run `npm run vsix` afterwards.
 
 ### 19. Leftovers from the first batch
 Small gaps the first batch's agents left open. One worktree, five commits:
@@ -161,7 +171,7 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - Hints: `reordered: <bytes> saved`, or the reason not to.
 
 ## Parallel plan
-- **Wave 1 (tooling first):** 17, 20, 18 and 19, plus 2, 3 and 5. These touch mostly separate files. Merge in priority order: 17, 20, 18, 19, then the bugs.
+- **Wave 1 (tooling first):** 17, 20, 18, 21 and 19, plus 2, 3 and 5. These touch mostly separate files. Merge in priority order: 17, 20, 18, 21, 19, then the bugs.
 - **Wave 2:** 1, measured with 17, merged first because it is a small emitter change that the rest build on. Then 6, 7, 9, 10, 11, 13 and 15 in parallel.
   - Expected conflicts: `src/emitter.ts` (1, 6, 7, 11, 15), `src/optimize.ts` (9, 10, 19), `src/autoopt.ts` (13, 18), `src/analyzer.ts` (3, 6, 15, 18).
 - **Wave 3:** 8, after 2 is merged.
