@@ -4,7 +4,7 @@ import { Parser } from "./parser";
 import { CaptureSym, Ctx, GlobalSym, LocalSym, PackageInfo, PkgSym, Scope, Sym, Ty } from "./scope";
 import { autoOptimize } from "./autoopt";
 import { checkNoAlloc } from "./checks";
-import { checkEscapes, ifaceEscape } from "./escape";
+import { checkCallEscapes, checkEscapes, ifaceEscape } from "./escape";
 import { MemoInfo, memoPlan } from "./memo";
 import { CallSpan, Interp, NotConstant, Val, joinTokens, repeatable, respace, valueToTokens, tokensOf } from "./comptime";
 
@@ -215,8 +215,8 @@ export class Analyzer {
   private pendingIfaces: { node: Extract<Expr, { k: "InterfaceType" }>; sym: GlobalSym }[] = [];
   private bodiless: { sym: GlobalSym; lit: ProcLit }[] = [];
   private resultStack: { sig: ProcSig; scope: Scope; proc: ProcLit }[] = [];
-  /** tooling: plain values of a proc's frame converted to an interface, checked for escaping once its body is done */
-  private frameValues: { fix: Extract<ErrorFix, { code: "iface-value" }>; value: Expr; proc: ProcLit }[] = [];
+  /** tooling: plain values of a proc's frame converted to an interface, checked for escaping once every body is done */
+  private frameValues: { fix: Extract<ErrorFix, { code: "iface-value" }>; value: Expr; proc: ProcLit; ctx?: Ctx }[] = [];
   private errCounter = 0;
   private anonCounter = 0;
   /** method declaration -> its interface method */
@@ -266,6 +266,8 @@ export class Analyzer {
         for (const s of f.stmts) this.guard(() => this.topStmt(s, fileScope));
       }
     }
+    checkCallEscapes(this, (f) => this.guard(f));
+    this.checkFrameValues();
     for (const p of this.closureCalls) this.guard(() => this.specializeClosures(p.e, p.sym, p.info, p.consts));
     if (this.optimize) this.guard(() => autoOptimize(this));
     checkNoAlloc(this, (f) => this.guard(f));
@@ -751,7 +753,7 @@ export class Analyzer {
         this.stmt(p.body, new Scope(root));
       } finally {
         this.resultStack.pop();
-        if (this.frameValues.length) this.checkFrameValues(p, ctx);
+        for (const v of this.frameValues) if (v.proc === p) v.ctx = ctx;
       }
       checkEscapes(this, p, ctx);
     }
@@ -1740,15 +1742,15 @@ export class Analyzer {
     return { fix: { code: "iface-value", start: first.pos, end, addressable, why }, inFrame };
   }
 
-  /** Records, for each plain value of `p`'s frame converted to an interface, whether `&x` would outlive `p`. */
-  private checkFrameValues(p: ProcLit, ctx: Ctx): void {
+  /** Records, for each plain value of a proc's frame converted to an interface, whether `&x` would outlive the proc. */
+  private checkFrameValues(): void {
     for (const v of this.frameValues) {
-      if (v.proc !== p) continue;
+      if (!v.ctx) continue;
       try {
-        v.fix.dangles = ifaceEscape(this, p, ctx, v.value);
+        v.fix.dangles = ifaceEscape(this, v.proc, v.ctx, v.value);
       } catch {}
     }
-    this.frameValues = this.frameValues.filter((v) => v.proc !== p);
+    this.frameValues = [];
   }
 
   private convertArgs(args: Expr[], ft: Extract<Ty, { t: "sig" }>, skip = 0): void {

@@ -1,0 +1,11 @@
+package events
+
+handler: closure()
+
+on :: proc(f: closure()) {
+	handler = f
+}
+
+fire :: proc() {
+	handler()
+}

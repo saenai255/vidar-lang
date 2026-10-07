@@ -28,6 +28,14 @@ of_param :: proc(p: Sq) -> f64 {
 	return area(Shape(p))
 }
 
+kept: [dynamic]Shape
+keep :: proc(s: Shape) { append(&kept, s) }
+
+register :: proc() {
+	mine := Sq{4}
+	keep(mine)
+}
+
 counter :: proc() -> int {
 	n := 0
 	inc := proc[n]() { n += 1 }
@@ -44,4 +52,5 @@ main :: proc() {
 	_ = counter()
 	_ = xml.Document{}
 	_ = noise.noise_2d(1, {0, 0})
+	register()
 }

@@ -1,0 +1,11 @@
+// error: this closure captures &n and is passed to sched.go (line 8), which runs it on a goroutine that can outlive this proc
+package main
+
+import "vidar:sched"
+
+start :: proc() {
+	n := 0
+	sched.go(proc[&n]() { n += 1 })
+}
+
+main :: proc() { start() }

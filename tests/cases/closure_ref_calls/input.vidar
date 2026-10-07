@@ -1,0 +1,39 @@
+package main
+
+import "core:fmt"
+import "vidar:sched"
+
+// `&x` closures passed to procs that don't let them escape: none of these is an error
+
+run :: proc(f: closure() -> int) -> int { return f() }
+twice :: proc(f: closure() -> int) -> int { return run(f) + run(f) }
+id :: proc(f: closure() -> int) -> closure() -> int { return f }
+
+count :: proc() -> int {
+	n := 0
+	inc := proc[&n]() -> int { n += 1; return n }
+	// through two procs that only call it
+	a := twice(inc)
+	// returned by `id`, but only called here
+	b := id(inc)()
+	g := id(inc)
+	c := g()
+	// a proc constant local to this one
+	thrice :: proc(f: closure() -> int) -> int { return f() + f() + f() }
+	d := thrice(inc)
+	return a * 1000 + b * 100 + c * 10 + d
+}
+
+main :: proc() {
+	fmt.println(count())
+	// main's frame lasts until the program exits, so its goroutines may hold &x
+	total := 0
+	wg: sched.Wait_Group
+	sched.add(&wg, 3)
+	for i in 1..=3 do sched.go(proc[i, &total, &wg]() {
+		total += i
+		sched.done(&wg)
+	})
+	sched.wait(&wg)
+	fmt.println(total)
+}

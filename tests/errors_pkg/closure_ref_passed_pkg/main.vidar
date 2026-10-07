@@ -1,0 +1,14 @@
+// error: this closure captures &hits and is passed to events.on (line 8), where it is stored in a global (events.vidar:6)
+package main
+
+import "events"
+
+listen :: proc() {
+	hits := 0
+	events.on(proc[&hits]() { hits += 1 })
+}
+
+main :: proc() {
+	listen()
+	events.fire()
+}

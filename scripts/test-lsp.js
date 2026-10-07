@@ -808,6 +808,7 @@ function change(text) {
   const diagOn = (has, code) => ad.find((d) => d.code === code && d.range.start.line === aLine(has));
   check("interface conversion errors carry a code, one per conversion in a proc", diagOn("s: Shape = sq", "iface-value") && diagOn("return built", "iface-value") && diagOn("area(Shape(p))", "iface-value"), ads);
   check("the diagnostic says why &x would dangle", diagOn("return built", "iface-value")?.message.includes("&x would dangle: the interface value is returned (line"), ads);
+  check("&x would dangle through a call", diagOn("keep(mine)", "iface-value")?.message.includes("&x would dangle: the interface value is passed to keep (line 36), where it is appended to a global (line 32)"), ads);
   check("the diagnostic says why a parameter can't be pointed to", diagOn("area(Shape(p))", "iface-value")?.message.includes("Odin can't take the address of the parameter 'p'"), ads);
   check("a by-value capture write carries a code", diagOn("inc := proc[n]", "capture-by-value"), ads);
   check("a core package used without its import is an error", diagOn("fmt.println", "missing-import")?.message.includes('"core:fmt"') && !ad.some((d) => d.code === "missing-import" && d.message.includes("strings")), ads);
@@ -830,6 +831,8 @@ function change(text) {
   check("when &x would dangle, only new_clone is offered", acts.length === 1 && acts[0].title === NEW_CLONE && acts[0].isPreferred !== true && edited(acts[0]).includes("return new_clone(built)"), titles(acts));
   acts = await actionsOn("area(Shape(p))");
   check("a parameter gets only new_clone", acts.length === 1 && acts[0].title === NEW_CLONE && edited(acts[0]).includes("area(Shape(new_clone(p)))"), titles(acts));
+  acts = await actionsOn("keep(mine)");
+  check("passed to a proc that keeps it: only new_clone", acts.length === 1 && acts[0].title === NEW_CLONE && edited(acts[0]).includes("keep(new_clone(mine))"), titles(acts));
   acts = await actionsOn("n += 1");
   check("a write to a by-value capture: capture by reference", acts.some((x) => x.isPreferred && edited(x).includes("inc := proc[&n]() { n += 1 }")), titles(acts));
   acts = await actionsOn("fmt.println");
@@ -859,7 +862,7 @@ function change(text) {
   if (hasOdin) check("fix all adds an unambiguous import from odin root, and not a shared name's", fixedAll.includes('import "core:encoding/xml"') && !fixedAll.includes("noise\""), fixedAll);
 
   // fixed by hand where no preferred fix applies: the program has no errors left
-  const fixedText = fixedAll.replace("return built", "return new_clone(built)").replace("area(Shape(p))", "area(Shape(new_clone(p)))").replace('import "core:strings"\n', 'import "core:strings"\nimport "core:math/noise"\n');
+  const fixedText = fixedAll.replace("return built", "return new_clone(built)").replace("area(Shape(p))", "area(Shape(new_clone(p)))").replace("keep(mine)", "keep(new_clone(mine))").replace('import "core:strings"\n', 'import "core:strings"\nimport "core:math/noise"\n');
   const aFixed = nextDiagnostics((d) => d.uri === aUri);
   notify("textDocument/didChange", { textDocument: { uri: aUri, version: 2 }, contentChanges: [{ text: fixedText }] });
   const afd = (await aFixed).diagnostics;

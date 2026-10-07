@@ -1,0 +1,15 @@
+// error: this closure captures &n and is passed to keep (line 12), where it is stored in a global (line 7)
+package main
+
+saved: closure()
+
+keep :: proc(f: closure()) {
+	saved = f
+}
+
+start :: proc() {
+	n := 0
+	keep(proc[&n]() { n += 1 })
+}
+
+main :: proc() { start() }

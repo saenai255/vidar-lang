@@ -37,7 +37,7 @@ Rules:
 - A closure is a value: its captures are copied into it (room for 128 bytes, `-define:VIDAR_CLOSURE_ENV=<bytes>` to change), so it can be returned, stored and copied freely and never allocates. Captures that don't fit are a compile error.
 - By-value captures are read-only (each call gets a fresh copy); capture `&x` or a pointer to change state.
 - A closure can't capture another closure by value: capture `&f`, or `new_clone(f)` if it outlives the frame.
-- A closure holding `&x` of a local or parameter can't leave the frame: returning it, storing it through a pointer, a slice or in a global, or appending it to something the proc doesn't own is an error. Capture a pointer from `new_clone(x)` instead.
+- A closure holding `&x` of a local or parameter can't leave the frame: returning it, storing it through a pointer, a slice or in a global, or appending it to something the proc doesn't own is an error, and so is passing it to `sched.go` (outside `main`) or to a proc that does any of these with it. Capture a pointer from `new_clone(x)` instead.
 
 Example: [examples/closures](examples/closures).
 

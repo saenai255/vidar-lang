@@ -1,0 +1,23 @@
+// error: this closure captures &n and is passed to later (line 17), where it is passed to keep (line 11), where it is appended to memory behind a pointer (line 7)
+package main
+
+Handlers :: struct { all: [dynamic]closure() }
+
+keep :: proc(hs: ^Handlers, f: closure()) {
+	append(&hs.all, f)
+}
+
+later :: proc(hs: ^Handlers, f: closure()) {
+	keep(hs, f)
+}
+
+register :: proc(hs: ^Handlers) {
+	n := 0
+	g := proc[&n]() { n += 1 }
+	later(hs, g)
+}
+
+main :: proc() {
+	hs: Handlers
+	register(&hs)
+}

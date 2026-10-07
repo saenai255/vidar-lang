@@ -1,0 +1,16 @@
+// error: this closure captures &n and is passed to spawn (line 13), where it is passed to sched.go (line 7), which runs it on a goroutine
+package main
+
+import "vidar:sched"
+
+spawn :: proc(task: closure(), times := 1) {
+	for _ in 0..<times do sched.go(task)
+}
+
+start :: proc() {
+	n := 0
+	f := proc[&n]() { n += 1 }
+	spawn(times = 2, task = f)
+}
+
+main :: proc() { start() }

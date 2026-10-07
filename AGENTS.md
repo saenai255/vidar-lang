@@ -227,7 +227,7 @@ git worktree remove --force "$TMPDIR/vidar-base"
   - There are 128 bytes of room for captures, so a closure is 136 bytes; `-define:VIDAR_CLOSURE_ENV=<bytes>` changes the room. Nothing is allocated.
   - Captures that don't fit fail an Odin `#assert` that names the closure's `file:line`.
   - These are compile errors: writing to a by-value capture (they are read-only), and capturing another closure by value.
-  - Lifetime is the programmer's job. `src/escape.ts` makes it an error for a closure holding `&x` of a local or parameter to be returned, stored through a pointer, a slice or in a global, or appended to something the proc doesn't own. It follows values through locals, not into calls, so a `&x` closure passed to `sched.go` or stored by a callee still dangles unnoticed.
+  - Lifetime is the programmer's job. `src/escape.ts` makes it an error for a closure holding `&x` of a local or parameter to be returned, stored through a pointer, a slice or in a global, or appended to something the proc doesn't own. It follows values through locals and into calls (per-proc parameter summaries, to a fixed point; `sched.go` escapes, except from `main`), but trusts proc values, interface methods, `foreign` and `core:` procs.
 - **Interface values hold a pointer** (data plus vtable). Converting a plain value is an error; write `&x` or `new_clone(x)`.
 - **Goroutines run on one thread** unless built with `-define:VIDAR_THREADS=N`; never preempted. `core:sync` locks park the whole thread. With N threads a goroutine stays on the thread that first ran it (it isn't safe to move one after it has run: LLVM may keep a thread-local address across the stack switch), and only unstarted goroutines move.
 
