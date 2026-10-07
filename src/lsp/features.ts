@@ -1163,3 +1163,23 @@ export function complete(cur: Analysis, fallback: Analysis | undefined, file: st
   }
   return out;
 }
+
+export interface OptHint {
+  position: Position;
+  label: string;
+  tooltip?: string;
+}
+
+/** The -opt decisions in `file` of an analysis made with `report`, each after its token; `all` adds the decisions against. */
+export function optHints(a: Analysis, file: string, all: boolean): OptHint[] {
+  const toks = a.packages.flatMap((p) => p.files).find((f) => f.path === file)?.toks;
+  const out: OptHint[] = [];
+  for (const h of a.analyzer.hints ?? []) {
+    if (h.at.toks !== toks || (!all && /^not? /.test(h.label))) continue;
+    const t = h.at.toks[h.tok];
+    const lines = t.text.split("\n");
+    const last = lines[lines.length - 1].length;
+    out.push({ position: { line: t.pos.line - 2 + lines.length, character: lines.length > 1 ? last : t.pos.col - 1 + last }, label: h.label, tooltip: h.tooltip });
+  }
+  return out;
+}

@@ -1,5 +1,7 @@
-import { Block, Expr, Node, Stmt, children } from "./ast";
-import { A } from "./analyzer";
+import { Block, Expr, File, Node, Stmt, children } from "./ast";
+import { A, Analyzer, INT_TYPES } from "./analyzer";
+import { fmtPlan } from "./fmtspec";
+import { soaLocals } from "./soa";
 import type { LocalSym, Sym } from "./scope";
 
 /**
@@ -7,11 +9,31 @@ import type { LocalSym, Sym } from "./scope";
  * it changes nothing but speed; the results are annotations the emitter reads:
  * - `_noBounds` on a statement: every index in it is proven in bounds, so it gets `#no_bounds_check`
  * - `_allocGroup` / `_allocGrouped` / `_groupFree`: slices and pointers freed together, allocated together
+ * - `_reserve` on a loop: dynamic arrays it appends to a known number of times, reserved before it
+ * Each decision is also an `an.hint`, so -opt-report and the editor show it.
  */
-export function optimizeProc(body: Block): void {
+export function optimizeProc(body: Block, an: Analyzer): void {
   const facts = collectFacts(body);
-  provenIndexes(body, facts);
-  allocGroups(body, facts);
+  provenIndexes(body, facts, an);
+  allocGroups(body, facts, an);
+  reserves(body, facts, an);
+  soaLocals(body, an);
+  if (an.hints) walk(body, (n) => void (n.k === "Call" && fmtPlan(an, n) && an.hint(n, "fmt inlined", "a compiled format: writes each piece directly, no format parsing or `any` boxing at run time")));
+}
+
+/** Runs `optimizeProc` on every proc in `files` without emitting them, for the hints. */
+export function optimizeAll(an: Analyzer, files: File[]): void {
+  const visit = (n: Node): void => {
+    if (n.k === "ProcLit") {
+      if (n.comptime) return;
+      if (n.body && !A(n)._optimized) {
+        A(n)._optimized = true;
+        optimizeProc(n.body, an);
+      }
+    }
+    for (const c of kids(n)) visit(c);
+  };
+  for (const f of files) f.stmts.forEach(visit);
 }
 
 interface Facts {
@@ -24,7 +46,7 @@ interface Facts {
 }
 
 /** Child nodes plus the code macros expanded to and the statements they hoisted. */
-function kids(n: Node): Node[] {
+export function kids(n: Node): Node[] {
   const out = children(n);
   const exp: Node | undefined = A(n)._expansion;
   if (exp) out.push(exp);
@@ -123,7 +145,7 @@ function loopProof(s: Node, facts: Facts): { array: LocalSym; index: LocalSym } 
 }
 
 /** Marks the statements of loop bodies whose every index is proven in bounds. */
-function provenIndexes(body: Block, facts: Facts): void {
+function provenIndexes(body: Block, facts: Facts, an: Analyzer): void {
   const proofs: { array: LocalSym; index: LocalSym }[] = [];
   const proven = (e: Extract<Expr, { k: "Index" }>) =>
     !e.slice && e.indices.length === 1 && proofs.some((p) => localOf(e.x) === p.array && localOf(e.indices[0] ?? undefined) === p.index);
@@ -155,6 +177,7 @@ function provenIndexes(body: Block, facts: Facts): void {
         const { all, any } = check(s);
         if (all && any && proofs.length) {
           A(s)._noBounds = true;
+          an.hint(s, "unchecked", "every index here is proven in bounds by its loop, so it gets #no_bounds_check");
           return;
         }
       }
@@ -237,7 +260,7 @@ function mentions(e: Expr, syms: Set<LocalSym>): boolean {
  * Adjacent `x := make([]E, n)` / `p := new(T)` freed only by a `defer delete(x)` / `defer free(p)`
  * in the same block become one allocation, freed by the defer that runs last.
  */
-function allocGroups(body: Block, facts: Facts): void {
+function allocGroups(body: Block, facts: Facts, an: Analyzer): void {
   const block = (b: Block) => {
     const defers = new Map<LocalSym, Extract<Stmt, { k: "Defer" }>>();
     for (const s of b.stmts) {
@@ -255,6 +278,7 @@ function allocGroups(body: Block, facts: Facts): void {
         const order = run.map((m) => b.stmts.indexOf(m.free));
         const last = run[order.indexOf(Math.min(...order))];
         for (const m of run) A(m.free)._groupFree = { group, keep: m === last };
+        for (const m of run) an.hint(m.decl, "grouped alloc", `one allocation for ${run.map((x) => x.name).join(", ")}, freed by the defer that runs last`);
       }
       run = [];
     };
@@ -282,5 +306,167 @@ function allocGroups(body: Block, facts: Facts): void {
   };
   walk(body, (n) => {
     if (n.k === "Block") block(n);
+  });
+}
+
+// ---- reserve before append loops ----
+
+/** How many times a loop runs, computed before it: `hi - lo`, plus one when inclusive, or `len(of)`. */
+export type TripCount = { lo: Expr | null; hi: Expr; inclusive: boolean; cast: boolean } | { of: Expr };
+
+export interface Reserve {
+  /** the first argument of the appends: `&xs`, or a pointer `p` */
+  target: Expr;
+  /** `xs`; null when appended to through a pointer */
+  array: Expr | null;
+  perIteration: number;
+  trip: TripCount;
+}
+
+type Loop = Extract<Stmt, { k: "For" | "RangeFor" }>;
+
+/** The local a place is rooted at: `x` in `x.f[i]^`. */
+function rootOf(e: Expr): LocalSym | undefined {
+  while (e.k === "Paren" || e.k === "Selector" || e.k === "Index" || e.k === "Deref") e = e.x;
+  return localOf(e);
+}
+
+function builtin(n: Node, ...names: string[]): n is Extract<Expr, { k: "Call" }> {
+  return n.k === "Call" && n.fn.k === "Ident" && !A(n.fn)._sym && names.includes(n.fn.name);
+}
+
+/** Nothing in `loop` but the `allowed` nodes can change `syms`: no assignment, `&`, `clear`, `resize` or `delete`. */
+function untouched(loop: Node, syms: Set<LocalSym>, allowed: Set<Node>): boolean {
+  if ([...syms].some((s) => s.refCaptured || s.declKind === "other")) return false;
+  const hits = (e: Expr | undefined) => {
+    const s = e && rootOf(e);
+    return !!s && syms.has(s);
+  };
+  let ok = true;
+  walk(loop, (n) => {
+    if (allowed.has(n)) return false;
+    if (n.k === "Assign" && n.lhs.some(hits)) ok = false;
+    if (n.k === "Unary" && n.op === "&" && hits(n.x)) ok = false;
+    if (builtin(n, "delete", "free", "clear", "resize") && hits(n.args[0])) ok = false;
+    return ok;
+  });
+  return ok;
+}
+
+function usedOutside(root: Node, sym: LocalSym, allowed: Set<Node>): boolean {
+  let used = false;
+  walk(root, (n) => {
+    if (allowed.has(n)) return false;
+    if (n.k === "Ident" && A(n)._sym === sym) used = true;
+  });
+  return used;
+}
+
+/** Every iteration runs the whole body: no break, continue, return or `or_*` in it. */
+function straight(body: Block): boolean {
+  let ok = true;
+  walk(body, (n) => {
+    if (n.k === "Branch" || n.k === "Return" || (n.k === "Postfix" && n.op.startsWith("or_"))) ok = false;
+    return ok;
+  });
+  return ok;
+}
+
+function locals(e: Expr): Set<LocalSym> {
+  const out = new Set<LocalSym>();
+  walk(e, (n) => {
+    const s = n.k === "Ident" ? localOf(n) : undefined;
+    if (s) out.add(s);
+  });
+  return out;
+}
+
+function isZero(e: Expr): boolean {
+  return e.k === "Lit" && e.kind === "int" && e.toks[e.start].text === "0";
+}
+
+function intKind(an: Analyzer, e: Expr): "int" | "other" | undefined {
+  const name = an.typeName(an.typeOf(e, A(e)._scope ?? an.global));
+  if (name === "int" || name === "untyped int") return "int";
+  return name && name !== "uintptr" && (INT_TYPES.has(name) || name === "rune" || name === "untyped rune") ? "other" : undefined;
+}
+
+function interval(an: Analyzer, lo: Expr, hi: Expr, inclusive: boolean): TripCount | undefined {
+  const kinds = [lo, hi].map((e) => intKind(an, e));
+  if (!simple(lo) || !simple(hi) || kinds.includes(undefined)) return undefined;
+  return { lo: isZero(lo) ? null : lo, hi, inclusive, cast: kinds.includes("other") };
+}
+
+/** The loop's trip count, and the locals it is computed from. */
+function tripCount(loop: Loop, facts: Facts, an: Analyzer): { trip: TripCount; uses: Set<LocalSym> } | undefined {
+  let trip: TripCount | undefined;
+  if (loop.k === "RangeFor") {
+    const x = loop.x;
+    if (A(loop)._pool) return undefined;
+    if (x.k === "Binary" && (x.op === "..<" || x.op === "..=")) trip = interval(an, x.x, x.y, x.op === "..=");
+    else if (rootOf(x) && simple(x)) {
+      const t = an.normalize(an.typeOf(x, A(x)._scope ?? an.global));
+      const sized = t?.t === "node" && ((t.node.k === "TypeExpr" && ["array", "slice", "dynamic"].includes(t.node.what)) || an.typeName(t) === "string");
+      if (sized) trip = { of: x };
+    }
+  } else if (loop.init?.k === "ValueDecl" && loop.init.names.length === 1 && loop.init.values.length === 1) {
+    const index = (A(loop.init)._syms as LocalSym[] | undefined)?.[0];
+    const { cond, post } = loop;
+    if (!index || cond?.k !== "Binary" || (cond.op !== "<" && cond.op !== "<=") || localOf(cond.x) !== index) return undefined;
+    const step = post?.k === "Assign" && post.op === "+=" && localOf(post.lhs[0]) === index && post.rhs[0].k === "Lit" && post.rhs[0].toks[post.rhs[0].start].text === "1";
+    if (!step || facts.addressed.has(index) || index.refCaptured || (facts.assigned.get(index) ?? []).some((a) => a !== post)) return undefined;
+    trip = interval(an, loop.init.values[0], cond.y, cond.op === "<=");
+  }
+  if (!trip) return undefined;
+  const operands = "of" in trip ? [trip.of] : [trip.hi, ...(trip.lo ? [trip.lo] : [])];
+  return { trip, uses: new Set(operands.flatMap((e) => [...locals(e)])) };
+}
+
+/** A `[dynamic]T` local `xs` appended to as `&xs`, or a `^[dynamic]T` local `p` appended to as `p`. */
+function dynamicTarget(an: Analyzer, arg: Expr): { sym: LocalSym; byPointer: boolean } | undefined {
+  const byPointer = !(arg.k === "Unary" && arg.op === "&");
+  const sym = localOf(arg.k === "Unary" && arg.op === "&" ? arg.x : arg);
+  let t = an.normalize(sym?.ty);
+  if (byPointer) t = t?.t === "ptr" ? an.normalize(t.elem) : undefined;
+  return sym && t?.t === "node" && t.node.k === "TypeExpr" && t.node.what === "dynamic" ? { sym, byPointer } : undefined;
+}
+
+/**
+ * A loop whose trip count is known before it starts, and that appends to a dynamic array in every
+ * iteration, gets `reserve(&xs, len(xs) + count)` before it: one allocation instead of a doubling series.
+ */
+function reserves(body: Block, facts: Facts, an: Analyzer): void {
+  const loop = (s: Stmt) => {
+    let inner: Stmt = s;
+    while (inner.k === "Labeled" || inner.k === "DirectiveStmt") inner = inner.stmt;
+    if ((inner.k !== "For" && inner.k !== "RangeFor") || !straight(inner.body)) return;
+    const count = tripCount(inner, facts, an);
+    if (!count || !untouched(inner, count.uses, new Set())) return;
+    const found = new Map<LocalSym, { target: Expr; byPointer: boolean; per: number; args: Set<Node>; ok: boolean }>();
+    for (const st of inner.body.stmts) {
+      if (st.k !== "ExprStmt" || !builtin(st.x, "append") || !st.x.args[0]) continue;
+      const t = dynamicTarget(an, st.x.args[0]);
+      if (!t) continue;
+      const f = found.get(t.sym) ?? { target: st.x.args[0], byPointer: t.byPointer, per: 0, args: new Set<Node>(), ok: true };
+      found.set(t.sym, f);
+      const values = st.x.args.slice(1);
+      if (f.byPointer !== t.byPointer || !values.length || values.some((v) => v.k === "Spread" || v.k === "FieldValue")) f.ok = false;
+      f.per += values.length;
+      f.args.add(st.x.args[0]);
+    }
+    const out: Reserve[] = [];
+    for (const [sym, f] of found) {
+      if (!f.ok || count.uses.has(sym) || !untouched(inner, new Set([sym]), f.args)) continue;
+      // through a pointer, any other use of it could clear or resize the array
+      if (f.byPointer && usedOutside(inner, sym, f.args)) continue;
+      const array = f.byPointer ? null : (f.target as Extract<Expr, { k: "Unary" }>).x;
+      out.push({ target: f.target, array, perIteration: f.per, trip: count.trip });
+      an.hint(f.target, "reserved", `${sym.name}: reserved before the loop, ${f.per} append${f.per === 1 ? "" : "s"} per iteration`);
+    }
+    if (out.length) A(s)._reserve = out;
+  };
+  walk(body, (n) => {
+    const list = n.toks !== body.toks ? null : n.k === "Case" ? n.body : n.k === "Block" && !n.inline && n.toks[n.start].text === "{" ? n.stmts : null;
+    list?.forEach(loop);
   });
 }

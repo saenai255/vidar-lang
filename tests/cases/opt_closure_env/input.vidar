@@ -1,0 +1,117 @@
+package main
+
+import "core:fmt"
+import "vidar:sched"
+
+Handler :: struct {
+	run: closure(int) -> int,
+}
+
+saved: [dynamic]closure() -> int
+
+// @(no_specialize) on these: a copy per closure would skip the env being tested
+@(no_specialize)
+twice :: proc(f: closure(int) -> int, x: int) -> int {
+	return f(f(x))
+}
+
+// only calls f, and hands it to twice, which only calls it
+@(no_specialize)
+apply :: proc(f: closure(int) -> int, n: int) -> int {
+	if n == 0 do return f(0)
+	return twice(f, n) + apply(f, n - 1)
+}
+
+keep :: proc(f: closure() -> int) {
+	append(&saved, f)
+}
+
+wrap :: proc(f: closure(int) -> int) -> Handler {
+	return Handler{run = f}
+}
+
+make_adder :: proc(k: int) -> closure(int) -> int {
+	return proc[k](x: int) -> int { return x + k }
+}
+
+@(no_specialize)
+each :: proc(xs: []int, f: closure(int)) {
+	for x in xs do f(x)
+}
+
+main :: proc() {
+	// stack: only called here
+	a, b := 3, 4
+	add := proc[a, b](x: int) -> int { return x + a + b }
+	fmt.println("add:", add(1), add(2))
+
+	// stack: passed to procs that only call it
+	fmt.println("apply:", apply(proc[a](x: int) -> int { return x * a }, 2))
+	mul := proc[a, b](x: int) -> int { return x * a + b }
+	fmt.println("twice:", twice(mul, 1))
+
+	// heap: stored by keep, returned in a struct by wrap, returned by make_adder
+	for i in 0..<3 {
+		keep(proc[i, a]() -> int { return i * 10 + a })
+	}
+	for f in saved do fmt.print(f(), "")
+	fmt.println()
+	h := wrap(proc[a, b](x: int) -> int { return x - a - b })
+	fmt.println("wrap:", h.run(10), make_adder(5)(1))
+
+	// heap: appended directly, and assigned to a variable declared outside the loop
+	values: [dynamic]closure() -> int
+	last: closure() -> int
+	for i in 0..<3 {
+		s := i * i
+		append(&values, proc[i, s]() -> int { return i + s })
+		last = proc[i, s]() -> int { return i - s }
+	}
+	for f in values do fmt.print(f(), "")
+	fmt.println("last:", last())
+
+	// stack in a loop: a fresh env every iteration, never used after it
+	total := 0
+	for i in 0..<4 {
+		step := i + 1
+		inc := proc[&total, step]() { total += step }
+		inc()
+		inc()
+	}
+	fmt.println("total:", total)
+
+	// one by-reference capture: the pointer is the env, even when the closure escapes
+	count := 0
+	tick := proc[&count]() -> int { count += 1; return count }
+	keep(tick)
+	tick()
+	fmt.println("count:", saved[len(saved) - 1](), count)
+
+	// nested: the inner closure runs inside the outer one's call, so both envs are on the stack
+	sum := 0
+	scale := 2
+	each([]int{1, 2, 3}, proc[&sum, scale](x: int) {
+		add := proc[&sum, scale, x]() { sum += x * scale }
+		add()
+	})
+	fmt.println("sum:", sum)
+
+	// nested: the outer closure returns a pointer into its env, so its env stays on the heap
+	base := 100
+	outer := proc[base]() -> closure() -> int {
+		return proc[&base]() -> int { base += 1; return base }
+	}
+	g := outer()
+	g()
+	fmt.println("outer:", g())
+
+	// heap: handed to a goroutine
+	done := false
+	msg := "hi"
+	sched.go(proc[&done, msg]() {
+		fmt.println("go:", msg)
+		done = true
+	})
+	sched.yield()
+	fmt.println("done:", done)
+}

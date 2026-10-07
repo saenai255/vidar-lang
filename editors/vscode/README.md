@@ -4,6 +4,7 @@ Syntax highlighting plus a client for the `vidar-lsp` language server:
 - diagnostics: vidar's own errors as you type, and Odin's errors on save
 - hover, go to definition, find references and rename
 - completion and the outline
+- inlay hints showing what `-opt` decides
 - an **Vidar: Show Generated Odin** command
 
 ## Install from a .vsix (recommended)
@@ -24,3 +25,4 @@ This produces `vidar-<os>-<arch>-<version>.vsix`. Install it with **Extensions: 
 
 - `vidar.server.path`: leave unset to use the bundled server. Otherwise set an executable or a path to `dist/lsp/server.js`; it falls back to `vidar-lsp` on PATH.
 - `vidar.odinCheckOnSave` (default `true`) and `vidar.odinPath` (default `odin`): run `odin check` on save.
+- `vidar.optHints` (default `on`): inlay hints showing what `-opt` decides (`table`, `specialized ×2`, `unchecked`, `grouped alloc`, `fmt inlined`, `devirtualized` / `vtable` / `direct`); `all` also shows what it decided against, `off` hides them.

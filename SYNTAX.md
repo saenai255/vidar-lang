@@ -34,7 +34,7 @@ Rules:
 - Each name may appear once in a capture list. Only locals can be captured: globals and constants are visible without capturing, and listing one is an error.
 - A nested closure can capture what its enclosing closure captured.
 - Closure bodies are lifted to file scope, so they cannot use the enclosing proc's local constants, local types or `$T` parameters.
-- Closure environments and by-reference boxes are allocated with `context.allocator` and never freed.
+- Closure environments and by-reference boxes are allocated with `context.allocator` and never freed (`-opt` keeps non-escaping ones on the stack).
 
 Example: [examples/closures](examples/closures).
 
@@ -267,7 +267,7 @@ Example: [examples/comptime](examples/comptime).
 | Syntax | Meaning |
 |---|---|
 | `@(table) f :: proc(x: T) -> R { ... }` | `T` is `bool`, `u8`, `i8` or an enum (without explicit member values): every result is stored once, and `f(x)` becomes a table lookup. Computed at compile time when the body can run there, else at startup. The body must depend only on `x` |
-| `@(specialize) f :: proc(...) { ... }` | each call passing constants to basic or enum parameters calls a copy where those are compile-time (`$p`); other calls call `f` |
+| `@(specialize) f :: proc(...) { ... }` | each call passing constants to basic or enum parameters calls a copy where those are compile-time (`$p`); a call passing a closure literal to a closure parameter `f`'s body only calls calls a copy that calls the literal's body directly (also without `-opt`); other calls call `f` |
 | `@(no_table)`, `@(no_specialize)` | `-opt` won't make `f` a table / specialize it on its own |
 | `Pool(I)` | values of every implementation of interface `I`, one array per type; `I` must not be extended in another package |
 | `append(&pool, v1, v2, ...)` | copies values (not pointers) into their type's array; a statement of its own |
@@ -290,8 +290,9 @@ for s in shapes do total += area(s)        // a direct call per type
 `-opt` (on `build`, `run`, `check` and `emit`) also rewrites plain Odin where the result is provably the same:
 - `fmt` print calls with a literal format write each piece directly, with no format parsing or `any` boxing
 - indexes proven in bounds by their loop (`for i in 0..<len(a)`, `for x, i in a`, `for i := 0; i < len(a); i += 1`) get `#no_bounds_check`
+- closures with one by-reference capture keep the pointer as their environment; closures only called (directly or through parameters that are only called) get their environment on the stack
 - adjacent `make`/`new` freed only by `defer delete`/`defer free` in the same block become one allocation
-- procs over `bool`/`u8`/`i8` that are pure integer code and loop become tables; procs whose constant arguments bound a loop, or divide, shift or branch inside one, are specialized (at most 4 copies, not when every call passes the same constant)
+- procs over `bool`/`u8`/`i8` that are pure integer code and loop become tables; procs whose constant arguments bound a loop, or divide, shift or branch inside one, are specialized (at most 4 copies, not when every call passes the same constant); a call passing a closure literal (`proc[...]`) to a closure parameter the callee only calls gets a copy calling the literal's body directly, with its captures on the stack (at most 4 copies per proc, callee in the same file)
 
 `-opt-report` in place of `-opt` also prints what it decided per proc, and why not where it didn't.
 

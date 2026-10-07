@@ -1,0 +1,51 @@
+package main
+
+import "core:fmt"
+
+Shape :: interface { area }
+area :: proc(s: Shape) -> f64 ---
+
+Sq :: struct { s: f64 }
+sq_area :: proc(q: ^Sq) -> f64 { return q.s * q.s }
+impl Shape for Sq { area = sq_area }
+
+bits :: proc(b: u8) -> int {
+	n := int(b)
+	c := 0
+	for n != 0 {
+		c += n & 1
+		n >>= 1
+	}
+	return c
+}
+
+double :: proc(x: u8) -> int { return int(x) * 2 }
+
+blur :: proc(dst, src: []int, radius: int) {
+	for i in radius..<len(src) - radius {
+		s := 0
+		for k in -radius..=radius do s += src[i + k]
+		dst[i] = s / (2 * radius + 1)
+	}
+}
+
+sum :: proc(a: []int) -> (total: int) {
+	for i in 0..<len(a) {
+		total += a[i]
+	}
+	return
+}
+
+main :: proc() {
+	tmp := make([]int, 16)
+	out := make([]int, 16)
+	defer delete(tmp)
+	defer delete(out)
+	blur(out, tmp, 1)
+	blur(out, tmp, 2)
+	sq := Sq{2}
+	s: Shape = &sq
+	fmt.println(area(s), area(&sq))
+	fmt.printf("%d %d\n", bits(7), double(3))
+	fmt.println(sum(out))
+}

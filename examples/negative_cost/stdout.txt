@@ -3,7 +3,11 @@ pool                       152119
 fmt.sbprintf               728890
 loop with indexes          350662169760
 scratch allocations        108319
+append in a loop           1030000
 blur, radius at run time   28708
 blur, @(specialize)        28708
 collatz, computed          4498020
 collatz, @(table)          4498020
+bodies, 3 of 10 fields     5999890
+closure, called through    12370683590
+closure, specialized       12370683590

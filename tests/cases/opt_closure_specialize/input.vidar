@@ -1,0 +1,122 @@
+package main
+
+import "core:fmt"
+
+for_each :: proc(xs: []int, f: closure(int)) {
+	for x in xs do f(x)
+}
+
+fold :: proc(xs: []$T, init: T, f: closure(T, T) -> T) -> T {
+	acc := init
+	for x in xs do acc = f(acc, x)
+	return acc
+}
+
+// two closure parameters, one call each, plus a deferred call
+filter_map :: proc(xs: []int, keep: closure(int) -> bool, f: closure(int) -> int, done: closure()) -> (out: [dynamic]int) {
+	defer done()
+	for x in xs {
+		if keep(x) do append(&out, f(x))
+	}
+	return
+}
+
+// stores its closure: not specialized
+Handler :: struct {
+	on: closure(int) -> int,
+}
+
+install :: proc(h: ^Handler, f: closure(int) -> int) {
+	h.on = f
+}
+
+// passes its closure on: not specialized
+apply_twice :: proc(x: int, f: closure(int) -> int) -> int {
+	return twice_inner(f(x), f)
+}
+
+twice_inner :: proc(x: int, f: closure(int) -> int) -> int {
+	return f(x)
+}
+
+@(no_specialize)
+plain_each :: proc(xs: []int, f: closure(int)) {
+	for x in xs do f(x)
+}
+
+// more calls with closures than copies
+times :: proc(n: int, f: closure(int)) {
+	for i in 0..<n do f(i)
+}
+
+@(specialize)
+repeat :: proc(n: int, f: closure(int) -> int) -> int {
+	s := 0
+	for i in 0..<n do s += f(i)
+	return s
+}
+
+// passes a closure literal to itself: every copy calls the same one
+count_down :: proc(n: int, f: closure(int)) {
+	f(n)
+	if n > 0 do count_down(n - 1, proc[](x: int) { fmt.println("down", x) })
+}
+
+main :: proc() {
+	xs := []int{1, 2, 3, 4, 5}
+	total := 0
+	k := 3
+	for_each(xs, proc[&total, k](x: int) { total += x * k })
+	fmt.println("for_each:", total)
+
+	// by-value capture changed by the body: state lives for one call
+	calls := 0
+	for_each(xs, proc[calls](x: int) {
+		calls += 1
+		if calls == len("abc") do fmt.println("third call sees", x)
+	})
+	fmt.println("calls outside:", calls)
+
+	fmt.println("fold:", fold(xs, 0, proc[](a, b: int) -> int { return a + b }))
+	scale := 1.5
+	fmt.println("fold f64:", fold([]f64{1, 2}, 0.5, proc[scale](a, b: f64) -> f64 { return a + b * scale }))
+
+	evens := filter_map(xs, proc[](x: int) -> bool { return x % 2 == 0 }, proc[k](x: int) -> int { return x * k }, proc[]() { fmt.println("filter_map done") })
+	fmt.println("filter_map:", evens[:])
+	delete(evens)
+
+	h: Handler
+	install(&h, proc[k](x: int) -> int { return x + k })
+	fmt.println("installed:", h.on(1))
+	fmt.println("apply_twice:", apply_twice(1, proc[k](x: int) -> int { return x * k }))
+
+	n := 0
+	plain_each(xs, proc[&n](x: int) { n += x })
+	fmt.println("plain:", n)
+
+	// the call inside a closure: its captures come from that closure's environment
+	sum := 0
+	run := proc[&sum, k]() {
+		for_each([]int{10, 20}, proc[&sum, k](x: int) { sum += x + k })
+	}
+	run()
+	fmt.println("nested:", sum)
+
+	// a closure inside the one passed
+	adder := proc[k](x: int) -> int { return x + k }
+	for_each(xs[:2], proc[adder](x: int) {
+		inner := proc[adder, x]() -> int { return adder(x) * 2 }
+		fmt.println("inner:", inner())
+	})
+
+	count := 0
+	times(2, proc[&count](i: int) { count += 1 })
+	times(3, proc[&count](i: int) { count += 10 })
+	times(4, proc[&count](i: int) { count += 100 })
+	times(5, proc[&count](i: int) { count += 1000 })
+	times(6, proc[&count](i: int) { count += 10000 })
+	fmt.println("times:", count)
+
+	count_down(2, proc[k](x: int) { fmt.println("start", x, k) })
+	fmt.println("repeat:", repeat(4, proc[k](i: int) -> int { return i * k }), repeat(k, proc[](i: int) -> int { return i }))
+}

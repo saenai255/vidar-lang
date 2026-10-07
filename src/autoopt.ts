@@ -1,10 +1,10 @@
 import { Expr, Node, children } from "./ast";
-import { A, Analyzer, CallSite, INT_TYPES, SpecInfo, nodeText, posOf, unwrapProc } from "./analyzer";
+import { A, Analyzer, CallSite, ClosureSpec, INT_TYPES, markInlined, SpecInfo, nodeText, posOf, unwrapProc } from "./analyzer";
 import type { GlobalSym, LocalSym, Sym } from "./scope";
 
 type ProcLit = Extract<Expr, { k: "ProcLit" }>;
 
-/** more differing constant arguments than this, and a proc keeps a single copy */
+/** more differing constant arguments than this, and a proc keeps a single copy; also the most closure copies */
 const MAX_COPIES = 4;
 /** without a loop, a body is worth a table only past this many operations */
 const TABLE_OPS = 24;
@@ -17,20 +17,43 @@ const ASSIGNS = new Set(["=", "+=", "-=", "*=", "/=", "%=", "%%=", "&=", "|=", "
 
 /**
  * -opt, after analysis: procs that weren't marked get @(table) or @(specialize) when that is
- * safe and likely to pay off. Each decision, and why it went the other way, goes to the report.
+ * safe and likely to pay off. Each decision, and why it went the other way, is an `an.hint`.
  */
 export function autoOptimize(an: Analyzer): void {
   for (const [sym, info] of an.specialized) {
     const sets = [...info.clones.values()].map((c) => c.join(", "));
-    an.note(sym, sets.length ? `@(specialize): a copy with ${sets.join("; a copy with ")} known at compile time` : "@(specialize): no call passes a constant");
+    if (sets.length) an.hint(sym, `specialized ×${sets.length}`, `@(specialize): a copy with ${sets.join("; a copy with ")} known at compile time`);
+    else if (!A(info.lit)._closureCopies) an.hint(sym, "not specialized", "@(specialize): no call passes a constant");
   }
   for (const [sym, sites] of an.callSites) {
     const lit = procOf(an, sym);
     if (!lit || an.tables.has(sym)) continue;
     const off = an.optOut.get(sym);
     if (!off?.has("table") && autoTable(an, sym, lit)) continue;
-    if (!off?.has("specialize")) autoSpecialize(an, sym, lit, sites);
+    if (!off?.has("specialize")) autoSpecialize(an, sym, lit, closureSpecialize(an, sym, lit, sites));
   }
+}
+
+/** Calls passing closure literals call a copy that calls their bodies directly. Returns the other calls. */
+function closureSpecialize(an: Analyzer, sym: GlobalSym, lit: ProcLit, sites: CallSite[]): CallSite[] {
+  if (!an.calledOnlyParams(lit, sym.scope).size) return sites;
+  const found = sites.map((site) => ({ site, closures: an.closureLits(sym, lit, site.call) })).filter((x) => x.closures.size);
+  if (!found.length) {
+    const why = an.closureMisses(sym, lit, sites.map((s) => s.call));
+    if (why) an.note(sym, `not specialized for closures: ${why}`);
+    return sites;
+  }
+  const chosen = found.slice(0, MAX_COPIES);
+  for (const { site, closures } of chosen) {
+    A(site.call)._closureSpec = { sym, lit, consts: [], closures } satisfies ClosureSpec;
+    markInlined(lit, closures);
+  }
+  const params = [...new Set(chosen.flatMap((x) => [...x.closures.keys()]))].join(", ");
+  const lines = chosen.map((x) => posOf(x.site.call).line).join(", ");
+  const rest = found.length - chosen.length;
+  an.note(sym, `specialized: a copy calling the closure passed to ${params} directly, for the call${chosen.length > 1 ? "s at lines" : " at line"} ${lines}` +
+    (rest ? `; ${rest} more passing a closure literal call${rest === 1 ? "s" : ""} the original, past ${MAX_COPIES} copies` : ""));
+  return sites.filter((s) => !A(s.call)._closureSpec);
 }
 
 /** A plain proc declaration with a body and only attributes that a rewrite keeps meaning. */
@@ -55,17 +78,17 @@ function autoTable(an: Analyzer, sym: GlobalSym, lit: ProcLit): boolean {
   if (!(lit.toks[lit.start].text === "proc" && lit.toks[lit.start + 1]?.text === "(")) return false;
 
   const shape = integerOnly(an, sym, lit, new Set([sym]));
-  if (shape.why) return no(an, sym, `no table: it ${shape.why}`);
-  if (!shape.loop && shape.ops < TABLE_OPS) return no(an, sym, `no table: ${shape.ops} operation${shape.ops === 1 ? "" : "s"} and no loop, cheaper than a memory load`);
+  if (shape.why) return no(an, sym, `it ${shape.why}`);
+  if (!shape.loop && shape.ops < TABLE_OPS) return no(an, sym, `${shape.ops} operation${shape.ops === 1 ? "" : "s"} and no loop, cheaper than a memory load`);
   const values = an.tabulate(sym, domain, TABLE_STEPS);
-  if (!values) return no(an, sym, `no table: the body doesn't finish at compile time for every ${domain} within ${TABLE_STEPS} steps`);
+  if (!values) return no(an, sym, `the body doesn't finish at compile time for every ${domain} within ${TABLE_STEPS} steps`);
   an.tables.set(sym, { lit, domain, param: param.names[0].name, type: param.type, result: results[0].type, values });
-  an.note(sym, `table of ${values.length} results, ${shape.loop ? "has a loop" : `${shape.ops} operations`}, pure integer code`);
+  an.hint(sym, "table", `${values.length} results, ${shape.loop ? "has a loop" : `${shape.ops} operations`}, pure integer code`);
   return true;
 }
 
 function no(an: Analyzer, sym: GlobalSym, why: string): false {
-  an.note(sym, why);
+  an.hint(sym, "no table", why);
   return false;
 }
 
@@ -215,10 +238,10 @@ function autoSpecialize(an: Analyzer, sym: GlobalSym, lit: ProcLit, sites: CallS
     chosen.set(site, consts);
     combos.set(consts.map((n) => `${n} = ${nodeText(site.call.args[names.indexOf(n)])}`).join(", "), consts);
   }
-  if (!combos.size) return void an.note(sym, `not specialized: no call passes a constant to ${[...roles.keys()].join(" or ")}`);
+  if (!combos.size) return void an.hint(sym, "not specialized", `no call passes a constant to ${[...roles.keys()].join(" or ")}`);
   const why = [...new Set([...combos.values()].flat())].map((p) => `${p} ${roles.get(p)}`).join(", ");
-  if (combos.size === 1 && !runtimeCalls) return void an.note(sym, `not specialized: every call passes ${[...combos.keys()][0]}, which LLVM folds without a copy`);
-  if (combos.size > MAX_COPIES) return void an.note(sym, `not specialized: ${combos.size} different constant arguments, more than ${MAX_COPIES} copies`);
+  if (combos.size === 1 && !runtimeCalls) return void an.hint(sym, "not specialized", `every call passes ${[...combos.keys()][0]}, which LLVM folds without a copy`);
+  if (combos.size > MAX_COPIES) return void an.hint(sym, "not specialized", `${combos.size} different constant arguments, more than ${MAX_COPIES} copies`);
 
   for (const [site, consts] of chosen) {
     const key = consts.join("_");
@@ -226,7 +249,7 @@ function autoSpecialize(an: Analyzer, sym: GlobalSym, lit: ProcLit, sites: CallS
     A(site.call)._spec = { sym, key };
   }
   an.specialized.set(sym, info);
-  an.note(sym, `specialized: ${why}; one copy for each of ${[...combos.keys()].join(" | ")}`);
+  an.hint(sym, `specialized ×${combos.size}`, `${why}; one copy for each of ${[...combos.keys()].join(" | ")}`);
 }
 
 /** What each parameter does that a compile-time value speeds up: bounds a loop, or divides, shifts or branches inside one. */

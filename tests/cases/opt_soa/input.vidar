@@ -1,0 +1,122 @@
+package main
+
+import "core:fmt"
+
+Particle :: struct {
+	x, y, vx, vy: f32,
+	id:           int,
+	alive:        bool,
+}
+
+Pair :: struct { a, b: int }
+
+// loops here touch only some of the 6 fields: -opt makes these #soa
+converted :: proc() {
+	ps := make([dynamic]Particle)
+	defer delete(ps)
+	for i in 0..<10 do append(&ps, Particle{vx = f32(i), vy = 1, id = i, alive = i % 3 != 0})
+	reserve(&ps, 16)
+	for _ in 0..<3 {
+		for &p in ps {
+			p.x += p.vx
+			p.y += p.vy
+		}
+	}
+	first := ps[0]
+	ps[1] = first
+	ps[2].alive = ps[2].id > 1 && ps[0] == first
+	sum: f32
+	alive := 0
+	for p, i in ps {
+		sum += p.x + p.y
+		if p.alive do alive += i
+	}
+	fmt.println("dynamic:", len(ps), cap(ps) >= 16, sum, alive, ps[3])
+
+	grid: [8]Particle
+	for &g, i in grid do g.vx = f32(i) * 0.5
+	for i in 0..<len(grid) do grid[i].x += grid[i].vx
+	fmt.println("fixed:", grid[7].x, grid[3])
+
+	buf := make([]Particle, 5)
+	defer delete(buf)
+	for i := 0; i < len(buf); i += 1 do buf[i].id = i * i
+	total := 0
+	for b in buf do total += b.id
+	fmt.println("slice:", total, buf[4])
+	clear(&ps)
+	fmt.println("cleared:", len(ps))
+}
+
+sum_x :: proc(ps: []Particle) -> (s: f32) {
+	for p in ps do s += p.x
+	return
+}
+
+make_some :: proc() -> [dynamic]Particle {
+	out: [dynamic]Particle
+	for i in 0..<3 do append(&out, Particle{x = f32(i)})
+	for &p in out do p.x *= 2
+	return out
+}
+
+// each of these keeps its layout, and -opt-report says why
+kept :: proc() {
+	sliced := make([]Particle, 4)
+	defer delete(sliced)
+	for &p in sliced do p.x = 1
+	fmt.println("sliced:", sum_x(sliced[:]))
+
+	passed := make([]Particle, 4)
+	defer delete(passed)
+	for &p in passed do p.x = 2
+	fmt.println("passed:", sum_x(passed))
+
+	addressed: [4]Particle
+	for i in 0..<len(addressed) do addressed[i].x = f32(i)
+	q := &addressed[2]
+	q.x = 9
+	fmt.println("addressed:", addressed[2].x)
+
+	pairs: [4]Pair
+	for &p, i in pairs do p.a = i
+	fmt.println("narrow:", pairs[3])
+
+	whole: [dynamic]Particle
+	defer delete(whole)
+	append(&whole, Particle{id = 7})
+	for p in whole do fmt.println("whole:", p)
+
+	captured: [dynamic]Particle
+	defer delete(captured)
+	append(&captured, Particle{id = 1})
+	for &p in captured do p.y = 3
+	count := proc[&captured]() -> int { return len(captured) }
+	fmt.println("captured:", count())
+
+	by_ref := make([dynamic]Particle)
+	defer delete(by_ref)
+	append(&by_ref, Particle{x = 5})
+	for &p in by_ref {
+		p.x += 1
+		copy := p
+		fmt.println("by_ref:", copy.x)
+	}
+
+	returned := make_some()
+	defer delete(returned)
+	fmt.println("returned:", returned[2].x)
+
+	reassigned: [dynamic]Particle
+	for i in 0..<2 do append(&reassigned, Particle{id = i})
+	for &p in reassigned do p.id += 1
+	delete(reassigned)
+	reassigned = make([dynamic]Particle)
+	fmt.println("reassigned:", len(reassigned))
+	delete(reassigned)
+}
+
+main :: proc() {
+	converted()
+	kept()
+}

@@ -404,17 +404,26 @@ node dist/cli.js emit examples/negative_cost -opt-report  # -opt, plus what it d
 
 - **fmt calls with a literal format** (`fmt.printf`, `fmt.println`, `fmt.sbprintf`, `fmt.tprintf`, `fmt.wprintf`, the `e`/`a` variants, ...) compile to a proc that writes each piece directly: no format parsing at run time, no `any` boxing, no type switch. `%v %d %s %x %t %c` on basic types are written directly; other verbs and flags still go through `fmt`, one argument at a time. A format vidar can't read (`{}` arguments, `*` widths, explicit argument indexes) is left alone.
 - **Bounds checks a loop already guarantees** are dropped (`#no_bounds_check` on the statement) when the index comes from `for i in 0..<len(a)`, `for x, i in a` or `for i := 0; i < len(a); i += 1`, and nothing in the loop can change `a`'s length: `a` is a local or parameter that isn't reassigned, appended to, or reachable through a pointer.
+- **`reserve` before append loops:** a loop whose trip count is known before it starts (`for i in a..<b`, `a..=b`, `for x in xs` over a slice, array, dynamic array or string, `for i := a; i < n; i += 1`) and that runs `append(&xs, v)` (or `append(p, v)` for a pointer `p`) as a statement of its body gets `reserve(&xs, len(xs) + count)` before it, counting every value an append takes. Skipped when the append is conditional, the body can `break`, `continue` or `return`, the loop can change the bounds, or it reassigns, clears, resizes or takes the address of the array.
 - **Allocations freed together:** adjacent `x := make([]E, n)` / `p := new(T)` that are only freed by a `defer delete(x)` / `defer free(p)` in the same block become one allocation, sliced up, and freed by the defer that runs last.
+- **`#soa` layout:** a local `a: [dynamic]T`, `a: [N]T`, `a := make([dynamic]T, ...)` or `a := make([]T, n)` of a plain struct `T` (no `using`, tags, directives or parameters) becomes `#soa`, each field in an array of its own, when `T` has at least 3 fields or about 32 bytes and some loop touches only some of its fields. Every use of `a` must mean the same on an `#soa` container: `a[i].f` (read, write, `+=`, `a[i].f[j]`), `a[i]` as a whole value (copied, assigned, compared, passed), `len`, `cap`, `for x in a`, `for &x in a` using only `x.f`, `append(&a, ...)`, `clear`, `reserve`, `resize` and `delete`. Anything else keeps the layout: `&a[i]` or `&a[i].f`, slicing, passing `a` to a proc, returning, reassigning or capturing it.
 - **Lookup tables, chosen automatically:** a proc taking one `bool`, `u8` or `i8` and returning an integer or `bool` becomes a table when its body is pure integer code (locals, constants, arithmetic, `if`/`for`/`switch`, calls to procs that pass the same check), has a loop or at least 24 operations, and finishes at compile time for every input. Floats, strings, globals, pointers and macros rule a proc out, because the compile-time interpreter can't promise to compute them exactly as the compiled program does.
+- **Closure environments off the heap:** a closure whose one capture is by reference (`proc[&x]`) stores that pointer as its environment, with no allocation. A closure that provably doesn't outlive the statement creating it gets its environment on the creating proc's stack: it is only called, bound with `:=` to a local that is only called, or passed to procs whose parameter is itself only called or passed on that way. Anything else (returned, assigned, stored in a literal or struct, appended, captured by another closure, given to `sched.go` or `blocking`, or a body that takes the address of a capture) keeps the heap environment. `-opt-report` gives the reason per closure.
 - **Specialization, chosen automatically:** a proc gets a copy per constant argument when that parameter bounds a loop, or divides, shifts or branches inside one, and the calls pass constants to it. It is skipped when every call passes the same constant (LLVM already folds that) and when it would take more than 4 copies.
+- **Closures passed as literals**, like Rust monomorphizing closures: `for_each(xs, proc[&total, k](x: int) { total += x * k })` calls `for_each__closure0(xs, &total, k)`, a copy of `for_each` in which `f(x)` is a direct call to the closure's body, lifted to a proc of its own, with the captures in an environment on the copy's stack. LLVM can then inline it, and nothing is allocated. This applies when the callee is a plain proc with a body in the same file, and its body only calls the parameter: storing it, passing it on, returning it, comparing it, or capturing it in another closure keeps the call as it was. Each call passing a literal gets its own copy, at most 4 per proc; the calls past that call the original. Closure values held in variables (`g := proc[k]...; for_each(xs, g)`) aren't specialized.
 
-`@(no_table)` and `@(no_specialize)` keep a proc out of the automatic choices, e.g. a baseline you benchmark against. `-opt-report` lists each proc that was tabulated or specialized, and each one that nearly was, with the reason:
+On Vidar's error handling, `-opt` hints every failure path cold: the checks behind `catch`, `or_return X` and `errdefer` are wrapped in `intrinsics.expect(..., false)`, which LLVM turns into branch weights, and the panic behind `catch unreachable` is `@(cold)` (with or without `-opt`).
+
+`@(no_table)` and `@(no_specialize)` keep a proc out of the automatic choices, e.g. a baseline you benchmark against. `-opt-report` lists each proc that was tabulated or specialized, and each one that nearly was, with the reason, plus every statement and call it rewrote (the language server shows the same as inlay hints):
 
 ```
-main.vidar:9: collatz: table of 256 results, has a loop, pure integer code
+main.vidar:9: collatz: table: 256 results, has a loop, pure integer code
 main.vidar:45: noisy: no table: it reads 'counter', which isn't a local or a constant (line 47)
-main.vidar:66: blur: specialized: radius bounds a loop; one copy for each of radius = 1 | radius = 2
+main.vidar:66: blur: specialized ×2: radius bounds a loop; one copy for each of radius = 1 | radius = 2
 main.vidar:73: sum_to: not specialized: every call passes n = 10, which LLVM folds without a copy
+main.vidar:81: unchecked: every index here is proven in bounds by its loop, so it gets #no_bounds_check
+main.vidar:80: bs: #soa: a loop touches 3 of 10 fields of Body (x, y, z); 10 fields, ~72 bytes
+main.vidar:95: ps: not #soa: ps is passed to 'sum_x' (line 98)
 ```
 
 ### `@(table)`
@@ -446,6 +455,8 @@ box_blur(dst, src, 1)       // box_blur__radius(dst, src, 1), with `$radius: int
 box_blur(dst, src, r)       // the original
 ```
 
+On a `@(specialize)` proc, a call passing a closure literal also gets a copy calling the closure's body directly, as `-opt` does on its own (see above), together with any constants it passes. This happens without `-opt` too, and isn't capped.
+
 ### `Pool(I)`
 
 `Pool(I)` holds values of every type implementing the interface `I`, stored by type: one `[dynamic]T` per implementation instead of one array of interface values. `for s in pool` becomes one loop per type, in which `s` is a `^T`, so method calls are direct calls Odin can inline. `s` converts to `I` like any pointer to an implementation.
@@ -470,10 +481,13 @@ len(shapes); clear(&shapes); delete(shapes)
 |---|---|---|
 | `fmt.sbprintf` with a literal format | 210 ms | 68 ms |
 | three scratch allocations freed together | 115 ms | 45 ms |
+| 1000 appends in a loop, reserved first | 92 ms | 50 ms |
 | loop with proven indexes | 24.2 ms | 24.2 ms |
 | box blur, radius 1 and 3 (`@(specialize)`) | 33 ms | 11 ms |
 | Collatz steps over bytes (`@(table)`) | 282 ms | 1.4 ms |
 | sum of areas over shapes (`Pool` vs `[dynamic]Shape`) | 3.5 ms | 3.2 ms |
+| 3 of 10 fields over 100k structs (`#soa`) | 75 ms | 29 ms |
+| closure literal called per element (copy per closure) | 7.6 ms | 4.0 ms |
 
 Bounds checks rarely matter: LLVM already removes most of them in loops like these. The table wins only when the body costs more than a memory load; a bit count, which LLVM turns into one instruction, gains nothing. On the slime_mud server simulation, `-opt` took a run from 980 ms to 760 ms; the hand-written Odin version takes 905 ms.
 
@@ -490,6 +504,7 @@ Bounds checks rarely matter: LLVM already removes most of them in loops like the
 | Completion | After `pkg.`, the package's public members; after `value.`, struct fields; otherwise everything in scope, plus macros and keywords. While the line you're typing doesn't parse yet, completion uses the last good analysis. |
 | Outline | Procs, macros, structs (fields), interfaces (methods), impl blocks (bindings). |
 | Plain Odin via ols | If [ols](https://github.com/DanielGavin/ols) is on your PATH, requests vidar can't answer go to it: hover, definition and signature help for core library procs and types, and `fmt.`-style completion (merged with vidar's own). See below. |
+| Inlay hints | What `-opt` would decide, without building with it: `table` / `specialized ×2` after a proc's name, `unchecked` after a statement whose indexes are proven in bounds, `grouped alloc`, `fmt inlined`, and `direct` / `devirtualized` / `vtable` after an interface method call. The tooltip gives the reason. The setting `optHints` (initialization option or `vidar.optHints` in `workspace/didChangeConfiguration`) is `"on"` (default), `"all"` (also what `-opt` decided against, e.g. `no table`) or `"off"`. They come from a second analysis with `-opt` on, made only when hints are requested; diagnostics and generated code are unaffected. |
 | `vidar/generatedOdin` | Custom request that returns the generated Odin for a file. |
 
 The server analyzes the program rooted at the open file's package: that package plus everything it imports, cycles included. Unsaved editor contents are used. Editing a file re-checks every open program that contains it.
@@ -549,6 +564,7 @@ VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js   # run the LSP su
   - completion, including privacy across packages
   - hover, definition, signature help and completion forwarded to ols (skipped when `ols` is not on PATH)
   - the outline and the generated-Odin request
+  - `-opt` inlay hints (`tests/lsp/opt`), their setting, and that they follow edits
 
 ## Source layout
 
@@ -560,7 +576,9 @@ VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js   # run the LSP su
 | `src/comptime.ts` | interpreter for comptime procs, `quote`/splicing, hygiene |
 | `src/sched.ts` | the bundled `vidar:sched` package (scheduler, channels, `select`, nbio-backed I/O) and its stack-switching assembly |
 | `src/emitter.ts` | re-emits tokens and lowers closures, interfaces, cross-package references and expansions |
-| `src/optimize.ts` | `-opt` rewrites inside a proc: proven bounds checks, allocations freed together |
+| `src/optimize.ts` | `-opt` rewrites inside a proc: proven bounds checks, allocations freed together, `reserve` before append loops |
+| `src/soa.ts` | `-opt`: which local arrays of structs become `#soa` |
+| `src/escape.ts` | `-opt` after analysis: which closure environments go on the stack or in the env pointer |
 | `src/autoopt.ts` | `-opt` after analysis: which procs become tables or specialized copies, and the `-opt-report` notes |
 | `src/fmtspec.ts` | reads `fmt` format strings for `-opt` |
 | `src/project.ts` | loads a program by following imports, groups import cycles (Tarjan's algorithm), and emits the output tree; shared by the CLI and the language server |
@@ -573,7 +591,7 @@ VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js   # run the LSP su
 
 - **Calling closures relies on type inference.** vidar finds a closure's type through annotations, `:=` from closure literals or proc results, struct fields, indexing and captures. If it can't tell that a callee is a closure, the call is left as is and Odin reports it as a call to a non-procedure.
 - **Closure bodies are lifted to file scope.** They can't use the enclosing proc's local constants or types, or its polymorphic parameters (`$T`). vidar reports this as an error.
-- **Memory:** closure environments and by-reference boxes are allocated with `context.allocator` and never freed. That is fine for arenas and short programs.
+- **Memory:** closure environments and by-reference boxes are allocated with `context.allocator` and never freed. That is fine for arenas and short programs. Under `-opt`, closures that don't escape and closures with one by-reference capture allocate nothing; the escape analysis is conservative and only follows calls to procs it can see.
 - **Import cycles merge packages.** Odin sees one package for the whole cycle. Procs declared inside `foreign` blocks of cycle members are not prefixed, so they must not clash across the cycle. Only relative imports are followed; packages reached through collections (`core:`, `shared:`, ...) can't take part in a cycle.
 - **Anonymous struct literals** only work in `:=` declarations inside procedures; not at file scope or in `if`/`for`/`switch` initializers.
 - **Extension keywords are contextual.** `closure`, `quote`, `interface`, `impl`, `catch` and `errdefer` remain usable as ordinary identifiers, and `take` is only a keyword inside `do!` and `comptime!` blocks.

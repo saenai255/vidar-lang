@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFi
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import type { Analyzer } from "./analyzer";
+import { Analyzer, posOf } from "./analyzer";
 import { CompileError } from "./lexer";
 import { Output, Program, emitProgram, loadProgram, transpile } from "./project";
 
@@ -24,7 +24,7 @@ function usage(): never {
   vidar run   <dir|file${EXT}> [-opt] [-- args...]      transpile and 'odin run'
   vidar check <dir|file${EXT}> [-opt]                   transpile and 'odin check'
   vidar emit  <dir|file${EXT}> [-opt]                   print the generated Odin to stdout
-  -opt-report in place of -opt also prints, per proc, what -opt decided and why
+  -opt-report in place of -opt also prints what -opt decided, where, and why
   vidar lsp                                     run the language server on stdio (same as vidar-lsp)
   vidar --version
 
@@ -34,8 +34,8 @@ packages that import each other in a cycle are merged into one Odin package.
 fmt calls with a literal format, bounds checks a loop already guarantees, and
 allocations freed together. It also turns pure integer procs over bool, u8 or i8
 that loop into lookup tables, and copies procs whose constant arguments bound a
-loop into versions where they are compile-time. @(no_table) and @(no_specialize)
-opt a proc out.`);
+loop into versions where they are compile-time, and procs passed closure literals
+into copies that call them directly. @(no_table) and @(no_specialize) opt a proc out.`);
   process.exit(2);
 }
 
@@ -78,7 +78,7 @@ export function main(argv: string[]): number {
   try {
     program = loadProgram(input, { optimize, report });
     out = emitProgram(program);
-    if (report) printReport(program.analyzer.report);
+    if (report) printReport(program.analyzer.hints);
   } catch (err) {
     if (err instanceof CompileError) {
       console.error(formatError(err, program));
@@ -109,10 +109,11 @@ export function main(argv: string[]): number {
   return r.status ?? 1;
 }
 
-function printReport(notes: Analyzer["report"]): void {
-  const sorted = [...(notes ?? [])].sort((a, b) => a.pos.file.localeCompare(b.pos.file) || a.pos.line - b.pos.line);
-  if (!sorted.length) console.error("-opt: no proc to specialize or tabulate");
-  for (const n of sorted) console.error(`${relative(process.cwd(), n.pos.file)}:${n.pos.line}: ${n.name}: ${n.text}`);
+function printReport(hints: Analyzer["hints"]): void {
+  const notes = (hints ?? []).map((h) => ({ ...h, pos: posOf(h.at) }));
+  const sorted = notes.sort((a, b) => a.pos.file.localeCompare(b.pos.file) || a.pos.line - b.pos.line || a.pos.col - b.pos.col);
+  if (!sorted.length) console.error("-opt: nothing to report");
+  for (const n of sorted) console.error(`${relative(process.cwd(), n.pos.file)}:${n.pos.line}: ${n.name ? n.name + ": " : ""}${n.label}${n.tooltip ? ": " + n.tooltip : ""}`);
 }
 
 /** Points `file.odin(line:col)` locations in Odin's output at the .vidar files and lines they came from. */

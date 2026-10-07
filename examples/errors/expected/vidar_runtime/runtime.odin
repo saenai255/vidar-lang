@@ -134,7 +134,11 @@ failed :: #force_inline proc(e: $T) -> bool {
 	}
 }
 
+// -opt: `if expect(failed(e), false)` marks the failure path cold
+expect :: intrinsics.expect
+
 // `catch unreachable`: the error was not supposed to happen
+@(cold)
 unexpected :: proc(e: $T, loc := #caller_location) -> ! {
 	when T == bool {
 		panic("unexpected failure", loc)

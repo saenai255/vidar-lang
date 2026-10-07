@@ -36,7 +36,7 @@ export interface LoadOptions {
   overrides?: Map<string, string>;
   /** rewrite plain Odin for speed: specialized fmt calls, proven bounds checks, grouped allocations, tables and specialized procs */
   optimize?: boolean;
-  /** with optimize: collect what it decided per proc in `analyzer.report` */
+  /** with optimize: collect what it decided in `analyzer.hints` */
   report?: boolean;
 }
 
@@ -103,7 +103,7 @@ export function loadProgram(entry: string | Source[], opts: LoadOptions = {}): P
   const analyzer = new Analyzer();
   if (tolerant) analyzer.errors = errors;
   analyzer.optimize = !!opts.optimize;
-  if (opts.optimize && opts.report) analyzer.report = [];
+  if (opts.optimize && opts.report) analyzer.hints = [];
   const byDir = new Map<string, PackageInfo>();
   const sources: Source[] = [];
   const read = (path: string) => opts.overrides?.get(path) ?? readFileSync(path, "utf8");

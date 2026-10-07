@@ -516,6 +516,48 @@ function change(text) {
   const mMissing = await noHover(mUri, mText);
   check("every name and keyword in the macros fixture has a hover", mMissing.length === 0, mMissing.join(" "));
 
+  // ---- inlay hints: what -opt decides ----
+  const optDir = realpathSync(mkdtempSync(join(tmpdir(), "vidar-lsp-opt-")));
+  cpSync("tests/lsp/opt", optDir, { recursive: true });
+  const oUri = pathToFileURL(join(optDir, "main.vidar")).toString();
+  const oText = readFileSync(join(optDir, "main.vidar"), "utf8");
+  const oLines = oText.split("\n");
+  /** the position just past `needle` on the first line containing `lineHas` */
+  const oEnd = (lineHas, needle = lineHas) => {
+    const line = oLines.findIndex((l) => l.includes(lineHas));
+    return { line, character: oLines[line].indexOf(needle) + needle.length };
+  };
+  const oDiag = nextDiagnostics((d) => d.uri === oUri);
+  notify("textDocument/didOpen", { textDocument: { uri: oUri, languageId: "vidar", version: 1, text: oText } });
+  check("-opt fixture has no errors", (await oDiag).diagnostics.length === 0, "");
+  const optHints = async () =>
+    (await request("textDocument/inlayHint", { textDocument: { uri: oUri }, range: { start: { line: 0, character: 0 }, end: { line: oLines.length, character: 0 } } })).result ?? [];
+  const hintsAt = (hints, pos) => hints.filter((h) => h.position.line === pos.line && h.position.character === pos.character).map((h) => h.label);
+  let oh = await optHints();
+  const ohs = JSON.stringify(oh.map((h) => [h.label, h.position.line, h.position.character]));
+  check("inlay hint after an automatic table's name, with the reason as tooltip", hintsAt(oh, oEnd("bits :: proc", "bits")).includes("table") && oh.find((h) => h.label === "table")?.tooltip?.includes("256 results"), ohs);
+  check("inlay hint after a specialized proc's name counts its copies", hintsAt(oh, oEnd("blur :: proc", "blur")).includes("specialized ×2"), ohs);
+  check("inlay hint on a statement whose indexing is unchecked", hintsAt(oh, oEnd("total += a[i]")).includes("unchecked"), ohs);
+  check("inlay hints on allocations made together", hintsAt(oh, oEnd("tmp := make([]int, 16)")).includes("grouped alloc") && hintsAt(oh, oEnd("out := make([]int, 16)")).includes("grouped alloc"), ohs);
+  check("inlay hint on a compiled fmt call", hintsAt(oh, oEnd('fmt.printf("%d %d\\n", bits(7), double(3))')).includes("fmt inlined"), ohs);
+  check("inlay hints tell devirtualized and direct interface calls apart", hintsAt(oh, oEnd("area(s)")).includes("devirtualized") && hintsAt(oh, oEnd("area(&sq)")).includes("direct"), ohs);
+  check("inlay hints leave out what -opt decided against by default", !oh.some((h) => /^not? /.test(h.label)), ohs);
+  const oGen = await request("vidar/generatedOdin", { uri: oUri });
+  check("hints don't turn -opt on for the generated Odin", !/__fmt_|#no_bounds_check/.test(oGen.result?.files?.["main.odin"] ?? "__fmt_"), JSON.stringify(oGen.result).slice(0, 200));
+
+  notify("workspace/didChangeConfiguration", { settings: { vidar: { optHints: "all" } } });
+  oh = await optHints();
+  check("optHints: all adds the decisions against, with the reason", oh.some((h) => h.label === "no table" && h.tooltip?.includes("cheaper than a memory load") && h.position.line === oEnd("double :: proc").line), JSON.stringify(oh.map((h) => h.label)));
+  notify("workspace/didChangeConfiguration", { settings: { vidar: { optHints: "off" } } });
+  check("optHints: off shows none", (await optHints()).length === 0, "");
+  notify("workspace/didChangeConfiguration", { settings: { vidar: { optHints: "on" } } });
+
+  const shifted = nextDiagnostics((d) => d.uri === oUri);
+  notify("textDocument/didChange", { textDocument: { uri: oUri, version: 2 }, contentChanges: [{ text: "\n" + oText }] });
+  await shifted;
+  oh = await optHints();
+  check("inlay hints follow edits", hintsAt(oh, { ...oEnd("bits :: proc", "bits"), line: oEnd("bits :: proc").line + 1 }).includes("table"), JSON.stringify(oh.map((h) => [h.label, h.position.line])));
+
   writeFileSync(file, original);
   const restored = nextDiagnostics((d) => d.uri === uri && d.diagnostics.length === 0);
   change(original);

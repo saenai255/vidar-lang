@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
 import { CompileError } from "../lexer";
 import { Program as Analysis, emitProgram, loadProgram, outputName, preludeSourcePath } from "../project";
+import { optimizeAll } from "../optimize";
 import { PRELUDE_PATH } from "../prelude";
 import { writeOutput } from "../cli";
 import * as F from "./features";
@@ -26,13 +27,16 @@ interface PackageState {
   current?: Analysis;
   index?: F.Index;
   lastGood?: Analysis;
+  /** a separate analysis with -opt on, made when hints are asked for */
+  opt?: { of: Analysis; program: Analysis };
   odinDiagnostics: Map<string, Diagnostic[]>;
 }
 
 const packages = new Map<string, PackageState>();
 const timers = new Map<string, NodeJS.Timeout>();
-let settings = { odinCheckOnSave: true, odinPath: "odin", ols: true, olsPath: "ols" };
+let settings = { odinCheckOnSave: true, odinPath: "odin", ols: true, olsPath: "ols", optHints: "on" as string | boolean };
 let ols: OdinBridge | undefined;
+let hintRefresh = false;
 
 const toPath = (uri: string) => fileURLToPath(uri);
 const toUri = (path: string) => pathToFileURL(path === PRELUDE_PATH ? preludeSourcePath() : path).toString();
@@ -75,6 +79,7 @@ function analyzePackage(dir: string): PackageState {
   if (!a.errors.length) state.lastGood = a;
   if (ols) syncOdin(dir, a);
   publish(dir, state);
+  if (hintRefresh && settings.optHints !== "off" && settings.optHints !== false) connection.languages.inlayHint.refresh().catch(() => {});
   return state;
 }
 
@@ -167,6 +172,7 @@ function odinCheck(dir: string): void {
 connection.onInitialize((params): InitializeResult => {
   const opts = params.initializationOptions ?? {};
   settings = { ...settings, ...opts };
+  hintRefresh = !!params.capabilities.workspace?.inlayHint?.refreshSupport;
   if (settings.ols) ols = new OdinBridge(settings.olsPath, (m) => connection.console.warn(m));
   return {
     capabilities: {
@@ -178,6 +184,7 @@ connection.onInitialize((params): InitializeResult => {
       documentSymbolProvider: true,
       completionProvider: { triggerCharacters: [":", ".", ">"] },
       signatureHelpProvider: { triggerCharacters: ["(", ","], retriggerCharacters: [","] },
+      inlayHintProvider: true,
     },
     serverInfo: { name: "vidar-lsp", version: "0.1.0" },
   };
@@ -295,6 +302,33 @@ connection.onCompletion(async ({ textDocument, position }) => {
     items.push({ ...i, sortText: `1${i.sortText ?? i.label}` });
   }
   return items;
+});
+
+connection.onDidChangeConfiguration(({ settings: s }) => {
+  if (s?.vidar?.optHints === undefined) return;
+  settings.optHints = s.vidar.optHints;
+  if (hintRefresh) connection.languages.inlayHint.refresh().catch(() => {});
+});
+
+/** What -opt decided, shown after the names and code it is about; a second, -opt analysis that emits nothing. */
+connection.languages.inlayHint.on(({ textDocument, range }) => {
+  if (settings.optHints === "off" || settings.optHints === false) return [];
+  const { state, path } = stateFor(textDocument.uri);
+  if (!state.current) return [];
+  if (state.opt?.of !== state.current) {
+    try {
+      const program = loadProgram(dirname(path), { tolerant: true, overrides: overrides(), optimize: true, report: true });
+      optimizeAll(program.analyzer, program.packages.flatMap((p) => p.files));
+      state.opt = { of: state.current, program };
+    } catch (err) {
+      connection.console.error(`vidar: -opt analysis failed: ${err instanceof Error ? err.stack : err}`);
+      return [];
+    }
+  }
+  const inRange = (p: F.Position) => (p.line > range.start.line || (p.line === range.start.line && p.character >= range.start.character)) && (p.line < range.end.line || (p.line === range.end.line && p.character <= range.end.character));
+  return F.optHints(state.opt.program, path, settings.optHints === "all")
+    .filter((h) => inRange(h.position))
+    .map((h) => ({ position: h.position, label: h.label, tooltip: h.tooltip, paddingLeft: true }));
 });
 
 /** Custom request: the Odin code vidar generates for a file. */

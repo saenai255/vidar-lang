@@ -1,0 +1,63 @@
+package main
+
+import "core:fmt"
+
+Error :: enum { None, Empty, Negative }
+
+parse :: proc(n: int) -> (int, Error) {
+	if n == 0 do return 0, .Empty
+	if n < 0 do return 0, .Negative
+	return n * 10, .None
+}
+
+// or_return X: the failure branch is hinted cold under -opt
+scaled :: proc(n: int) -> (int, Error) {
+	v := parse(n) or_return .Negative
+	return v + 1, .None
+}
+
+// errdefer: so is the check that the proc is failing
+build :: proc(n: int) -> (out: [dynamic]int, err: Error) {
+	append(&out, n)
+	errdefer {
+		fmt.println("  errdefer ran for", n, err)
+		delete(out)
+	}
+	v := scaled(n) or_return .Empty
+	append(&out, v)
+	return
+}
+
+assign :: proc(n: int) -> int {
+	total := 0
+	total = parse(n) catch { return -1 }
+	return total
+}
+
+main :: proc() {
+	for n in ([]int{3, 0, -2}) {
+		v, err := scaled(n)
+		fmt.println("scaled", n, "->", v, err)
+	}
+
+	for n in ([]int{4, -1}) {
+		b, err := build(n)
+		fmt.println("build", n, "->", len(b), err)
+		if err == .None do delete(b)
+	}
+
+	for n in ([]int{5, 0}) {
+		v := parse(n) catch err {
+			fmt.println("catch", n, "failed:", err)
+			continue
+		}
+		fmt.println("catch", n, "ok:", v)
+	}
+
+	parse(-7) catch e { fmt.println("bare catch failed:", e) }
+	parse(2) catch e { fmt.println("bare catch failed:", e) }
+	fmt.println("assigned:", assign(-7), assign(2))
+
+	sure := parse(9) catch unreachable
+	fmt.println("unreachable not hit:", sure)
+}

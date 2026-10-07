@@ -1,0 +1,11 @@
+scaled 3 -> 31 None
+scaled 0 -> 0 Negative
+scaled -2 -> 0 Negative
+build 4 -> 2 None
+  errdefer ran for -1 Empty
+build -1 -> 1 Empty
+catch 5 ok: 50
+catch 0 failed: Empty
+bare catch failed: Negative
+assigned: -1 20
+unreachable not hit: 90

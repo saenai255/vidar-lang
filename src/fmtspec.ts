@@ -1,3 +1,9 @@
+import type { Expr } from "./ast";
+import { A, Analyzer } from "./analyzer";
+import type { Sym } from "./scope";
+
+type Call = Extract<Expr, { k: "Call" }>;
+
 /** A format string split the way fmt.wprintf reads it: literal text, and verbs that each take an argument. */
 export type FmtPiece = { k: "text"; text: string } | { k: "arg"; verb: string; spec: string };
 
@@ -98,4 +104,44 @@ export function parseFormat(f: string): FmtPiece[] | undefined {
     out.push({ k: "arg", verb, spec: m[0] + verb });
   }
   return out;
+}
+
+/** fmt procs -opt specializes: where they write, and how many arguments come before the format */
+const FMT_ENTRIES = new Map<string, { kind: "out" | "err" | "t" | "a" | "sb" | "w"; lead: number; format: boolean; newline: boolean }>(
+  (
+    [["", "out", 0], ["e", "err", 0], ["t", "t", 0], ["a", "a", 0], ["sb", "sb", 1], ["w", "w", 1]] as const
+  ).flatMap(([prefix, kind, lead]) => [
+    [`${prefix}printf`, { kind, lead, format: true, newline: false }],
+    [`${prefix}printfln`, { kind, lead, format: true, newline: true }],
+    [`${prefix}print`, { kind, lead, format: false, newline: false }],
+    [`${prefix}println`, { kind, lead, format: false, newline: true }],
+  ]),
+);
+
+/** `fmt.<name>(...)` for one of the procs -opt specializes */
+export function fmtEntry(c: Call) {
+  const fn = c.fn;
+  if (fn.k !== "Selector" || fn.x.k !== "Ident") return undefined;
+  const pkg: Sym | undefined = A(fn.x)._sym;
+  return pkg?.kind === "pkg" && pkg.path === "core:fmt" ? FMT_ENTRIES.get(fn.name) : undefined;
+}
+
+/** The pieces -opt writes a fmt call as, or undefined when the call is left alone. */
+export function fmtPlan(an: Analyzer, c: Call) {
+  const entry = fmtEntry(c);
+  if (!entry || c.args.some((a) => a.k === "FieldValue" || a.k === "Spread")) return undefined;
+  const lead = c.args.slice(0, entry.lead);
+  const values = c.args.slice(entry.lead + (entry.format ? 1 : 0));
+  const scope = A(c)._scope ?? an.global;
+  const single = (v: Expr) => an.isSingleValue(v, scope) || (v.k === "Call" && !!fmtEntry(v));
+  if (lead.length < entry.lead || values.some((v) => (v.k === "Ident" && v.name === "nil") || !single(v))) return undefined;
+  let pieces: FmtPiece[] | undefined;
+  if (entry.format) {
+    const f = c.args[entry.lead];
+    const text = f?.k === "Lit" && f.kind === "string" ? decodeString(an.tokText.get(f.toks[f.start]) ?? f.toks[f.start].text) : undefined;
+    pieces = text === undefined ? undefined : parseFormat(text);
+    if (!pieces || pieces.filter((p) => p.k === "arg").length !== values.length) return undefined;
+  } else pieces = values.flatMap((_, i): FmtPiece[] => [...(i ? [{ k: "text" as const, text: " " }] : []), { k: "arg", verb: "v", spec: "%v" }]);
+  if (entry.newline) pieces.push({ k: "text", text: "\n" });
+  return { entry, lead, values, pieces };
 }
