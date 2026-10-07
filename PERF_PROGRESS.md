@@ -18,7 +18,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 5 | 19 | Leftovers from the first batch | tooling | done |
 | 6 | 1 | Closure call regression (2.9x slower call through a closure) | bug | done |
 | 7 | 2 | `sched_pending_io` busy loop | bug | blocked |
-| 8 | 3 | Dangling by-reference captures in returned closures | bug | todo |
+| 8 | 3 | Dangling by-reference captures in returned closures | bug | merged |
 | 9 | 5 | Intermittent Odin compiler hang | bug | todo |
 | 10 | 6 | Value interfaces / closed unions | perf | todo |
 | 11 | 7 | Generated per-type printers and JSON code | perf | todo |
@@ -181,6 +181,9 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **3, dangling by-reference captures** merged. `src/escape.ts` runs on each proc body after analysis. A closure literal capturing `&x` of one of the proc's locals or parameters (or of a by-value capture, which lives in the closure's copy of its environment) is an error when it is returned (directly, through locals, a named result, or inside a struct literal), stored through a pointer or a slice or in a global or an outer proc's variable, or appended to anything but a local the proc owns. Values are followed through locals and local structs and arrays until nothing changes; calls are not followed. The error is at the capture and suggests `new_clone(x)`.
+  - It found one in `examples/cyclic`: `run` appended `proc[&ticks]` to `w.on_frame`, which outlives it. The counter is now `new(int)`.
+  - Nine error cases (`tests/errors/closure_ref_*`), and `tests/cases/closure_ref_local` for `&x` closures that stay in the frame (passed to a call, held in a local, appended to a local array).
 - **2, `sched_pending_io` busy loop**: not reproduced on linux/amd64, so blocked on a macOS run. Tooling and a stress case are in.
   - `npm run stress -- <case>` (`scripts/stress.js`) builds a case once, runs it `-n` times (`-jN` at a time, `-t` seconds each) and checks `stdout.txt`. On a hang it records the CPU use (near 100% is the busy loop, near 0% a lost wakeup) and every thread's stack (`sample` on macOS, `gdb` on Linux) in `$TMPDIR/vidar-stress-*/hang-N.txt`, and keeps the binary.
   - `-define:VIDAR_FILES_ON_WORKERS=true` sends file operations to the worker threads on Linux, as on macOS, so the cross-thread hand-off (`worker_done` → `resume_from_worker`) runs here too.

@@ -1,0 +1,39 @@
+package main
+
+import "core:fmt"
+
+// `&x` captures that stay inside the frame: none of these is an error
+
+apply :: proc(xs: []int, f: closure(x: int)) { for x in xs do f(x) }
+
+Totals :: struct { cbs: [dynamic]closure(x: int) }
+
+sum :: proc(xs: []int) -> int {
+	total := 0
+	// passed to a call
+	apply(xs, proc[&total](x: int) { total += x })
+	// held in a local, called here
+	add := proc[&total](x: int) { total += x }
+	add(100)
+	// appended to a local array, and stored in a local struct, neither returned
+	cbs: [dynamic]closure(x: int)
+	defer delete(cbs)
+	append(&cbs, add)
+	t: Totals
+	t.cbs = cbs
+	for cb in t.cbs do cb(1000)
+	return total
+}
+
+// a pointer from new_clone outlives the frame
+counter :: proc() -> closure() -> int {
+	n := new_clone(0)
+	return proc[n]() -> int { n^ += 1; return n^ }
+}
+
+main :: proc() {
+	fmt.println(sum({1, 2, 3}))
+	c := counter()
+	c()
+	fmt.println(c())
+}

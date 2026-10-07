@@ -46,12 +46,13 @@ spawn :: proc(w: ^World, label: string) -> Error {
 }
 
 run :: proc(w: ^World, frames: int) -> string {
-	ticks := 0
-	append(&w.on_frame, proc[&ticks](frame: int) { ticks += 1 })
+	// the callback stays in w after run returns, so the counter lives on the heap
+	ticks := new(int)
+	append(&w.on_frame, proc[ticks](frame: int) { ticks^ += 1 })
 	append(&w.on_frame, util.every(2, proc[](frame: int) { fmt.println("[game] even frame", frame) }))
 	for _ in 0..<frames {
 		w.frame += 1
 		for cb in w.on_frame do cb(w.frame)
 	}
-	return fmt.tprintf("%d ticks, screen: %s", ticks, ui.render(w))
+	return fmt.tprintf("%d ticks, screen: %s", ticks^, ui.render(w))
 }

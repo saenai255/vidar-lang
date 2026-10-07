@@ -1,0 +1,11 @@
+// error: this closure captures &hits and is returned (line 8)
+package main
+
+Handler :: struct { on: closure() }
+
+make_handler :: proc() -> Handler {
+	hits := 0
+	return Handler{on = proc[&hits]() { hits += 1 }}
+}
+
+main :: proc() { _ = make_handler() }

@@ -1,0 +1,14 @@
+// error: this closure captures &hits and is stored in memory behind a pointer (line 8)
+package main
+
+Button :: struct { on_click: closure() }
+
+wire :: proc(b: ^Button) {
+	hits := 0
+	b.on_click = proc[&hits]() { hits += 1 }
+}
+
+main :: proc() {
+	b: Button
+	wire(&b)
+}

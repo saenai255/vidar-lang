@@ -31,7 +31,7 @@ A directory is a package: all its `.vidar` (and plain `.odin`) files are transpi
 
 ## Closures
 
-A proc literal with a capture list is a closure. `[x]` copies `x` into the closure; `[&x]` captures it by reference: the closure holds `&x` and nothing is moved, so keeping `x` alive while the closure runs is up to you. A closure is a plain value: its captures are stored inside it, so copying, returning or appending a closure copies them, and nothing is ever allocated. For state that changes, or that outlives the frame, capture a pointer: `count := new_clone(0)` with `proc[count]`. `proc[]` is a closure with no captures. A plain `proc(...)` with no brackets is an ordinary Odin proc.
+A proc literal with a capture list is a closure. `[x]` copies `x` into the closure; `[&x]` captures it by reference: the closure holds `&x` and nothing is moved, so keeping `x` alive while the closure runs is up to you. The compiler catches the common mistake: a closure holding `&x` of a local or parameter that is returned (directly, through a local or named result, or in a struct literal), stored through a pointer, a slice or in a global, or appended to something the proc doesn't own, is an error that suggests `new_clone(x)`. Values passed to calls aren't followed. A closure is a plain value: its captures are stored inside it, so copying, returning or appending a closure copies them, and nothing is ever allocated. For state that changes, or that outlives the frame, capture a pointer: `count := new_clone(0)` with `proc[count]`. `proc[]` is a closure with no captures. A plain `proc(...)` with no brackets is an ordinary Odin proc.
 
 ```odin
 make_counter :: proc(start: int) -> closure() -> int {

@@ -1,0 +1,11 @@
+// error: this closure captures &k and is returned (line 7)
+package main
+
+outer :: proc(k: int) -> closure() -> closure() -> int {
+	return proc[k]() -> closure() -> int {
+		// k here is this closure's own copy, which is gone once it returns
+		return proc[&k]() -> int { return k }
+	}
+}
+
+main :: proc() { _ = outer(1) }

@@ -1,0 +1,8 @@
+// error: Capture a pointer from new_clone(f) instead
+package main
+
+every :: proc(n: int, f: closure(t: int)) -> closure(t: int) {
+	return proc[n, &f](t: int) { if t % n == 0 do f(t) }
+}
+
+main :: proc() { _ = every(2, proc[](t: int) {}) }

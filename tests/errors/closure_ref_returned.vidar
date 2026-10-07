@@ -1,0 +1,9 @@
+// error: this closure captures &n and is returned (line 6)
+package main
+
+counter :: proc() -> closure() -> int {
+	n := 0
+	return proc[&n]() -> int { n += 1; return n }
+}
+
+main :: proc() { _ = counter() }

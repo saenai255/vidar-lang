@@ -1,0 +1,14 @@
+// error: this closure captures &ticks and is appended to memory behind a pointer (line 8)
+package main
+
+World :: struct { on_frame: [dynamic]closure(frame: int) }
+
+run :: proc(w: ^World) {
+	ticks := 0
+	append(&w.on_frame, proc[&ticks](frame: int) { ticks += 1 })
+}
+
+main :: proc() {
+	w: World
+	run(&w)
+}

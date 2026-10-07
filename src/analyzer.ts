@@ -4,6 +4,7 @@ import { Parser } from "./parser";
 import { CaptureSym, Ctx, GlobalSym, LocalSym, PackageInfo, PkgSym, Scope, Sym, Ty } from "./scope";
 import { autoOptimize } from "./autoopt";
 import { checkNoAlloc } from "./checks";
+import { checkEscapes } from "./escape";
 import { CallSpan, Interp, NotConstant, Val, joinTokens, repeatable, respace, valueToTokens, tokensOf } from "./comptime";
 
 /** Annotation accessor: analysis results live in `_`-prefixed fields on nodes. */
@@ -688,6 +689,7 @@ export class Analyzer {
       } finally {
         this.resultStack.pop();
       }
+      checkEscapes(this, p, ctx);
     }
   }
 

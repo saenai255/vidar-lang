@@ -1,0 +1,11 @@
+// error: this closure captures &hits and is stored in a global (line 8)
+package main
+
+on_tick: closure()
+
+install :: proc() {
+	hits := 0
+	on_tick = proc[&hits]() { hits += 1 }
+}
+
+main :: proc() { install() }
