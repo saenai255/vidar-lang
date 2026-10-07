@@ -38,7 +38,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 25 | 29 | `-opt` decisions panel and code lens | dev tooling | merged |
 | 26 | 30 | `vidar fmt` | dev tooling | merged |
 | 27 | 31 | Debugger support: `vidar build -debug` and a launch config | dev tooling | merged |
-| 28 | 32 | Run the tests in CI before every release | infra | todo |
+| 28 | 32 | Run the tests in CI before every release | infra | merged |
 | 29 | 33 | Escape analysis through calls | bug | todo |
 | 30 | 34 | Closure arrays returned through named results lose their type | bug | todo |
 | 31 | 35 | Close 2 and 5 as not reproduced | bug | done |
@@ -52,11 +52,11 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 39 | 43 | Resolve field and enum-member uses in the analyzer | editor | todo |
 | 40 | 44 | Forward rewritten lines to ols | editor | todo |
 | 41 | 45 | Index the whole workspace at startup | editor | todo |
-| 42 | 46 | Missing-import fix from `odin root` | editor | todo |
+| 42 | 46 | Missing-import fix from `odin root` | editor | merged |
 | 43 | 47 | Generated `json.unmarshal` | perf | todo |
 | 44 | 48 | Hot/cold splitting across procs | perf | todo |
 | 45 | 49 | Loop fusion and pipeline macros | perf | todo |
-| 46 | 50 | `vidar new` | dev tooling | todo |
+| 46 | 50 | `vidar new` | dev tooling | merged |
 | 47 | 51 | Windows support | platform | todo |
 
 ## Tooling
@@ -364,6 +364,10 @@ For a `[dynamic]T` whose hot loops (in any proc it is passed to) touch few field
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **32, 46, 50** merged (one worktree).
+  - 32: a `test` job (ubuntu-24.04, macos-14) gates `build` and `release`: Odin `dev-2026-07` from Odin's GitHub release tarball, `npm ci`, `npm test`, the case suite at `VIDAR_THREADS=4`, and 500 stress runs of `sched_pending_io`; hang reports uploaded on failure. Checked locally (YAML, tarball URLs, the linux tarball's `odin` passing a case); the first real run is the next push.
+  - 46: the missing-import fix indexes every package under `odin root` (`core/`, `base/`, `vendor/`; cached, 5 s timeout), keeping the table first and as the fallback. A name shared by several packages (`noise`) offers one action each, none preferred, so fix-all doesn't guess.
+  - 50: `vidar new <dir> [--lib]` (`src/scaffold.ts`): `main.vidar` (hello world with a closure, or a library with a test), `.gitignore`, `.vscode/launch.json`, README stub; the package name is the directory made an identifier; refuses a non-empty directory.
 - **Wave 4 (developer tooling) merged.** All of 22 to 31 are in; `npm test` passes (70 unit, 337 case, 198 LSP checks). Not tried in a real VS Code yet: run `npm run vsix` on the M3.
   - **22, `vidar test`** (with 23 and 31, one worktree). `vidar test <in> [-opt] [--run a,b] [-- odin flags]` transpiles to a temp dir and runs `odin test`, exiting with its status; `--run` becomes `-define:ODIN_TEST_NAMES=<pkg>.<name>`; `test --watch` works. New `examples/testing`, and `tests/vidar_test/failing` (a failed expect, a failed assert and a bounds-check panic, at lines a `catch` shifts), checked by two `testing: ...` steps in `scripts/test.js`.
   - **23, run-time locations.** `src/runmap.ts`: both shapes Odin prints, `path.odin(L:C)` and `[file.odin:L:proc()]` (the second only when the base name is unique). `vidar run` streams stderr through the filter, `vidar test` both streams; a partial line is written after 50 ms of quiet. Every build writes `<out>/vidar.map.json`, and `vidar map <out> < log` rewrites a saved log. `mapLocations` uses it; a compile error on a helper line vidar added now keeps its generated path instead of a `.vidar` path with the wrong line.
