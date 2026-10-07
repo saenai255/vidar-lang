@@ -10,6 +10,7 @@
     "test:unit": "npm run build && node --test tests/unit/",
     "build:binaries": "npm run build && node scripts/build-binaries.js",
     "bench": "node scripts/bench.js",
+    "stress": "node scripts/stress.js",
     "vsix": "node scripts/vsix.js"
   },
   "license": "ISC",

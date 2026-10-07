@@ -45,6 +45,7 @@ Times are from a 12-core M3 Pro.
 | `node scripts/test.js --only <text>` | only the cases and error tests whose name contains `<text>` (skips the `core` passthrough) | seconds |
 | `npm run test:update` | build, then regenerate every fixture (see below) | as above |
 | `npm run bench` | `examples/negative_cost` timed against `HEAD`; see "Benchmarks" | 15 s |
+| `npm run stress -- <case> [-n 500] [-t 10] [-jN]` | builds one case once and runs it `-n` times to catch rare hangs; on a hang it saves the CPU use and a stack of every thread; `-opt`, `-o:` and `-define:` pass through | 1 s for 100 runs of `sched_pending_io` |
 | `node scripts/test-lsp.js` | the language server, end to end over stdio | 6 s |
 | `VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js` | the same suite against a built binary | |
 | `node scripts/passthrough.js <files...>` | plain Odin files must come out unchanged; try `$(find "$(odin root)/core" -name '*.odin')` | |
@@ -117,7 +118,8 @@ So a hang fails one case (`odin build timed out`, or `timed out after 30s`) inst
 - **Odin compiler hang, every time.** It happens on a struct with blank `_` field names declared inside a polymorphic (`$T`) proc. Never generate blank field names; give padding fields names such as `__pad`.
 - **Scheduler busy loop.** The `sched_pending_io` program once spun at 100% CPU for about 2 hours, before the timeouts existed.
   - Treat a run timeout in any `vidar:sched` program (`sched_pending_io`, `examples/goroutines`, `examples/sched_io`) as a likely scheduler bug, not a flake.
-  - Keep the binary, and take a stack with `sample <pid>` while it spins. This is PERF_PROGRESS item 2.
+  - Hunt it with `npm run stress -- tests/cases/sched_pending_io -n 2000`. On a hang it keeps the binary and writes the CPU use and a `sample` (macOS) or `gdb` (Linux) stack to `$TMPDIR/vidar-stress-*/hang-N.txt`. This is PERF_PROGRESS item 2.
+  - Not reproduced on linux/amd64. On macOS, files go to worker threads; `-define:VIDAR_FILES_ON_WORKERS=true` sends them there on Linux too.
 - **Your own shell.** A command that waits on stdin hangs the tool call until it is killed. Examples: `cat > file` without a heredoc, a bare `node`, or a program that reads input.
 
 **Finding stuck processes:**
@@ -135,10 +137,11 @@ So a hang fails one case (`odin build timed out`, or `timed out after 30s`) inst
 | `vidar-XXXXXX` | `vidar run` and `vidar check` |
 | `slime-bench-*` | the slime_mud benchmark |
 | `vidar-bench-*` | `npm run bench` |
+| `vidar-stress-*` | `npm run stress` |
 
 They had reached about 1 GB here. Clean up when no test, benchmark or editor session is running:
 ```bash
-rm -rf "$TMPDIR"/vidar-test-* "$TMPDIR"/vidar-lsp-* "$TMPDIR"/vidar-unit-* "$TMPDIR"/slime-bench-* "$TMPDIR"/vidar-bench-*
+rm -rf "$TMPDIR"/vidar-test-* "$TMPDIR"/vidar-lsp-* "$TMPDIR"/vidar-unit-* "$TMPDIR"/slime-bench-* "$TMPDIR"/vidar-bench-* "$TMPDIR"/vidar-stress-*
 ```
 
 ## Benchmarks

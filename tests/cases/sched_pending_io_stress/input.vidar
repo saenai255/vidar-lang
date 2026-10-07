@@ -1,0 +1,53 @@
+package main
+
+import "core:fmt"
+import "core:net"
+import "vidar:sched"
+
+ROUNDS :: 2000
+
+// sched_pending_io's scenario, many times in one process: operations that finish at once,
+// or on a worker thread, while another goroutine waits on the network. A lost wakeup or a
+// busy loop shows up here as a hang, which the test runner times out.
+round :: proc() -> (ok: bool) {
+	listener, _ := sched.listen_tcp({net.IP4_Loopback, 0})
+	accepted := sched.make_chan(net.TCP_Socket, 1)
+	defer sched.close(accepted)
+	sched.go(proc[listener, accepted]() {
+		conn, _, err := sched.accept(listener)
+		if err == nil do sched.send(accepted, conn)
+	})
+	sched.yield()
+
+	f, err := sched.open("/etc/hosts")
+	if err != nil do return
+	sched.close(f)
+
+	ran := false
+	sched.blocking(proc[&ran]() { ran = true })
+	if !ran do return
+
+	udp, _ := sched.udp_socket()
+	sched.bind(udp, {net.IP4_Loopback, 0})
+	to, _ := net.bound_endpoint(udp)
+	n, serr := sched.send_to(udp, transmute([]byte)string("ping"), to)
+	sched.close(udp)
+	if n != 4 || serr != nil do return
+
+	endpoint, _ := net.bound_endpoint(listener)
+	client, _ := sched.dial(endpoint)
+	server_side := sched.recv(accepted)
+	hosts, _ := sched.open("/etc/hosts")
+	sent, ferr := sched.send_file(server_side, hosts)
+	sched.close(hosts)
+	sched.close(client)
+	sched.close(server_side)
+	sched.close(listener)
+	return sent > 0 && ferr == nil
+}
+
+main :: proc() {
+	passed := 0
+	for _ in 0..<ROUNDS do if round() do passed += 1
+	fmt.println(passed, "of", ROUNDS, "rounds")
+}

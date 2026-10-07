@@ -318,8 +318,9 @@ blocking :: proc(task: __vidar.Closure(proc(__vidar.Env))) { __task_call := task
 }
 
 // File operations run on io_uring on Linux; elsewhere nbio does them synchronously, so they go to a worker.
+// -define:VIDAR_FILES_ON_WORKERS=true sends them to workers on Linux too, to test that path there.
 @(private)
-FILES_ON_WORKERS :: ODIN_OS != .Linux
+FILES_ON_WORKERS :: #config(VIDAR_FILES_ON_WORKERS, ODIN_OS != .Linux)
 
 @(private)
 file_loop :: proc() -> ^nbio.Event_Loop {
@@ -820,7 +821,7 @@ __closure_0 :: proc(__c0: $T0, __c1: $T1) -> __vidar.Closure(proc(__vidar.Env)) 
 		d: T0,
 		c: T1,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at sched.vidar:352: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at sched.vidar:353: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env)){
 		call = proc(__env_raw: __vidar.Env) { __env := transmute(__Env)__env_raw;
@@ -836,7 +837,7 @@ __closure_1 :: proc(__c0: $T0, __c1: $T1) -> __vidar.Closure(proc(__vidar.Env)) 
 		hostname_and_maybe_port: T0,
 		r: T1,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at sched.vidar:447: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at sched.vidar:448: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env)){
 		call = proc(__env_raw: __vidar.Env) { __env := transmute(__Env)__env_raw;

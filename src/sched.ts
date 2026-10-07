@@ -328,8 +328,9 @@ blocking :: proc(task: closure()) {
 }
 
 // File operations run on io_uring on Linux; elsewhere nbio does them synchronously, so they go to a worker.
+// -define:VIDAR_FILES_ON_WORKERS=true sends them to workers on Linux too, to test that path there.
 @(private)
-FILES_ON_WORKERS :: ODIN_OS != .Linux
+FILES_ON_WORKERS :: #config(VIDAR_FILES_ON_WORKERS, ODIN_OS != .Linux)
 
 @(private)
 file_loop :: proc() -> ^nbio.Event_Loop {

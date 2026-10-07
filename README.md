@@ -245,7 +245,7 @@ main :: proc() {
 - **Every `sched` call that waits parks only the calling goroutine.**
   - Sockets and timers go through `core:nbio` (io_uring on Linux, kqueue on macOS) on the scheduler's thread. When no goroutine can run, the scheduler blocks in the event loop until one can.
   - Files use io_uring on Linux. On other systems nbio would read regular files synchronously, so file operations go to a worker thread instead.
-  - `blocking(...)` and `resolve` (the DNS resolver blocks) also run on a worker. There are 4 worker threads, each with its own event loop; set the number with `-define:VIDAR_WORKERS=<n>`. A finished operation is handed back to the scheduler's event loop, which wakes the goroutine.
+  - `blocking(...)` and `resolve` (the DNS resolver blocks) also run on a worker. There are 4 worker threads, each with its own event loop; set the number with `-define:VIDAR_WORKERS=<n>`. Outside Linux, file operations go to the workers too; `-define:VIDAR_FILES_ON_WORKERS=true` does that on Linux, to test that path there. A finished operation is handed back to the scheduler's event loop, which wakes the goroutine.
   - When no other goroutine is runnable or waiting on I/O, `blocking` runs the closure inline instead, since nothing could run in the meantime; a program that calls it only at startup never starts the workers.
   - A closure passed to `blocking` runs on another thread, with the goroutine's `context` but that thread's temp allocator. It must not touch state other goroutines use unless it synchronizes, and `context.allocator` must be thread-safe (the default heap allocator is).
   - Plain blocking calls such as `os.read`, `time.sleep` or `core:sync` locks still block every goroutine. Use the `sched` version, or wrap the call in `blocking`.
@@ -563,6 +563,7 @@ npm run test:update    # regenerate fixtures after an intended output change, th
 node scripts/test.js --only closure    # only the cases and error tests whose name contains "closure"
 VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js   # run the LSP suite against a built binary
 npm run bench          # examples/negative_cost timed against HEAD; --against <ref>, --section <name>, --runs N
+npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many times; saves a stack on a hang
 ```
 
 - **Unit tests** (`tests/unit/*.test.js`, `node:test`): lexer semicolon insertion and trivia, parser round-trips of tricky Odin syntax, parsing of the extension syntax and error recovery, compile-time evaluation, hygiene, spacing of generated code, and the import-cycle grouping (Tarjan's algorithm, merged units, prefixes, output layout).
@@ -578,6 +579,7 @@ npm run bench          # examples/negative_cost timed against HEAD; --against <r
 - **Errors** (`tests/errors/*.vidar`, and `tests/errors_pkg/<name>/` for multi-package programs): about 70 programs that must fail with a specific message. The first line of the file, or of the package's `main.vidar`, says `// error: <expected message>`.
 - **Passthrough:** a few real files from Odin's `core` library must transpile to themselves unchanged.
 - **Benchmark** (`scripts/bench.js`, not part of `npm test`): builds `examples/negative_cost` at the working tree and at a git ref in a temporary worktree, both with `-opt` and `-o:speed`, runs them alternately, and compares each section's median. It fails when a section over 0.5 ms is more than 15% slower, or when a checksum changes.
+- **Stress runs** (`scripts/stress.js`, not part of `npm test`): builds one case and runs it many times in parallel, each with a timeout, and checks its `stdout.txt`. On a hang it writes the process's CPU use (a busy loop or a wait) and a stack of every thread (`sample` on macOS, `gdb` on Linux) next to the kept binary.
 - **Language server** (`scripts/test-lsp.js`): starts the server over stdio and drives it like an editor across two workspaces (`tests/lsp/workspace`, and `tests/lsp/cycle` where packages import each other). It checks:
   - diagnostics, including errors in imported files and `odin check` on save
   - hover, definition, references and rename across packages and cycles (the rename edits are applied and the program recompiled)

@@ -17,7 +17,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 4 | 21 | Macro expansion on hover | tooling | done |
 | 5 | 19 | Leftovers from the first batch | tooling | done |
 | 6 | 1 | Closure call regression (2.9x slower call through a closure) | bug | done |
-| 7 | 2 | `sched_pending_io` busy loop | bug | todo |
+| 7 | 2 | `sched_pending_io` busy loop | bug | blocked |
 | 8 | 3 | Dangling by-reference captures in returned closures | bug | todo |
 | 9 | 5 | Intermittent Odin compiler hang | bug | todo |
 | 10 | 6 | Value interfaces / closed unions | perf | todo |
@@ -181,6 +181,13 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **2, `sched_pending_io` busy loop**: not reproduced on linux/amd64, so blocked on a macOS run. Tooling and a stress case are in.
+  - `npm run stress -- <case>` (`scripts/stress.js`) builds a case once, runs it `-n` times (`-jN` at a time, `-t` seconds each) and checks `stdout.txt`. On a hang it records the CPU use (near 100% is the busy loop, near 0% a lost wakeup) and every thread's stack (`sample` on macOS, `gdb` on Linux) in `$TMPDIR/vidar-stress-*/hang-N.txt`, and keeps the binary.
+  - `-define:VIDAR_FILES_ON_WORKERS=true` sends file operations to the worker threads on Linux, as on macOS, so the cross-thread hand-off (`worker_done` → `resume_from_worker`) runs here too.
+  - New case `sched_pending_io_stress`: the scenario 2000 times in one process, about 0.6 s (1.1 s with files on workers).
+  - Runs without a hang, Odin dev-2026-10 on a 4-core VM: `sched_pending_io` 12,000 times (8 in parallel, debug and `-o:speed`), 16,000 times with files on workers; the stress case 1,200 times, half with files on workers (2.4 million rounds). `blocking` while waiting on a worker doesn't spin either (1 s wait, 4 ms CPU).
+  - Ruled out: the two cross-thread races fixed in `core:nbio` (`exec` reading `op.l` after publishing the op, the operation pool's free list) are already in dev-2026-07; its nbio sources match dev-2026-10's. kqueue's wake-up event is `EV_CLEAR`, so it can't stay triggered.
+  - Lead for macOS: kqueue's `__tick` doesn't block when nothing is submitted to the kernel (`len(l.submitted) == 0` gives a zero timeout). If a hand-off from a worker were lost while the scheduler's loop had nothing in the kernel, `pick` would call `nbio.tick()` in a loop at 100% CPU: the reported symptom. In this test the accept goroutine keeps an accept in the kernel, so that would also need the accept to be gone. Next: `npm run stress -- tests/cases/sched_pending_io_stress -n 500` on the M3.
 - **1, closure call regression** done in the main tree, not committed yet. The planned fix didn't apply: with Odin dev-2026-10, the `Env` passed by value already goes as a pointer to the caller's closure, with no copy at the call or in the body (checked in the x86-64 and darwin/arm64 assembly). The cost was elsewhere: the call passes a pointer into the closure's own memory, so LLVM has to reload `f.call` after every call and never sees the target, even with `pairs_plain` inlined into the proc that built the closure.
   - Fix: a closure parameter that is called reads its proc into a local on entry, `__f_call := f.call`, and calls go through it. Parameters are immutable in Odin; one captured by reference is a local copy and keeps `f.call(...)`. Once inlined, the call is direct and the closure's body inlines and vectorizes.
   - Tried first, as planned: `proc(^Env, ...)` with `&f.env` and a local copy of each called parameter. That copy is a 136-byte `memcpy` per call: "closure, as a parameter" +184%, "created in a loop" +390%, and "called through" unchanged. Dropped.
