@@ -73,6 +73,8 @@ Notes on `scripts/test.js`:
   - a changed `stdout.txt` is a change in behavior and needs a reason.
 - A new case's `stdout.txt` is whatever the program printed, so read it and make sure it is right.
 
+**Other flags:** `VIDAR_ODIN_FLAGS` adds flags to every `odin build` of the runner (and of the slime_mud bench), e.g. `VIDAR_ODIN_FLAGS="-define:VIDAR_THREADS=4" node scripts/test.js` runs the suite with goroutines on 4 threads. `npm run stress -- <case> -define:VIDAR_THREADS=4` does the same for a stress run; use `-j1` for `examples/sched_io`, which writes a fixed file in `/tmp`.
+
 **Running one case:** `node scripts/test.js --only closure_values` (after `npm run build`). It combines with `--update` and `-jN`. To look at a case's output by hand, add `-opt` to the build line for `opt_*` cases, and use `input/` for multi-package cases or `examples/<name>` for an example:
 ```bash
 rm -rf "$TMPDIR/case" && node dist/cli.js build tests/cases/<name>/input.vidar -o "$TMPDIR/case"
@@ -219,7 +221,7 @@ git worktree remove --force "$TMPDIR/vidar-base"
   - These are compile errors: writing to a by-value capture (they are read-only), and capturing another closure by value.
   - Lifetime is the programmer's job. `src/escape.ts` makes it an error for a closure holding `&x` of a local or parameter to be returned, stored through a pointer, a slice or in a global, or appended to something the proc doesn't own. It follows values through locals, not into calls, so a `&x` closure passed to `sched.go` or stored by a callee still dangles unnoticed.
 - **Interface values hold a pointer** (data plus vtable). Converting a plain value is an error; write `&x` or `new_clone(x)`.
-- **Goroutines run on one thread**, with no preemption. `core:sync` locks park the whole thread.
+- **Goroutines run on one thread** unless built with `-define:VIDAR_THREADS=N`; never preempted. `core:sync` locks park the whole thread. With N threads a goroutine stays on the thread that first ran it (it isn't safe to move one after it has run: LLVM may keep a thread-local address across the stack switch), and only unstarted goroutines move.
 
 **Odin quirks found so far:**
 - A struct with blank `_` field names inside a polymorphic proc hangs the compiler.

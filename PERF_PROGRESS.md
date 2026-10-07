@@ -22,7 +22,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 9 | 5 | Intermittent Odin compiler hang | bug | blocked |
 | 10 | 6 | Value interfaces / closed unions | perf | merged (as an -opt rewrite) |
 | 11 | 7 | Generated per-type printers and JSON code | perf | merged (no unmarshal) |
-| 12 | 8 | Multithreaded (M:N) scheduler | perf | blocked (on 2) |
+| 12 | 8 | Multithreaded (M:N) scheduler | perf | merged |
 | 13 | 9 | Constant-size `make` on the stack | perf | merged |
 | 14 | 10 | Wider bounds-check elimination | perf | merged |
 | 15 | 11 | String `switch` through a perfect hash | perf | merged |
@@ -181,7 +181,14 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
-- **8, multithreaded scheduler**: not started. The plan has it start after 2 is merged, since both change `src/sched.ts`, and 2 is blocked on reproducing the busy loop on macOS. Building thread-safe channels, a shared poller and work stealing on a single-threaded scheduler with an open hang would make that hang harder to find.
+- **8, multithreaded scheduler** merged, started before 2 on request (2 is still open).
+  - `-define:VIDAR_THREADS=N`, default 1. At 1, every new lock is a `when MULTI` that compiles to nothing, and `pick` is the old loop, so existing programs are unchanged.
+  - At N: thread 0 (the first to call into `sched`) starts N-1 scheduler threads, each parked forever on its own stack so it only runs goroutines. Each thread has its own run queue (behind a mutex), event loop and stack pool. `go` hands goroutines out round robin and wakes that thread (`sema_post` and `nbio.wake_up`). A thread with nothing to run takes an unstarted goroutine from another thread's queue, then waits on its semaphore or its event loop for up to 10 ms (`IDLE_POLL`) and looks again.
+  - A goroutine stays on the thread that first runs it (`G.owner`). It isn't safe to move one after it has run: LLVM may keep a thread-local's address across the stack switch, and the goroutine would read the old thread's scheduler. Pinning also makes parking simple: a wakeup from another thread only queues the goroutine on its owner, which is the thread parking it, so locks are released before `park`, and a wakeup that comes first just means the owner picks the same goroutine again. Each thread's own stack (`sched.main`) counts as started, or `main` could be stolen.
+  - Channels, `Mutex` and `Wait_Group` have a guard each; `select` takes its channels' guards in address order and claims its case with a compare-and-swap; `workers.next` is atomic. A goroutine started on another thread gets that thread's temp allocator.
+  - Not done: moving goroutines that have run (real work stealing), and deadlock detection at N > 1, where a deadlock waits forever.
+  - Tests: the whole suite passes 4 times in a row with `VIDAR_ODIN_FLAGS="-define:VIDAR_THREADS=4"`; `examples/sched_io` now prints the mutex order sorted, since several threads may take the lock in any order. New case `sched_fanout` (fan-out, a contended `Mutex` with a `Wait_Group`, `select` over closing channels, unbuffered ping-pong), stressed 200 times at 2 and at 4 threads, and 150 times with `-opt -o:speed` at 4, with `examples/goroutines`, `sched_io` and the pending-I/O cases: no hang, no wrong output. slime_mud's bench runs at 4 threads with no failed clients.
+  - `examples/fanout` (64 jobs of 2 million steps): 60 ms at 1 thread, 33 at 2, 16 at 4.
 - **15, struct field reordering** merged; hot/cold splitting is not done.
   - `src/reorder.ts`, run once per program from `autoOptimize`. Candidates: plain structs declared in the program (not in `vidar:sched`), at least two field groups, every field type's size and alignment known exactly (Odin's rules: basic types, pointers, slices 16, dynamic arrays 40, maps 32, fixed arrays, enums by base type, nested plain structs; closures are out, since `VIDAR_CLOSURE_ENV` sets their size). Field groups are sorted by alignment, largest first, stably; only when that saves bytes.
   - Refused, with the reason as a `not reordered` hint, when anything could see the layout: `size_of`/`align_of`/`offset_of`/`type_info_of`/`typeid_of`/`type_of`/`transmute` on it, a cast or conversion of something holding it, a map key holding it, a value holding it converted to `any` (a declaration or a vidar proc parameter of type `any`), a value holding it passed to anything but vidar procs, interface methods and closures (that is: core, foreign and proc values, and so fmt and encoding/json), a mention in a foreign block, or an exported proc taking it. Values whose type the analyzer can't tell are judged by the variables in them.

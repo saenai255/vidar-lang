@@ -18,6 +18,8 @@ const { loadProgram, emitProgram } = require("../dist/project.js");
 const { CompileError } = require("../dist/lexer.js");
 
 const UPDATE = process.argv.includes("--update");
+// extra flags for every odin build, e.g. VIDAR_ODIN_FLAGS="-define:VIDAR_THREADS=4"
+const EXTRA = (process.env.VIDAR_ODIN_FLAGS ?? "").split(/\s+/).filter(Boolean);
 const ONLY = process.argv.includes("--only") ? process.argv[process.argv.indexOf("--only") + 1] : undefined;
 const picked = (name) => !ONLY || name.includes(ONLY);
 
@@ -95,7 +97,7 @@ async function odinRun(dir) {
   let b;
   // odin's checker sometimes hangs; one retry
   for (let i = 0; i < 2; i++) {
-    b = await run("odin", ["build", dir, `-out:${prog}`], 120_000);
+    b = await run("odin", ["build", dir, `-out:${prog}`, ...EXTRA], 120_000);
     if (!b.timedOut) break;
   }
   if (b.status !== 0) return { status: b.status, stdout: "", stderr: b.timedOut ? "odin build timed out\n" : b.stderr };

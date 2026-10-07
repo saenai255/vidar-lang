@@ -4,6 +4,8 @@
 //   node examples/slime_mud/bench/bench.js [--quick]
 // Prints a Markdown report and writes it to examples/slime_mud/bench/results.md.
 const { spawnSync, spawn } = require("node:child_process");
+// extra flags for the Vidar build, e.g. VIDAR_ODIN_FLAGS="-define:VIDAR_THREADS=4"
+const EXTRA = (process.env.VIDAR_ODIN_FLAGS ?? "").split(/\s+/).filter(Boolean);
 const { mkdirSync, rmSync, statSync, readdirSync, readFileSync, writeFileSync, mkdtempSync } = require("node:fs");
 const { join, resolve } = require("node:path");
 const { tmpdir, cpus, totalmem, release } = require("node:os");
@@ -53,7 +55,7 @@ const builds = {};
 console.error("building...");
 builds.transpile = timeRuns(RUNS.build, () => run("node", [CLI, "build", join(EX, "vidar"), "-opt", "-o", out("vidar_src")]).ms);
 for (const opt of ["minimal", "speed"]) {
-  builds[`vidar_${opt}`] = timeRuns(RUNS.build, () => run("odin", ["build", out("vidar_src"), `-out:${out(`vidar_${opt}`)}`, `-o:${opt}`, "-define:VIDAR_CLOSURE_ENV=128"]).ms);
+  builds[`vidar_${opt}`] = timeRuns(RUNS.build, () => run("odin", ["build", out("vidar_src"), `-out:${out(`vidar_${opt}`)}`, `-o:${opt}`, "-define:VIDAR_CLOSURE_ENV=128", ...EXTRA]).ms);
   builds[`odin_${opt}`] = timeRuns(RUNS.build, () => run("odin", ["build", join(EX, "odin"), `-out:${out(`odin_${opt}`)}`, `-o:${opt}`]).ms);
 }
 run("odin", ["build", join(EX, "bench/loadgen"), `-out:${out("loadgen")}`, "-o:speed"]);

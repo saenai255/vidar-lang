@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:slice"
 import "core:net"
 import "core:time"
 import "vidar:sched"
@@ -72,7 +73,10 @@ main :: proc() {
 		sched.sleep(5 * time.Millisecond)
 		sched.send(order, i)
 	})
-	fmt.println("mutex order:", sched.recv(order), sched.recv(order), sched.recv(order))
+	// sorted: with -define:VIDAR_THREADS above 1 they may take the lock in any order
+	got := [3]int{sched.recv(order), sched.recv(order), sched.recv(order)}
+	slice.sort(got[:])
+	fmt.println("mutex order:", got[0], got[1], got[2])
 
 	// after() as a select timeout
 	never := sched.make_chan(int)

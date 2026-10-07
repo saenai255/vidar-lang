@@ -5,6 +5,7 @@ import "core:mem"
 import "core:mem/virtual"
 import "core:nbio"
 import "core:net"
+import "core:slice"
 import "core:sync"
 import "core:thread"
 import "core:time"
@@ -29,6 +30,14 @@ STACK_SIZE :: #config(VIDAR_STACK_SIZE, 256 * mem.Kilobyte)
 GUARD_SIZE :: 16 * mem.Kilobyte
 POLL_EVERY :: 61
 WORKERS :: #config(VIDAR_WORKERS, 4)
+// goroutines run on this many threads; above 1, each thread runs its own scheduler, a goroutine
+// stays on the thread that first runs it, and goroutines that haven't started are shared out
+THREADS :: #config(VIDAR_THREADS, 1)
+@(private)
+MULTI :: THREADS > 1
+// how long an idle thread waits before looking for goroutines to take from the others
+@(private)
+IDLE_POLL :: 10 * time.Millisecond
 
 @(private)
 G :: struct {
@@ -37,6 +46,9 @@ G :: struct {
 	task:  __vidar.Closure(proc(__vidar.Env)),
 	ctx:   runtime.Context,
 	next:  ^G,
+	// with several threads: the scheduler it runs on (set when it first runs), and whether it has
+	owner:   ^Scheduler,
+	started: bool,
 }
 
 @(private)
@@ -50,40 +62,118 @@ Scheduler :: struct {
 	since_poll:  int,
 	free_stacks: [dynamic][]byte,
 	loop:        ^nbio.Event_Loop,
+	// with several threads: other threads add to the run queue, and wake this one
+	q_lock:      sync.Mutex,
+	wake:        sync.Sema,
+	is_proc:     bool,
 }
 
 @(private, thread_local)
 sched: Scheduler
+
+// with several threads: every thread's scheduler, and where new goroutines go next
+@(private)
+procs: [THREADS]^Scheduler
+@(private)
+next_proc: int
+@(private)
+procs_once: sync.Once
+@(private)
+procs_up: sync.Sema
+
+// locks that exist only with several threads
+@(private)
+mlock :: #force_inline proc(m: ^sync.Mutex) { when MULTI do sync.mutex_lock(m) }
+@(private)
+munlock :: #force_inline proc(m: ^sync.Mutex) { when MULTI do sync.mutex_unlock(m) }
 
 @(private)
 sched_init :: proc() {
 	if sched.inited do return
 	sched.inited = true
 	sched.cur = &sched.main
+	// the thread's own stack: it runs here and nowhere else
+	sched.main.started = true
+	sched.main.owner = &sched
 	sched.free_stacks.allocator = runtime.heap_allocator()
 	err := nbio.acquire_thread_event_loop()
 	assert(err == nil, "vidar:sched: could not start the I/O event loop")
 	sched.loop = nbio.current_thread_event_loop()
+	when MULTI {
+		// the first thread to get here is thread 0; it starts the others, which skip this
+		if sched.is_proc do return
+		sync.once_do(&procs_once, proc() {
+			procs[0] = &sched
+			for i in 1..<THREADS do thread.create_and_start_with_poly_data(i, proc_main, self_cleanup = true)
+			for _ in 1..<THREADS do sync.sema_wait(&procs_up)
+		})
+	}
+}
+
+// A scheduler thread: its own scheduler, parked forever, so it only runs goroutines.
+@(private)
+proc_main :: proc(i: int) {
+	sched.is_proc = true
+	sched_init()
+	procs[i] = &sched
+	sync.sema_post(&procs_up)
+	block_forever()
 }
 
 @(private)
 ready :: proc(g: ^G) {
+	p := &sched
+	when MULTI do if g.owner != nil do p = g.owner
+	mlock(&p.q_lock)
 	g.next = nil
-	if sched.tail == nil {
-		sched.head = g
+	if p.tail == nil {
+		p.head = g
 	} else {
-		sched.tail.next = g
+		p.tail.next = g
 	}
-	sched.tail = g
+	p.tail = g
+	munlock(&p.q_lock)
+	when MULTI {
+		if p != &sched {
+			sync.sema_post(&p.wake)
+			nbio.wake_up(p.loop)
+		}
+	}
 }
 
 @(private)
 pop_ready :: proc() -> ^G {
+	mlock(&sched.q_lock)
+	defer munlock(&sched.q_lock)
 	g := sched.head
 	if g == nil do return nil
 	sched.head = g.next
 	if sched.head == nil do sched.tail = nil
 	return g
+}
+
+// With several threads: a goroutine that hasn't started yet, taken from another thread's queue.
+@(private)
+steal :: proc() -> ^G {
+	when MULTI {
+		for p in procs {
+			if p == &sched || p == nil do continue
+			sync.mutex_lock(&p.q_lock)
+			prev: ^G
+			for g := p.head; g != nil; prev, g = g, g.next {
+				if g.started do continue
+				if prev == nil do p.head = g.next
+				else do prev.next = g.next
+				if p.tail == g do p.tail = prev
+				sync.mutex_unlock(&p.q_lock)
+				g.next = nil
+				g.owner = &sched
+				return g
+			}
+			sync.mutex_unlock(&p.q_lock)
+		}
+	}
+	return nil
 }
 
 // The next goroutine to run; polls the event loop now and then, and blocks on it when nothing is runnable.
@@ -94,14 +184,30 @@ pick :: proc() -> ^G {
 		sched.since_poll = 0
 		nbio.tick(0)
 	}
-	for {
-		if g := pop_ready(); g != nil do return g
-		if sched.io_waiting == 0 do panic("all goroutines are asleep - deadlock!")
-		sched.since_poll = 0
-		// ops done without the kernel complete at tick start, then the tick blocks anyway
-		nbio.tick(0)
-		if g := pop_ready(); g != nil do return g
-		nbio.tick()
+	when MULTI {
+		// other threads may still wake a goroutine here, so an idle thread waits instead of declaring a deadlock
+		for {
+			if g := pop_ready(); g != nil do return g
+			if g := steal(); g != nil do return g
+			sched.since_poll = 0
+			if sched.io_waiting > 0 {
+				nbio.tick(0)
+				if g := pop_ready(); g != nil do return g
+				nbio.tick(IDLE_POLL)
+			} else {
+				sync.sema_wait_with_timeout(&sched.wake, IDLE_POLL)
+			}
+		}
+	} else {
+		for {
+			if g := pop_ready(); g != nil do return g
+			if sched.io_waiting == 0 do panic("all goroutines are asleep - deadlock!")
+			sched.since_poll = 0
+			// ops done without the kernel complete at tick start, then the tick blocks anyway
+			nbio.tick(0)
+			if g := pop_ready(); g != nil do return g
+			nbio.tick()
+		}
 	}
 }
 
@@ -172,12 +278,22 @@ go :: proc(task: __vidar.Closure(proc(__vidar.Env))) {
 		frame[6] = uintptr(rawptr(vidar_entry))
 	}
 	g.sp = frame
+	when MULTI {
+		// round robin; an idle thread can also take it before it starts
+		g.owner = procs[(sync.atomic_add(&next_proc, 1)) % THREADS]
+	}
 	ready(g)
 }
 
 @(private, export, link_name = "vidar_go_start")
 go_start :: proc "c" (g: ^G) {
 	context = g.ctx
+	when MULTI {
+		// this thread's temp allocator, not the one of the thread that started it
+		context.temp_allocator = runtime.default_context().temp_allocator
+		g.started = true
+		g.owner = &sched
+	}
 	reap()
 	g.task.call(g.task.env)
 	sched.zombie = g
@@ -249,8 +365,7 @@ worker_loop :: proc() -> ^nbio.Event_Loop {
 		}
 		for _ in 0..<WORKERS do sync.sema_wait(&workers.ready)
 	})
-	workers.next = (workers.next + 1) % WORKERS
-	return workers.loops[workers.next]
+	return workers.loops[(sync.atomic_add(&workers.next, 1) + 1) % WORKERS]
 }
 
 // Runs on a worker: hands the finished operation back to the goroutine's own loop.
@@ -510,21 +625,29 @@ close :: proc{chan_close, socket_close, udp_close, file_close}
 Mutex :: struct {
 	locked:  bool,
 	waiters: Wait_Queue,
+	guard:   sync.Mutex,
 }
 
+// Parking after the guard is released is safe: only the goroutine's own thread runs it, so a
+// wakeup that comes first just queues it there.
 lock :: proc(m: ^Mutex) {
 	sched_init()
+	mlock(&m.guard)
 	if !m.locked {
 		m.locked = true
+		munlock(&m.guard)
 		return
 	}
 	w := Waiter{g = sched.cur}
 	enqueue(&m.waiters, &w)
+	munlock(&m.guard)
 	park()
 }
 
 // Hands the lock straight to the longest waiter, if any.
 unlock :: proc(m: ^Mutex) {
+	mlock(&m.guard)
+	defer munlock(&m.guard)
 	assert(m.locked, "unlock of an unlocked sched.Mutex")
 	if w := dequeue(&m.waiters); w != nil {
 		ready(w.g)
@@ -534,6 +657,8 @@ unlock :: proc(m: ^Mutex) {
 }
 
 try_lock :: proc(m: ^Mutex) -> bool {
+	mlock(&m.guard)
+	defer munlock(&m.guard)
 	if m.locked do return false
 	m.locked = true
 	return true
@@ -584,9 +709,14 @@ dequeue :: proc(q: ^Wait_Queue) -> ^Waiter {
 	for w := q.head; w != nil; w = q.head {
 		unlink(q, w)
 		if w.sel == nil do return w
-		if w.sel.fired < 0 {
-			w.sel.fired = w.case_index
-			return w
+		// a select waits on several channels, whose locks are taken one at a time
+		when MULTI {
+			if _, won := sync.atomic_compare_exchange_strong(&w.sel.fired, -1, w.case_index); won do return w
+		} else {
+			if w.sel.fired < 0 {
+				w.sel.fired = w.case_index
+				return w
+			}
 		}
 	}
 	return nil
@@ -599,6 +729,7 @@ Raw_Chan :: struct {
 	head, count:  int,
 	closed:       bool,
 	recvq, sendq: Wait_Queue,
+	guard:        sync.Mutex,
 }
 
 // A channel is a handle: copies share one queue. The zero Chan is nil and blocks forever.
@@ -668,9 +799,14 @@ chan_send :: proc(c: Chan($T), v: T) {
 	sched_init()
 	v := v
 	if c.raw == nil do block_forever()
-	if try_send_raw(c.raw, &v) do return
+	mlock(&c.raw.guard)
+	if try_send_raw(c.raw, &v) {
+		munlock(&c.raw.guard)
+		return
+	}
 	w := Waiter{g = sched.cur, elem = &v}
 	enqueue(&c.raw.sendq, &w)
+	munlock(&c.raw.guard)
 	park()
 	if !w.ok do panic("send on closed channel")
 }
@@ -679,9 +815,14 @@ chan_send :: proc(c: Chan($T), v: T) {
 chan_recv :: proc(c: Chan($T)) -> (v: T, ok: bool) #optional_ok {
 	sched_init()
 	if c.raw == nil do block_forever()
-	if done, got := try_recv_raw(c.raw, &v); done do return v, got
+	mlock(&c.raw.guard)
+	if done, got := try_recv_raw(c.raw, &v); done {
+		munlock(&c.raw.guard)
+		return v, got
+	}
 	w := Waiter{g = sched.cur, elem = &v}
 	enqueue(&c.raw.recvq, &w)
+	munlock(&c.raw.guard)
 	park()
 	return v, w.ok
 }
@@ -689,6 +830,8 @@ chan_recv :: proc(c: Chan($T)) -> (v: T, ok: bool) #optional_ok {
 chan_close :: proc(c: Chan($T)) {
 	sched_init()
 	if c.raw == nil do panic("close of nil channel")
+	mlock(&c.raw.guard)
+	defer munlock(&c.raw.guard)
 	if c.raw.closed do panic("close of closed channel")
 	c.raw.closed = true
 	for w := dequeue(&c.raw.recvq); w != nil; w = dequeue(&c.raw.recvq) {
@@ -702,7 +845,7 @@ chan_close :: proc(c: Chan($T)) {
 	}
 }
 
-chan_len :: proc(c: Chan($T)) -> int { return c.raw.count if c.raw != nil else 0 }
+chan_len :: proc(c: Chan($T)) -> int { return sync.atomic_load(&c.raw.count) if c.raw != nil else 0 }
 chan_cap :: proc(c: Chan($T)) -> int { return c.raw.capacity if c.raw != nil else 0 }
 
 // ---- select ----
@@ -755,8 +898,32 @@ select_cases :: proc(cases: []Select_Case, nonblocking: bool) -> int {
 	return index
 }
 
+// With several threads, a select holds every channel's guard while it tries and enqueues, taking
+// them in address order so two selects can't deadlock.
+@(private)
+select_lock :: proc(cases: []Select_Case, take: bool) {
+	when MULTI {
+		chans := make([]^Raw_Chan, len(cases), runtime.heap_allocator())
+		defer delete(chans, runtime.heap_allocator())
+		n := 0
+		for c in cases do if c.ch != nil {
+			chans[n] = c.ch
+			n += 1
+		}
+		slice.sort(chans[:n])
+		for ch, i in chans[:n] {
+			if i > 0 && ch == chans[i - 1] do continue
+			if take do sync.mutex_lock(&ch.guard)
+			else do sync.mutex_unlock(&ch.guard)
+		}
+	}
+}
+
 @(private)
 select_raw :: proc(cases: []Select_Case, nonblocking: bool) -> (index: int, ok: bool) {
+	select_lock(cases, true)
+	locked := true
+	defer if locked do select_lock(cases, false)
 	for &c, i in cases {
 		if c.ch == nil do continue
 		if c.is_send {
@@ -775,7 +942,11 @@ select_raw :: proc(cases: []Select_Case, nonblocking: bool) -> (index: int, ok: 
 		waiters[i] = Waiter{g = sched.cur, elem = c.elem, sel = &sel, case_index = i}
 		enqueue(&c.ch.sendq if c.is_send else &c.ch.recvq, &waiters[i])
 	}
+	select_lock(cases, false)
+	locked = false
 	park()
+	select_lock(cases, true)
+	locked = true
 	for &c, i in cases {
 		if c.ch == nil || i == sel.fired do continue
 		q := &c.ch.sendq if c.is_send else &c.ch.recvq
@@ -794,9 +965,12 @@ select_raw :: proc(cases: []Select_Case, nonblocking: bool) -> (index: int, ok: 
 Wait_Group :: struct {
 	count:   int,
 	waiters: Wait_Queue,
+	guard:   sync.Mutex,
 }
 
 add :: proc(wg: ^Wait_Group, n := 1) {
+	mlock(&wg.guard)
+	defer munlock(&wg.guard)
 	wg.count += n
 	if wg.count < 0 do panic("negative wait group counter")
 	if wg.count == 0 {
@@ -808,9 +982,14 @@ done :: proc(wg: ^Wait_Group) { add(wg, -1) }
 
 wait :: proc(wg: ^Wait_Group) {
 	sched_init()
-	if wg.count == 0 do return
+	mlock(&wg.guard)
+	if wg.count == 0 {
+		munlock(&wg.guard)
+		return
+	}
 	w := Waiter{g = sched.cur}
 	enqueue(&wg.waiters, &w)
+	munlock(&wg.guard)
 	park()
 }
 
@@ -821,7 +1000,7 @@ __closure_0 :: proc(__c0: $T0, __c1: $T1) -> __vidar.Closure(proc(__vidar.Env)) 
 		d: T0,
 		c: T1,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at sched.vidar:353: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at sched.vidar:468: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env)){
 		call = proc(__env_raw: __vidar.Env) { __env := transmute(__Env)__env_raw;
@@ -837,7 +1016,7 @@ __closure_1 :: proc(__c0: $T0, __c1: $T1) -> __vidar.Closure(proc(__vidar.Env)) 
 		hostname_and_maybe_port: T0,
 		r: T1,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at sched.vidar:448: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at sched.vidar:563: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env)){
 		call = proc(__env_raw: __vidar.Env) { __env := transmute(__Env)__env_raw;

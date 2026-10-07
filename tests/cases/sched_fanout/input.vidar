@@ -1,0 +1,72 @@
+package main
+
+import "core:fmt"
+import "vidar:sched"
+
+// CPU work spread over goroutines, and the sync between them: the same output at any
+// -define:VIDAR_THREADS, since every result is combined in an order-independent way.
+
+work :: proc(seed: int) -> int {
+	x := seed
+	for _ in 0..<200_000 do x = (x * 1103515245 + 12345) & 0x7fffffff
+	return x
+}
+
+main :: proc() {
+	// fan out, fan in
+	results := sched.make_chan(int, 4)
+	for i in 0..<64 do sched.go(proc[i, results]() { sched.send(results, work(i)) })
+	total := 0
+	for _ in 0..<64 do total += sched.recv(results)
+	fmt.println("fan-out:", total)
+
+	// a counter behind a sched.Mutex, many goroutines, a wait group
+	mu: sched.Mutex
+	wg: sched.Wait_Group
+	count := 0
+	sched.add(&wg, 32)
+	for _ in 0..<32 do sched.go(proc[&mu, &wg, &count]() {
+		for _ in 0..<1000 {
+			sched.lock(&mu)
+			count += 1
+			sched.unlock(&mu)
+			if count % 97 == 0 do sched.yield()
+		}
+		sched.done(&wg)
+	})
+	sched.wait(&wg)
+	fmt.println("mutex:", count)
+
+	// select over several channels, from several senders, until all are closed
+	a := sched.make_chan(int)
+	b := sched.make_chan(int, 2)
+	sched.go(proc[a]() { for i in 1..=100 do sched.send(a, i); sched.close(a) })
+	sched.go(proc[b]() { for i in 1..=100 do sched.send(b, 1000 * i); sched.close(b) })
+	sum, open_a, open_b := 0, true, true
+	for open_a || open_b {
+		x: int
+		ok: bool
+		switch sched.select(sched.on_recv(a, &x, &ok), sched.on_recv(b, &x, &ok)) {
+		case 0: if ok do sum += x
+			else do open_a = false
+		case 1: if ok do sum += x
+			else do open_b = false
+		}
+		if !open_a do a = {}
+		if !open_b do b = {}
+	}
+	fmt.println("select:", sum)
+
+	// unbuffered ping-pong between two goroutines
+	ping := sched.make_chan(int)
+	pong := sched.make_chan(int)
+	sched.go(proc[ping, pong]() { for v in 0..<500 { sched.send(ping, v); _ = sched.recv(pong) } ; sched.close(ping) })
+	hits := 0
+	for {
+		v, ok := sched.recv(ping)
+		if !ok do break
+		hits += v
+		sched.send(pong, v)
+	}
+	fmt.println("ping-pong:", hits)
+}

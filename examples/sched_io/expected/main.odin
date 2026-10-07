@@ -1,6 +1,7 @@
 package main; import __vidar "vidar_runtime"
 
 import "core:fmt"
+import "core:slice"
 import "core:net"
 import "core:time"
 import sched "vidar_sched"
@@ -55,7 +56,10 @@ main :: proc() {
 	mu: sched.Mutex
 	order := sched.make_chan(int, 3)
 	for i in 0..<3 do sched.go(__closure_3(i, &mu, order))
-	fmt.println("mutex order:", sched.recv(order), sched.recv(order), sched.recv(order))
+	// sorted: with -define:VIDAR_THREADS above 1 they may take the lock in any order
+	got := [3]int{sched.recv(order), sched.recv(order), sched.recv(order)}
+	slice.sort(got[:])
+	fmt.println("mutex order:", got[0], got[1], got[2])
 
 	// after() as a select timeout
 	never := sched.make_chan(int)
@@ -72,7 +76,7 @@ __closure_0 :: proc(__c0: $T0, __c1: $T1) -> __vidar.Closure(proc(__vidar.Env)) 
 		ticks: T0,
 		stop: T1,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:14: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:15: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env)){
 		call = proc(__env_raw: __vidar.Env) { __env := transmute(__Env)__env_raw;
@@ -90,7 +94,7 @@ __closure_1 :: proc(__c0: $T0, __c1: $T1) -> __vidar.Closure(proc(__vidar.Env)) 
 		path: T0,
 		done: T1,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:39: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:40: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env)){
 		call = proc(__env_raw: __vidar.Env) { __env := transmute(__Env)__env_raw;
@@ -105,7 +109,7 @@ __closure_2 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env)) {
 	__Caps :: struct {
 		server: T0,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:55: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:56: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env)){
 		call = proc(__env_raw: __vidar.Env) { __env := transmute(__Env)__env_raw;
@@ -123,7 +127,7 @@ __closure_3 :: proc(__c0: $T0, __c1: $T1, __c2: $T2) -> __vidar.Closure(proc(__v
 		mu: T1,
 		order: T2,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:69: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:70: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env)){
 		call = proc(__env_raw: __vidar.Env) { __env := transmute(__Env)__env_raw;

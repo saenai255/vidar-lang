@@ -1,0 +1,29 @@
+package main
+
+// CPU-bound work fanned out over goroutines. With -define:VIDAR_THREADS=N they run on N threads:
+//   vidar build examples/fanout -o out/fanout
+//   odin build out/fanout -o:speed -define:VIDAR_THREADS=4 -out:out/fanout/prog && out/fanout/prog --bench
+// The checksum is the same at any thread count; --bench also prints the time.
+
+import "core:fmt"
+import "core:os"
+import "core:time"
+import "vidar:sched"
+
+work :: proc(seed, steps: int) -> int {
+	x := seed
+	for _ in 0..<steps do x = (x * 1103515245 + 12345) & 0x7fffffff
+	return x
+}
+
+main :: proc() {
+	bench := len(os.args) > 1 && os.args[1] == "--bench"
+	jobs, steps := 64, 2_000_000 if bench else 20_000
+	start := time.tick_now()
+	results := sched.make_chan(int, jobs)
+	for i in 0..<jobs do sched.go(proc[i, steps, results]() { sched.send(results, work(i, steps)) })
+	total := 0
+	for _ in 0..<jobs do total += sched.recv(results)
+	fmt.println("checksum", total)
+	if bench do fmt.printfln("%d jobs on %d threads: %.1f ms", jobs, sched.THREADS, time.duration_milliseconds(time.tick_since(start)))
+}
