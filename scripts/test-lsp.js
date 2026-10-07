@@ -1,7 +1,7 @@
 // End-to-end language server test: drives dist/lsp/server.js over stdio.
 const { spawn, spawnSync } = require("node:child_process");
 const { mkdtempSync, readFileSync, writeFileSync, realpathSync, cpSync } = require("node:fs");
-const { join } = require("node:path");
+const { dirname, join } = require("node:path");
 const { tmpdir } = require("node:os");
 const { pathToFileURL } = require("node:url");
 
@@ -136,6 +136,17 @@ function change(text) {
   const defMacro = await request("textDocument/definition", { textDocument: doc, position: at("fmt.println", "twice", 1) });
   check("definition of macro call jumps to the comptime proc", defMacro.result?.range.start.line === at("twice :: proc!", "twice").line, JSON.stringify(defMacro.result));
 
+  // hover on a macro call's name shows the code it expands to
+  const expansion = async (lineHas, name) => (await request("textDocument/hover", { textDocument: doc, position: at(lineHas, name, 1) })).result?.contents?.value ?? "";
+  const hx = await expansion("fmt.println", "twice");
+  check("hover on an expression macro shows its expansion", hx.includes("*expands to*") && hx.includes("count * 2"), hx);
+  const hc = await expansion("check!(count", "check");
+  check("hover on a built-in macro shows its expansion", hc.includes("__check_lhs := count") && hc.includes("__vidar.check_failed_cmp"), hc);
+  const hs = await expansion("geo.swap!", "swap");
+  check("hover on a statement macro from another package shows its expansion", /tmp\w* := lo\n\s*lo = hi\n\s*hi = tmp/.test(hs), hs);
+  const hDecl = (await request("textDocument/hover", { textDocument: doc, position: at("twice :: proc!", "twice", 1) })).result?.contents?.value ?? "";
+  check("hover on a macro's declaration shows no expansion", hDecl.includes("proc!") && !hDecl.includes("expands to"), hDecl);
+
   const refs = await request("textDocument/references", { textDocument: doc, position: at("count := 0", "count"), context: { includeDeclaration: true } });
   check("references include capture list, closure body and macro argument", refs.result?.length === 6, JSON.stringify(refs.result?.map((r) => r.range.start)));
 
@@ -148,10 +159,10 @@ function change(text) {
     const l = renamed[e.range.start.line];
     renamed[e.range.start.line] = l.slice(0, e.range.start.character) + e.newText + l.slice(e.range.end.character);
   }
-  const { transpile } = require("../dist/cli.js");
+  const { emitProgram, loadProgram } = require("../dist/project.js");
   let renameOk = false;
   try {
-    const out = [...transpile([{ path: file, text: renamed.join("\n") }]).values()][0];
+    const out = emitProgram(loadProgram(dirname(file), { overrides: new Map([[file, renamed.join("\n")]]) })).files.get("main.odin");
     renameOk = !/\bcount\b/.test(renamed.join("\n")) && out.includes("clicks := 0");
   } catch (e) {
     renameOk = false;
@@ -383,7 +394,6 @@ function change(text) {
   check("definition of a catch error binding", sameLine(defErr, mAt("catch err", "err")), JSON.stringify(defErr));
 
   // renaming every symbol must give a program that still transpiles to the same code
-  const { loadProgram, emitProgram } = require("../dist/project.js");
   const emitted = (d, overrides) => {
     const p = loadProgram(d, { tolerant: true, overrides });
     if (p.errors.length) return `error: ${p.errors[0].message}`;

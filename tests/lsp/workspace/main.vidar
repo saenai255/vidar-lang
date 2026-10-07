@@ -25,5 +25,7 @@ main :: proc() {
 	s: Shape = &sq
 	box := { size = 2, label = "box" }
 	_ = box.size + len(box.label)
+	lo, hi := 2, 1
+	geo.swap!(lo, hi)
 	fmt.println(v.x, count, area(s), twice!(count))
 }

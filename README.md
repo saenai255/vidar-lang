@@ -514,7 +514,7 @@ Bounds checks rarely matter: LLVM already removes most of them in loops like the
 | Feature | Details |
 |---|---|
 | Diagnostics | vidar errors as you type, several at once. A declaration that doesn't parse is skipped and the rest of the file is still checked. On save, `odin check` runs on the generated code and its errors are shown on the matching `.vidar` lines. |
-| Hover | Signature and kind for procs, types, interfaces (with their impls), interface methods (with their interface and the procs implementing them), macros, imports, locals and struct fields. Also shows the generated Odin name (when a cycle prefixes it) and whether a variable is captured by reference. |
+| Hover | Signature and kind for procs, types, interfaces (with their impls), interface methods (with their interface and the procs implementing them), macros, imports, locals and struct fields. Also shows the generated Odin name (when a cycle prefixes it) and whether a variable is captured by reference. On a macro call's name, the code it expands to, as the emitter writes it, with statements it runs first (`do!`); cut after 40 lines. |
 | Go to definition | Names, `pkg.member` (into the other package's file), macro calls (`name!`, `pkg.name!`), struct fields, procs bound in an `impl`, and captured variables (jumps to the original declaration). |
 | References / rename | Follows a variable through closure capture lists and into macro arguments; works across packages. |
 | Completion | After `pkg.`, the package's public members; after `value.`, struct fields; otherwise everything in scope, plus macros and keywords. While the line you're typing doesn't parse yet, completion uses the last good analysis. |

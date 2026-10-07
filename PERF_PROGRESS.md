@@ -14,7 +14,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 1 | 17 | Benchmark regression check | tooling | done |
 | 2 | 20 | One command to rebuild and reinstall the VS Code extension | tooling | done |
 | 3 | 18 | `@(no_alloc)` and `@(hot)` checks | tooling | done |
-| 4 | 21 | Macro expansion on hover | tooling | todo |
+| 4 | 21 | Macro expansion on hover | tooling | done |
 | 5 | 19 | Leftovers from the first batch | tooling | todo |
 | 6 | 1 | Closure call regression (2.9x slower call through a closure) | bug | todo |
 | 7 | 2 | `sched_pending_io` busy loop | bug | todo |
@@ -181,6 +181,7 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **21, macro expansion on hover** done in the main tree. The emitter records the code it writes for each macro call when given an `expansions` map (`emitProgram(p, expansions)`); the language server emits once per analysis, on the first hover over a macro call's name, and appends that code to the macro's hover. Statements a macro hoists before its statement (`do!`, values evaluated once) are tagged with the macro calls being expanded (`_hoistedFor`) and shown first. Comptime calls show the value they folded to (`fib!(20)` expands to `6765`). The rename check in `scripts/test-lsp.js` now loads the whole workspace, since the workspace uses a macro from `geo`.
 - **18, `@(no_alloc)` and `@(hot)`** done in the main tree, in a new `src/checks.ts` rather than `autoopt.ts`/`analyzer.ts`.
   - `@(no_alloc)` follows calls through procs with bodies, proc groups, nested proc constants and interface methods (when the interface is closed), memoized per proc. A call it can't follow says "can't be checked" rather than "can allocate". The backstop is a `when __vidar.NO_ALLOC_CHECKS { ... }` on the body's first line (true at `-o:none` and `-o:minimal`), which also lands in `@(specialize)` copies; it adds two lines to every `expected/vidar_runtime`.
   - `@(hot)` needed decisions against that weren't recorded, so `-opt` now also hints `no bounds proof` (a statement in a loop with an index that keeps its check) and `no direct call` (a call through a closure value, unless the proc has closure copies). Allocations in a loop are found by `@(hot)` itself. Hints are now always collected under `-opt`; `-opt-report` only decides whether to print them, and `LoadOptions.report` is gone.

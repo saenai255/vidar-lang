@@ -282,6 +282,10 @@ interface Pretty {
 
 export class Emitter {
   usesRuntime = false;
+  /** when set, the code written for each macro call, by the call (for hovers): the statements it hoisted, then its own */
+  expansions: Map<Node, string[]> | null = null;
+  /** with `expansions`: statements a macro call hoisted before its statement */
+  private hoistedText = new Map<Node, string[]>();
   private fileUsesRuntime = false;
   private helpers: string[] = [];
   private callHelpers = new Map<string, string>();
@@ -423,13 +427,13 @@ export class Emitter {
         const exp: Expr = A(n)._expansion;
         // parentheses around an expansion that is a whole argument or value are only noise
         const bare = A(n)._bare && exp.k === "Paren" ? exp.x : exp;
-        return this.inPretty(n, () => this.emit(bare)) + this.skipLines(n);
+        return this.expanded(n, this.inPretty(n, () => this.emit(bare))) + this.skipLines(n);
       }
       case "ExprStmt": {
         const exp: Block | undefined = A(n)._expansion;
         if (exp) {
           if (n.x.k === "MacroCall") this.note(n.x);
-          return this.inPretty(n, () => this.expansion(n, exp)) + this.skipLines(n);
+          return this.expanded(n.x, this.inPretty(n, () => this.expansion(n, exp))) + this.skipLines(n);
         }
         return A(n)._orReturn ? this.orReturn(n) : this.generic(n);
       }
@@ -539,6 +543,11 @@ export class Emitter {
     }
   }
 
+  private expanded(call: Node, text: string): string {
+    if (this.expansions && !this.expansions.has(call)) this.expansions.set(call, [...(this.hoistedText.get(call) ?? []), text].map((t) => resolveLines(t).text));
+    return text;
+  }
+
   /** Source line breaks inside `n`, which the code replacing it leaves out. */
   private skipLines(n: Node): string {
     if (n.toks !== this.file.toks) return "";
@@ -596,6 +605,9 @@ export class Emitter {
     try {
       const hoisted: Stmt[] = A(s)._pre ?? [];
       const before = hoisted.length ? this.inPretty(s, () => hoisted.map((h): [number, string] => [this.lineOf(h), this.hoisted(h)])) : [];
+      if (this.expansions) hoisted.forEach((h, i) => {
+        for (const call of (A(h)._hoistedFor as Node[] | undefined) ?? []) this.hoistedText.set(call, [...(this.hoistedText.get(call) ?? []), before[i][1]]);
+      });
       const body = this.emit(s);
       const reserves = ((A(s)._reserve as Reserve[] | undefined) ?? []).map((r): [number, string] => [-Math.abs(this.lineOf(s)), this.reserve(r)]);
       const lines: [number, string][] = [...this.notes.map((c) => [-Math.abs(this.lineOf(s)), c] as [number, string]), ...before, ...reserves];

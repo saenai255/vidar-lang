@@ -3,7 +3,7 @@ import { Block, Expr, Node, Param, Stmt, children } from "../ast";
 import { A, AnonFieldType, IfaceMethod, nodeText } from "../analyzer";
 import { Parser } from "../parser";
 import { ATTRIBUTE_DOCS, BUILTIN_PROC_DOCS, BUILTIN_TYPE_DOCS, COMPTIME_BUILTIN_DOCS, CONTEXT_FIELD_DOCS, KEYWORD_DOCS, MACRO_KIND_DOCS, ODIN_CONSTANT_DOCS } from "./docs";
-import { type Program as Analysis, schedSourcePath } from "../project";
+import { type Program as Analysis, emitProgram, schedSourcePath } from "../project";
 import { CaptureSym, GlobalSym, LocalSym, Scope, Sym, Ty } from "../scope";
 
 /** 0-based position, as in LSP. */
@@ -671,6 +671,8 @@ export interface HoverResult {
 
 export function hover(a: Analysis, index: Index, file: string, p: Position): HoverResult | undefined {
   const ref = index.refAt(file, p);
+  const expansion = macroExpansionAt(a, file, p);
+  if (ref && expansion) return { markdown: describe(a, ref.sym) + "\n\n---\n\n" + expansion, range: ref.range };
   if (ref) {
     const caseTy = switchVars.has(ref.sym) ? caseType(a, file, p) : undefined;
     if (caseTy) return { markdown: "```odin\n" + `${ref.sym.name}: ${nodeText(caseTy)}` + "\n```\n\n*type switch variable* · has this type in this `case`", range: ref.range };
@@ -681,6 +683,44 @@ export function hover(a: Analysis, index: Index, file: string, p: Position): Hov
   if (member) return { markdown: member.markdown, range: member.range };
   const t = tokenHover(a, file, p);
   return t && { markdown: t.markdown, range: t.range, weak: t.weak };
+}
+
+/** past this many lines, an expansion on hover is cut */
+const EXPANSION_LINES = 40;
+
+const expansionCache = new WeakMap<Analysis, Map<Node, string[]>>();
+
+/** The code a macro call writes, when `p` is on the call's name; from emitting the whole program once per analysis. */
+function macroExpansionAt(a: Analysis, file: string, p: Position): string | undefined {
+  const call = nodesAt(a, file, p).reverse().find((n): n is Extract<Expr, { k: "MacroCall" }> => {
+    if (n.k !== "MacroCall") return false;
+    for (let i = n.start; i < n.end && n.toks[i].text !== "!"; i++) if (contains(tokRange(n.toks[i]), p)) return true;
+    return false;
+  });
+  if (!call || a.errors.length) return undefined;
+  let expansions = expansionCache.get(a);
+  if (!expansions) {
+    expansions = new Map();
+    try {
+      emitProgram(a, expansions);
+    } catch {
+      // the hover still shows the macro itself
+    }
+    expansionCache.set(a, expansions);
+  }
+  const pieces = (expansions.get(call) ?? []).map((t) => t.replace(/^\s*\n|\s+$/g, "")).filter(Boolean);
+  if (!pieces.length) return undefined;
+  const lines = pieces.map(dedent).join("\n").split("\n");
+  const cut = lines.length > EXPANSION_LINES ? [...lines.slice(0, EXPANSION_LINES), `// ... ${lines.length - EXPANSION_LINES} more lines`] : lines;
+  return "*expands to*\n```odin\n" + cut.join("\n") + "\n```";
+}
+
+/** Code whose first line starts where the call was: the later lines lose the indentation they all share. */
+function dedent(text: string): string {
+  const [first, ...rest] = text.split("\n");
+  const tabs = (l: string) => l.match(/^\t*/)![0].length;
+  const common = Math.min(...rest.filter((l) => l.trim()).map(tabs));
+  return [first.replace(/^\t+/, ""), ...rest.map((l) => l.slice(Math.min(common, tabs(l))))].join("\n");
 }
 
 /** Inside `case T:` of a type switch: `T` (only when the case lists one type). */

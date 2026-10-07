@@ -1961,7 +1961,7 @@ export class Analyzer {
     const owner = this.hoistTarget(scope, pos, `${text} must be evaluated once here; assign it to a variable first`, text);
     const decl = this.parseTokens([...respace([...tokensOf(`${name} :=`, pos), ...toks]), eofTok(pos)], (p) => p.parseStmt());
     this.stmt(decl, scope!);
-    (A(owner)._pre ??= []).push(decl);
+    this.hoistBefore(owner, decl);
     return identVal(name, pos);
   }
 
@@ -2075,8 +2075,14 @@ export class Analyzer {
     const decl = this.parseTokens([...respace(tokensOf(`${result}: ${typeText}`, pos)), eofTok(pos)], (p) => p.parseStmt());
     this.stmt(decl, scope!);
     sym.ty = (A(decl)._syms as LocalSym[])[0].ty;
-    (A(owner)._pre ??= []).push(decl, labeled);
+    this.hoistBefore(owner, decl, labeled);
     return identVal(result, pos);
+  }
+
+  /** Statements a macro runs just before `owner`; each remembers the macro calls being expanded, for hovers. */
+  private hoistBefore(owner: Node, ...stmts: Stmt[]): void {
+    for (const s of stmts) A(s)._hoistedFor = [...this.macroCalls];
+    (A(owner)._pre ??= []).push(...stmts);
   }
 
   /** The type of the values a `do!` block stores in `result`: the first typed one, else the default type of the untyped ones. */

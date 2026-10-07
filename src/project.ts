@@ -7,7 +7,7 @@ import { Parser } from "./parser";
 import { A, Analyzer } from "./analyzer";
 import { Emitter, CLOSURE_RUNTIME } from "./emitter";
 import { resetGensym } from "./comptime";
-import type { File } from "./ast";
+import type { File, Node } from "./ast";
 import { PackageInfo, Scope, Unit } from "./scope";
 import { PRELUDE_PATH, PRELUDE_SOURCE } from "./prelude";
 import { SCHED_ASM, SCHED_IMPORT, SCHED_SOURCE } from "./sched";
@@ -256,14 +256,15 @@ export function outputName(pkg: PackageInfo, f: File): string {
   return posix.join(pkg.unit.outDir, pkg.unit.merged && pkg.prefix ? `${pkg.prefix}${base}` : base);
 }
 
-/** Generated Odin for an error-free program. */
-export function emitProgram(p: Program): Output {
+/** Generated Odin for an error-free program; `expansions` collects the code written for each macro call. */
+export function emitProgram(p: Program, expansions?: Map<Node, string[]>): Output {
   const files = new Map<string, string>();
   const sourceOf = new Map<string, string>();
   const lineMap = new Map<string, number[]>();
   let closures = false;
   for (const unit of p.units) {
     const em = new Emitter(p.analyzer, unit);
+    em.expansions = expansions ?? null;
     for (const pkg of unit.packages) {
       if (pkg.dir === dirname(schedSourcePath())) for (const [name, text] of SCHED_ASM) files.set(posix.join(unit.outDir, name), text);
       for (const f of pkg.files) {
