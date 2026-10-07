@@ -15,6 +15,7 @@ import { optimizeAll } from "../optimize";
 import { hotWarnings } from "../checks";
 import { PRELUDE_PATH } from "../prelude";
 import { writeOutput } from "../cli";
+import { formatEdits } from "../format";
 import * as F from "./features";
 import * as Actions from "./actions";
 import { OdinBridge } from "./odin";
@@ -209,6 +210,7 @@ connection.onInitialize((params): InitializeResult => {
       semanticTokensProvider: { legend: Sem.LEGEND, full: true, range: true },
       codeLensProvider: { resolveProvider: false },
       codeActionProvider: { codeActionKinds: [CodeActionKind.QuickFix, CodeActionKind.SourceFixAll] },
+      documentFormattingProvider: true,
     },
     serverInfo: { name: "vidar-lsp", version: "0.1.0" },
   };
@@ -294,6 +296,16 @@ const SYMBOL_KINDS: Record<F.SymbolKind, LspSymbolKind> = {
   type: LspSymbolKind.TypeParameter, constant: LspSymbolKind.Constant, variable: LspSymbolKind.Variable,
   impl: LspSymbolKind.Class, field: LspSymbolKind.Field, method: LspSymbolKind.Method,
 };
+
+// formatting only changes whitespace and keeps every line, so the edits are per line; a file that doesn't lex gets none
+connection.onDocumentFormatting(({ textDocument }) => {
+  const doc = documents.get(textDocument.uri);
+  try {
+    return doc ? formatEdits(doc.getText(), toPath(textDocument.uri)) : [];
+  } catch {
+    return [];
+  }
+});
 
 connection.onDocumentSymbol(({ textDocument }) => {
   const { state, path } = stateFor(textDocument.uri);

@@ -5,6 +5,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { Analyzer, posOf } from "./analyzer";
 import { hotWarnings } from "./checks";
+import { fmtMain } from "./format";
 import { CompileError } from "./lexer";
 import { Output, Program, emitProgram, loadProgram, transpile } from "./project";
 import { wantsWatch, watchCommand } from "./watch";
@@ -28,6 +29,7 @@ function usage(): never {
   vidar emit  <dir|file${EXT}> [-opt]                   print the generated Odin to stdout
   -opt-report in place of -opt also prints what -opt decided, where, and why
   --watch (run, check) reruns when a .vidar file of the program changes; --clear clears the screen first
+  vidar fmt   <files|dirs> [--check|--write]        format .vidar files (default: print to stdout)
   vidar lsp                                     run the language server on stdio (same as vidar-lsp)
   vidar --version
 
@@ -70,6 +72,7 @@ export function main(argv: string[]): number {
     console.log(`vidar ${version()}`);
     return 0;
   }
+  if (argv[0] === "fmt") return fmtMain(argv.slice(1));
   const [cmd, input, ...args] = argv;
   const end = args.indexOf("--");
   const flags = args.slice(0, end < 0 ? args.length : end);

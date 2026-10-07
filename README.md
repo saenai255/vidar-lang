@@ -15,10 +15,22 @@ node dist/cli.js emit  examples/cyclic              # print the generated Odin
 node dist/cli.js build examples/cyclic -o out/game  # write the generated Odin tree
 node dist/cli.js run   examples/negative_cost -opt  # with the -opt rewrites
 node dist/cli.js run   examples/closures --watch    # rerun whenever a .vidar file of the program changes
+node dist/cli.js fmt   examples/closures --check    # list files vidar fmt would change
 npm test
 ```
 
 `--watch` works with `run` and `check`. It watches every package of the program in the project (the entry package and every package it imports by relative path, not `core:` or `vidar:sched`), recomputed before each run since imports change, and reruns about 100 ms after the last change. A program still running is killed, together with anything it started, before the rerun. Output is kept unless you add `--clear`, which clears the screen before each rerun. It uses `fs.watch` on each package directory and falls back to polling where that fails. Ctrl-C stops it.
+
+### `vidar fmt`
+
+`vidar fmt <files|dirs>` prints each file formatted; `--write` rewrites changed files in place, `--check` lists the files that would change and exits 1 if there are any. Directories are searched for `.vidar` files. Editors get the same through the language server's `textDocument/formatting`.
+
+It only changes whitespace between tokens and never moves a token to another line, so line numbers (errors, `call_site()`, `dbg!`, `todo!`) stay the same and diffs stay small:
+- each line is indented with tabs by bracket depth: `case` at its `switch`'s level, a line that continues an expression one level deeper, brackets opened on the same line sharing one level;
+- trailing whitespace and trailing blank lines at the end of the file go; blank lines elsewhere stay;
+- one space goes around binary and assignment operators (`a+b` becomes `a + b`, `x:=1` becomes `x := 1`) and after commas and the `:` of a declaration, and none inside `(...)` and `[...]`, before a comma, around `.`, or between a name and its `(` or `[`.
+
+Spacing it can't be sure about stays as written: unary operators, `^`, ranges, `->` after a name, `typeid/[]$E`, everything inside `@(...)`, the inside of `{ ... }`, runs of spaces that line things up, and the text of comments and strings (comments are reindented with their line). It doesn't reflow, join or split lines. Formatting is idempotent, and before anything is written the result is checked to have the same tokens on the same lines. `dbg!`, `check!` and `stringify` labels show the expression's spacing, so they follow the formatted source.
 
 ## Standalone binaries
 
@@ -545,6 +557,7 @@ Bounds checks rarely matter: LLVM already removes most of them in loops like the
 | Workspace symbols | Every global of every package the server has analyzed (each open program and what it imports), by substring or by the query's letters in order. Generated `__` names are left out. |
 | Go to implementation | On an interface, the types implementing it, also through interfaces that extend it; on an interface method, the procs bound to it in each `impl`. A plain proc has none. |
 | Call hierarchy | Incoming and outgoing calls of procs, proc groups, interface methods and macros, across packages. A call to a proc group counts as a call to each of its members; a call to a closed interface's method (one no other package extends) counts as a call to every proc bound to it. Calls a macro expands to count at the macro call, and calls in closures at the proc that holds them. Calls through closure values and proc variables aren't followed. |
+| Formatting | `textDocument/formatting` runs [`vidar fmt`](#vidar-fmt) on the open file, with one edit per changed line. A file that doesn't lex gets no edits. |
 | Plain Odin via ols | If [ols](https://github.com/DanielGavin/ols) is on your PATH, requests vidar can't answer go to it: hover, definition and signature help for core library procs and types, and `fmt.`-style completion (merged with vidar's own). See below. |
 | Inlay hints | What `-opt` would decide, without building with it: `table` / `specialized ×2` after a proc's name, `unchecked` after a statement whose indexes are proven in bounds, `grouped alloc`, `fmt inlined`, and `direct` / `devirtualized` / `vtable` after an interface method call. The tooltip gives the reason. The setting `optHints` (initialization option or `vidar.optHints` in `workspace/didChangeConfiguration`) is `"on"` (default), `"all"` (also what `-opt` decided against, e.g. `no table`) or `"off"`. They come from a second analysis with `-opt` on, made only when hints are requested; diagnostics and generated code are unaffected. |
 | Semantic tokens | `textDocument/semanticTokens/full` and `/range`, from the analyzer's symbols, so names are colored by what they are rather than by how they look. Types: `namespace`, `type`, `interface`, `struct`, `enum`, `enumMember`, `typeParameter`, `function`, `method` (interface methods, in the interface, its `impl`s and calls), `parameter`, `variable`, `property` (field declarations) and `macro` (comptime procs and every `name!` call, including procs run at compile time). Modifiers: `declaration`, `readonly` (constants, and by-value captures, which a closure can't write), `defaultLibrary` (the built-in macros and `vidar:sched`), `async` (`sched.go`), and three custom ones: `closure` (a closure value or type; closure-valued locals and parameters are `function`s), `captured` (a captured variable inside its closure) and `byRef` (captured by reference). Generated `__` names never get a token; a file with errors gets tokens for what was analyzed. |
@@ -596,7 +609,7 @@ npm run bench          # examples/negative_cost timed against HEAD; --against <r
 npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many times; saves a stack on a hang
 ```
 
-- **Unit tests** (`tests/unit/*.test.js`, `node:test`): lexer semicolon insertion and trivia, parser round-trips of tricky Odin syntax, parsing of the extension syntax and error recovery, compile-time evaluation, hygiene, spacing of generated code, the import-cycle grouping (Tarjan's algorithm, merged units, prefixes, output layout), and `--watch` (the file set, debouncing, reruns on change, polling, and killing a running child with what it started).
+- **Unit tests** (`tests/unit/*.test.js`, `node:test`): lexer semicolon insertion and trivia, parser round-trips of tricky Odin syntax, parsing of the extension syntax and error recovery, compile-time evaluation, hygiene, spacing of generated code, the import-cycle grouping (Tarjan's algorithm, merged units, prefixes, output layout), and `--watch` (the file set, debouncing, reruns on change, polling, and killing a running child with what it started), and `vidar fmt`: over every `.vidar` file in the repository it must be idempotent and indent from the tokens alone, and every case and example (and the prelude), with its whitespace scrambled and then formatted, must transpile to the same tokens as before, with and without `-opt`.
 - **Sample programs with fixtures** (`tests/cases/<name>/`): one feature area each. The sample is `input.vidar`, or an `input/` directory for multi-package programs. `expected/` holds the transpiled Odin tree, and `stdout.txt` is the program's expected output, checked by running it with `odin run`. Cases named `plain_*` must come out byte-identical to their input. Cases named `opt_*` are transpiled with `-opt`. Every case is also transpiled the other way; if `-opt` changes its output, that version is run too and must print the same. They cover:
   - closures: capture modes, loops, every declaration form, multiple results, variadics, nesting, closure types
   - interfaces: dispatch, static calls across packages, decorators, multiple results, variadic methods
@@ -621,6 +634,7 @@ npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many tim
   - semantic tokens (`tests/lsp/semantic`), decoded from the stream: interfaces and their methods, closures, by-value and by-reference captures, macro calls, `sched.go`, ranges, and a file with a syntax error
   - the `vidar/optReport` request (decisions under their enclosing proc, decisions against marked) and the code lenses with their settings
   - quick fixes (`tests/lsp/actions`): each fix's edit, that `new_clone` is never preferred, that "fix all" never allocates, and that the fixed file has no errors left
+  - formatting: per-line edits matching `vidar fmt`, and none for a file that doesn't lex
 
 ## Source layout
 
@@ -645,8 +659,9 @@ npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many tim
 | `src/checks.ts` | `@(no_alloc)` (what a proc can allocate through) and `@(hot)` (warnings from the `-opt` decisions inside it) |
 | `src/fmtspec.ts` | reads `fmt` format strings for `-opt` |
 | `src/project.ts` | loads a program by following imports, groups import cycles (Tarjan's algorithm), and emits the output tree; shared by the CLI and the language server |
-| `src/cli.ts` | `build` / `run` / `check` / `emit` |
+| `src/cli.ts` | `build` / `run` / `check` / `emit` / `fmt` |
 | `src/watch.ts` | `--watch`: the files of a program, the watch loop (`fs.watch` on each package directory, polling as the fallback, debounced), and rerunning the command in a child process that is killed on change |
+| `src/format.ts` | `vidar fmt`: token-based formatter (indentation, spacing, trailing whitespace), its per-line edits for the language server, and the `fmt` command |
 | `src/bin.ts` | entry point of the standalone binary (`vidar`, `vidar-lsp`) |
 | `src/lsp/` | language server: `features.ts` (index, hover, definition, completion, …), `navigation.ts` (workspace symbols, implementations, call hierarchy), `semantic.ts` (semantic tokens), `actions.ts` (quick fixes), `expand.ts` (the code for the statement at the cursor), `optreport.ts` (`-opt` decisions by proc, for `vidar/optReport` and code lenses), `server.ts` (protocol, `odin check` on save) and `odin.ts` (shadow tree and forwarding to ols) |
 | `editors/vscode/` | VS Code extension: grammar, client, and the Optimization Report view (`optreport.js`) |

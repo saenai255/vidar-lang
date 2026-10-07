@@ -30,6 +30,7 @@ README's "Source layout" table lists every source file. Some things it doesn't m
 - **Two files are big:** `src/emitter.ts` (68 KB) and `src/analyzer.ts` (105 KB).
   - Edit them with exact anchors.
   - Check `git diff --stat` after any scripted edit. A loose splice once deleted a large block of `emitter.ts`, and nobody noticed until the tests ran.
+- **`vidar fmt`** is `src/format.ts`: token-based and line-preserving, no `odinfmt`. Its self-check (same tokens on the same lines) throws rather than return a changed program. `tests/unit/fmt.test.js` scrambles the whitespace of every case and example, formats it and compares the emitted Odin's tokens, with and without `-opt` (about 15 s). Don't run it over the repository's own `.vidar` files unasked: fixtures depend on their exact text.
 - **Ignored by git:** `dist/`, `out/` (default `vidar build` output), `build/`, `bin/` (standalone binaries) and `node_modules/`.
 - **A root-level `saves/`** is left over from running slime_mud from the repository root. Don't commit it.
 

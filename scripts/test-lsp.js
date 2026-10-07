@@ -849,6 +849,19 @@ function change(text) {
   const afd = (await aFixed).diagnostics;
   check("after the fixes the file has no errors", afd.length === 0, JSON.stringify(afd.map((d) => d.message)));
   }
+  // ---- formatting ----
+  const fmtDir = realpathSync(mkdtempSync(join(tmpdir(), "vidar-lsp-fmt-")));
+  const fUri = pathToFileURL(join(fmtDir, "main.vidar")).toString();
+  const fText = "package main\n\nmain :: proc() {\n    x:=1+2   \n  add := proc[x](y: int) -> int { return x+y }\n        _ = add( x )\n}\n";
+  notify("textDocument/didOpen", { textDocument: { uri: fUri, languageId: "vidar", version: 1, text: fText } });
+  const fEdits = (await request("textDocument/formatting", { textDocument: { uri: fUri }, options: { tabSize: 4, insertSpaces: false } })).result ?? [];
+  const fLines = fText.split("\n");
+  for (const e of fEdits) fLines[e.range.start.line] = fLines[e.range.start.line].slice(0, e.range.start.character) + e.newText + fLines[e.range.end.line].slice(e.range.end.character);
+  const fWant = "package main\n\nmain :: proc() {\n\tx := 1 + 2\n\tadd := proc[x](y: int) -> int { return x + y }\n\t_ = add(x)\n}\n";
+  check("formatting edits only the lines that change, and give vidar fmt's result", fEdits.length === 3 && fLines.join("\n") === fWant, JSON.stringify(fEdits));
+  notify("textDocument/didChange", { textDocument: { uri: fUri, version: 2 }, contentChanges: [{ text: "x := `unterminated\n" }] });
+  const fBad = await request("textDocument/formatting", { textDocument: { uri: fUri }, options: { tabSize: 4, insertSpaces: false } });
+  check("formatting a file that doesn't lex gives no edits", Array.isArray(fBad.result) && fBad.result.length === 0, JSON.stringify(fBad));
 
   writeFileSync(file, original);
   const restored = nextDiagnostics((d) => d.uri === uri && d.diagnostics.length === 0);
