@@ -182,13 +182,13 @@ git worktree remove --force "$TMPDIR/vidar-base"
 | collatz, computed | 207 |
 | collatz, @(table) | 1.0 |
 | bodies, 3 of 10 fields | 21 |
-| closure, called through | 8.4 |
+| closure, called through | 2.9 |
 | closure, specialized | 2.9 |
 | closure, created in a loop | 19 |
 | closure, from an array | 19 |
 | closure, as a parameter | 11 |
 
-"Closure, called through" took 2.87 ms before closure values; the 8.4 ms is an open regression (PERF_PROGRESS item 1). README's "What it buys" table compares the plain and Vidar versions.
+"Closure, called through" was 8.4 ms until item 1 of PERF_PROGRESS; it should now match "closure, specialized" (re-measure on the M3; measured on linux/amd64 so far). README's "What it buys" table compares the plain and Vidar versions.
 
 **slime_mud:**
 - `node examples/slime_mud/bench/bench.js` builds the Vidar and Odin versions and checks they behave the same.

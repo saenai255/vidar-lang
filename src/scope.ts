@@ -54,6 +54,8 @@ export interface LocalSym {
   value?: Expr;
   scope: Scope;
   refCaptured: boolean;
+  /** a parameter that is called as a closure: its proc is read into a local once, on entry */
+  closureCalled?: boolean;
   declKind: "decl" | "param" | "range" | "other";
   declTok?: Token;
 }

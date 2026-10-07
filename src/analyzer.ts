@@ -598,6 +598,8 @@ export class Analyzer {
         if (ft?.t === "sig" && ft.closure) {
           if (e.args.some((a) => a.k === "FieldValue")) throw new CompileError("named arguments are not supported when calling closures", posOf(e));
           A(e)._closure = ft;
+          const callee = e.fn.k === "Ident" ? A(e.fn)._sym : undefined;
+          if (callee?.kind === "local" && callee.declKind === "param") callee.closureCalled = true;
         }
         const spec = fnSym?.kind === "global" ? this.specialized.get(fnSym) : undefined;
         if (spec) this.specializeCall(e, fnSym as GlobalSym, spec, scope);

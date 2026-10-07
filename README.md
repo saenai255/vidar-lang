@@ -55,7 +55,7 @@ main :: proc() {
 - Captures must fit in the closure: 128 bytes by default, set with `-define:VIDAR_CLOSURE_ENV=<bytes>`. A closure that doesn't fit is a compile error naming it. A closure can't capture another closure by value (it would need more room than it has); capture `&f`, or `new_clone(f)` if it outlives the frame.
 - Using an outer local without capturing it is a compile error that suggests the fix.
 
-**How it lowers:** a closure value is `Closure(proc(Env, A...) -> R)`, a struct holding the proc and `env: Env`, a fixed `[N]u64` buffer the captures are copied into (136 bytes in all by default). The proc gets the buffer and reads its captures from it. The struct is declared once, in a generated `vidar_runtime` package, so closures can be passed between packages. Each closure literal becomes a call to a generated parapoly constructor, `__closure_N(captures...)`, so Odin infers the capture types itself.
+**How it lowers:** a closure value is `Closure(proc(Env, A...) -> R)`, a struct holding the proc and `env: Env`, a fixed `[N]u64` buffer the captures are copied into (136 bytes in all by default). The proc gets the buffer and reads its captures from it. A closure parameter that is called reads its proc into a local on entry (`__f_call := f.call`), so once the callee is inlined into the proc that built the closure, LLVM sees the target and the call becomes direct. The struct is declared once, in a generated `vidar_runtime` package, so closures can be passed between packages. Each closure literal becomes a call to a generated parapoly constructor, `__closure_N(captures...)`, so Odin infers the capture types itself.
 
 ## Interfaces
 

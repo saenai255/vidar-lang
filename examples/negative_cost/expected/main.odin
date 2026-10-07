@@ -213,13 +213,13 @@ blur :: proc(n, reps: int) {
 // ---- -opt: a copy of a proc per closure literal passed to it, calling the body directly ----
 
 
-pairs_plain :: proc(a: []int, f: __vidar.Closure(proc(__vidar.Env, int, int) -> int)) -> (sum: int) {
-	for i in 1..<len(a) do sum += f.call(f.env, a[i - 1], a[i])
+pairs_plain :: proc(a: []int, f: __vidar.Closure(proc(__vidar.Env, int, int) -> int)) -> (sum: int) { __f_call := f.call;
+	for i in 1..<len(a) do sum += __f_call(f.env, a[i - 1], a[i])
 	return
 }
 
-pairs :: proc(a: []int, f: __vidar.Closure(proc(__vidar.Env, int, int) -> int)) -> (sum: int) {
-	for i in 1..<len(a) do sum += f.call(f.env, a[i - 1], a[i])
+pairs :: proc(a: []int, f: __vidar.Closure(proc(__vidar.Env, int, int) -> int)) -> (sum: int) { __f_call := f.call;
+	for i in 1..<len(a) do sum += __f_call(f.env, a[i - 1], a[i])
 	return
 }
 
@@ -241,7 +241,7 @@ closures :: proc(n, reps: int) {
 // ---- closures as values: creating one, calling one from an array, calling a parameter ----
 
 
-apply_once :: #force_no_inline proc(x: int, f: __vidar.Closure(proc(__vidar.Env, int) -> int)) -> int { return f.call(f.env, x) }
+apply_once :: #force_no_inline proc(x: int, f: __vidar.Closure(proc(__vidar.Env, int) -> int)) -> int { __f_call := f.call; return __f_call(f.env, x) }
 
 make_closures :: #force_no_inline proc() -> (fs: [8]__vidar.Closure(proc(__vidar.Env, int) -> int)) {
 	for i in 0..<len(fs) {

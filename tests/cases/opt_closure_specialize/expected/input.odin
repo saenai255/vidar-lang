@@ -2,22 +2,22 @@ package main; import __vidar "vidar_runtime"
 
 import "core:fmt"
 
-for_each :: proc(xs: []int, f: __vidar.Closure(proc(__vidar.Env, int))) {
-	for x in xs do f.call(f.env, x)
+for_each :: proc(xs: []int, f: __vidar.Closure(proc(__vidar.Env, int))) { __f_call := f.call;
+	for x in xs do __f_call(f.env, x)
 }
 
-fold :: proc(xs: []$T, init: T, f: __vidar.Closure(proc(__vidar.Env, T, T) -> T)) -> T {
+fold :: proc(xs: []$T, init: T, f: __vidar.Closure(proc(__vidar.Env, T, T) -> T)) -> T { __f_call := f.call;
 	acc := init
-	for x in xs do acc = f.call(f.env, acc, x)
+	for x in xs do acc = __f_call(f.env, acc, x)
 	return acc
 }
 
 // two closure parameters, one call each, plus a deferred call
-filter_map :: proc(xs: []int, keep: __vidar.Closure(proc(__vidar.Env, int) -> bool), f: __vidar.Closure(proc(__vidar.Env, int) -> int), done: __vidar.Closure(proc(__vidar.Env))) -> (out: [dynamic]int) {
-	defer done.call(done.env)
+filter_map :: proc(xs: []int, keep: __vidar.Closure(proc(__vidar.Env, int) -> bool), f: __vidar.Closure(proc(__vidar.Env, int) -> int), done: __vidar.Closure(proc(__vidar.Env))) -> (out: [dynamic]int) { __keep_call := keep.call; __f_call := f.call; __done_call := done.call;
+	defer __done_call(done.env)
 	reserve(&out, len(out) + len(xs))
 	for x in xs {
-		if keep.call(keep.env, x) do append(&out, f.call(f.env, x))
+		if __keep_call(keep.env, x) do append(&out, __f_call(f.env, x))
 	}
 	return
 }
@@ -32,34 +32,34 @@ install :: proc(h: ^Handler, f: __vidar.Closure(proc(__vidar.Env, int) -> int)) 
 }
 
 // passes its closure on: not specialized
-apply_twice :: proc(x: int, f: __vidar.Closure(proc(__vidar.Env, int) -> int)) -> int {
-	return twice_inner(f.call(f.env, x), f)
+apply_twice :: proc(x: int, f: __vidar.Closure(proc(__vidar.Env, int) -> int)) -> int { __f_call := f.call;
+	return twice_inner(__f_call(f.env, x), f)
 }
 
-twice_inner :: proc(x: int, f: __vidar.Closure(proc(__vidar.Env, int) -> int)) -> int {
-	return f.call(f.env, x)
+twice_inner :: proc(x: int, f: __vidar.Closure(proc(__vidar.Env, int) -> int)) -> int { __f_call := f.call;
+	return __f_call(f.env, x)
 }
 
 
-plain_each :: proc(xs: []int, f: __vidar.Closure(proc(__vidar.Env, int))) {
-	for x in xs do f.call(f.env, x)
+plain_each :: proc(xs: []int, f: __vidar.Closure(proc(__vidar.Env, int))) { __f_call := f.call;
+	for x in xs do __f_call(f.env, x)
 }
 
 // more calls with closures than copies
-times :: proc(n: int, f: __vidar.Closure(proc(__vidar.Env, int))) {
-	for i in 0..<n do f.call(f.env, i)
+times :: proc(n: int, f: __vidar.Closure(proc(__vidar.Env, int))) { __f_call := f.call;
+	for i in 0..<n do __f_call(f.env, i)
 }
 
 
-repeat :: proc(n: int, f: __vidar.Closure(proc(__vidar.Env, int) -> int)) -> int {
+repeat :: proc(n: int, f: __vidar.Closure(proc(__vidar.Env, int) -> int)) -> int { __f_call := f.call;
 	s := 0
-	for i in 0..<n do s += f.call(f.env, i)
+	for i in 0..<n do s += __f_call(f.env, i)
 	return s
 }
 
 // passes a closure literal to itself: every copy calls the same one
-count_down :: proc(n: int, f: __vidar.Closure(proc(__vidar.Env, int))) {
-	f.call(f.env, n)
+count_down :: proc(n: int, f: __vidar.Closure(proc(__vidar.Env, int))) { __f_call := f.call;
+	__f_call(f.env, n)
 	if n > 0 do count_down__closure0(n - 1)
 }
 

@@ -301,11 +301,11 @@ run_blocking :: proc(op: ^nbio.Operation) {
 // Runs task on a worker thread and parks this goroutine until it returns; the other goroutines keep running.
 // Use it for calls that block the thread: DNS, C libraries, anything without a sched version.
 // The task runs on another thread, so it must not touch goroutine state without synchronizing.
-blocking :: proc(task: __vidar.Closure(proc(__vidar.Env))) {
+blocking :: proc(task: __vidar.Closure(proc(__vidar.Env))) { __task_call := task.call;
 	sched_init()
 	// nothing else could run meanwhile, so skip starting the workers
 	if sched.head == nil && sched.io_waiting == 0 {
-		task.call(task.env)
+		__task_call(task.env)
 		return
 	}
 	w := Io_Wait{g = sched.cur, task = task, ctx = context}

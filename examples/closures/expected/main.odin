@@ -27,9 +27,9 @@ compose :: proc(f, g: __vidar.Closure(proc(__vidar.Env, int) -> int)) -> __vidar
 	return __closure_3(fp, gp)
 }
 
-apply :: proc(f: __vidar.Closure(proc(__vidar.Env, int) -> int), xs: []int) -> [dynamic]int {
+apply :: proc(f: __vidar.Closure(proc(__vidar.Env, int) -> int), xs: []int) -> [dynamic]int { __f_call := f.call;
 	out: [dynamic]int
-	for x in xs do append(&out, f.call(f.env, x))
+	for x in xs do append(&out, __f_call(f.env, x))
 	return out
 }
 

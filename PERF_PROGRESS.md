@@ -16,7 +16,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 3 | 18 | `@(no_alloc)` and `@(hot)` checks | tooling | done |
 | 4 | 21 | Macro expansion on hover | tooling | done |
 | 5 | 19 | Leftovers from the first batch | tooling | done |
-| 6 | 1 | Closure call regression (2.9x slower call through a closure) | bug | todo |
+| 6 | 1 | Closure call regression (2.9x slower call through a closure) | bug | done |
 | 7 | 2 | `sched_pending_io` busy loop | bug | todo |
 | 8 | 3 | Dangling by-reference captures in returned closures | bug | todo |
 | 9 | 5 | Intermittent Odin compiler hang | bug | todo |
@@ -181,6 +181,11 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **1, closure call regression** done in the main tree, not committed yet. The planned fix didn't apply: with Odin dev-2026-10, the `Env` passed by value already goes as a pointer to the caller's closure, with no copy at the call or in the body (checked in the x86-64 and darwin/arm64 assembly). The cost was elsewhere: the call passes a pointer into the closure's own memory, so LLVM has to reload `f.call` after every call and never sees the target, even with `pairs_plain` inlined into the proc that built the closure.
+  - Fix: a closure parameter that is called reads its proc into a local on entry, `__f_call := f.call`, and calls go through it. Parameters are immutable in Odin; one captured by reference is a local copy and keeps `f.call(...)`. Once inlined, the call is direct and the closure's body inlines and vectorizes.
+  - Tried first, as planned: `proc(^Env, ...)` with `&f.env` and a local copy of each called parameter. That copy is a 136-byte `memcpy` per call: "closure, as a parameter" +184%, "created in a loop" +390%, and "called through" unchanged. Dropped.
+  - `npm run bench` on a 4-core linux/amd64 VM (Odin dev-2026-10): "called through" 21.1 → 4.7 ms, the same as "closure, specialized" (4.3 to 4.7 ms there); no other section outside run-to-run noise (re-ran each one that crossed 15%). Not yet measured on the M3.
+  - New case `closure_param_calls`: a parameter called twice, in a loop, captured by reference and reassigned, called from a nested closure, and a closure literal's own closure parameter.
 - **19, leftovers from the first batch** done in the main tree, not committed yet.
   - `reserve`: appends under an `if` (any depth, `else if` / `else` included) count as the branch that appends the most, so the reserve is an upper bound. Only for elements of at most 16 bytes (`SMALL_ELEM` in `src/optimize.ts`); bigger ones get `not reserved`. `opt_reserve`'s conditional-append example moved from "not reserved" to reserved; two closure-specialize fixtures picked up a reserve in `filter_map`.
   - `#soa`: `a: [dynamic]T = make([dynamic]T, ...)` and `a: []T = make([]T, n)` qualify when both types are spelled the same; both get `#soa`.

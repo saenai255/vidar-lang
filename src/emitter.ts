@@ -1055,7 +1055,7 @@ export class Emitter {
       g.names.flatMap((n) => closures?.params.get(n.name) ?? [`${n.prefix ?? ""}${consts.includes(n.name) ? "$" : ""}${n.name}${g.type ? `: ${this.emit(g.type)}` : " :"}${g.value ? `${g.type ? " " : ""}= ${this.emit(g.value)}` : ""}`]),
     );
     const ps: LocalSym[] = A(p)._params ?? [];
-    const shadowed = [...ps.filter((x) => x.refCaptured).map(addressable), ...(closures?.prologue ?? [])];
+    const shadowed = [...ps.filter((x) => x.refCaptured).map(addressable), ...ps.filter((x) => callHoisted(x) && !this.inlinedClosures.has(x)).map(hoistCall), ...(closures?.prologue ?? [])];
     if (shadowed.length) this.prologue.set(p.body!, shadowed);
     const before = value !== p ? this.generic(value, value.start, p.start) + " " : "";
     const after = this.generic(p, close + 1, p.body!.start);
@@ -1120,7 +1120,8 @@ export class Emitter {
       A(p)._optimized = true;
       optimizeProc(p.body!, this.an);
     }
-    const shadowed = ((A(p)._params ?? []) as LocalSym[]).filter((s) => s.refCaptured).map(addressable);
+    const ps: LocalSym[] = A(p)._params ?? [];
+    const shadowed = [...ps.filter((s) => s.refCaptured).map(addressable), ...ps.filter(callHoisted).map(hoistCall)];
     if (shadowed.length) this.prologue.set(p.body!, shadowed);
     let paren = p.start;
     while (!(p.toks[paren].kind === "op" && p.toks[paren].text === "]")) paren++;
@@ -1304,7 +1305,7 @@ export class Emitter {
       optimizeProc(p.body, this.an, !!A(p)._closureCopies);
     }
     const params: LocalSym[] = A(p)._params ?? [];
-    const shadowedParams = params.filter((s) => s.refCaptured).map(addressable);
+    const shadowedParams = [...params.filter((s) => s.refCaptured).map(addressable), ...params.filter(callHoisted).map(hoistCall)];
     if (!p.captures) {
       if (p.body && shadowedParams.length) this.prologue.set(p.body, shadowedParams);
       return this.generic(p);
@@ -1361,6 +1362,8 @@ export class Emitter {
     const args = c.args.map((a) => this.emit(a));
     const inlined = c.fn.k === "Ident" ? this.inlinedClosures.get(A(c.fn)._sym) : undefined;
     if (inlined) return `${inlined.proc}(${[...(inlined.env ? [`&${inlined.env}`] : []), ...args].join(", ")})`;
+    const sym: Sym | undefined = c.fn.k === "Ident" ? A(c.fn)._sym : undefined;
+    if (sym?.kind === "local" && callHoisted(sym)) return `${hoistedName(sym)}(${[`${callee}.env`, ...args].join(", ")})`;
     if (this.isSimple(c.fn)) return `${callee}.call(${[`${callee}.env`, ...args].join(", ")})`;
     const sig = this.closureType(ty.sig);
     let name = this.callHelpers.has(sig) ? undefined : `__call_closure_${this.callHelperCount++}`;
@@ -1385,6 +1388,24 @@ function literalText(v: Expr, spec: string, text: (t: Token) => string): string 
   if (v.kind === "string" && (spec === "%v" || spec === "%s")) return decodeString(t);
   if (v.kind === "int" && (spec === "%v" || spec === "%d") && /^\d+$/.test(t)) return BigInt(t).toString();
   return undefined;
+}
+
+/**
+ * A closure parameter that is called reads its proc into a local on entry. The call passes the
+ * closure's own memory as the environment, so LLVM would otherwise reload `call` on every call and
+ * never see the target; once inlined into a caller that built the closure, the call becomes direct.
+ * Parameters are immutable in Odin, unless one is captured by reference (then it is a local copy).
+ */
+function callHoisted(sym: LocalSym): boolean {
+  return !!sym.closureCalled && sym.declKind === "param" && !sym.refCaptured;
+}
+
+function hoistedName(sym: LocalSym): string {
+  return `__${sym.name}_call`;
+}
+
+function hoistCall(sym: LocalSym): string {
+  return `${hoistedName(sym)} := ${sym.name}.call`;
 }
 
 // Odin params and loop values are not addressable

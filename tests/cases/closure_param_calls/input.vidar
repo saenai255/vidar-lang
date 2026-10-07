@@ -1,0 +1,50 @@
+package main
+
+import "core:fmt"
+
+// called twice: one read of f.call on entry serves both
+twice :: proc(x: int, f: closure(int) -> int) -> int { return f(f(x)) }
+
+// called in a loop, and passed on unchanged
+sum_map :: proc(xs: []int, f: closure(int) -> int) -> (total: int) {
+	for x in xs do total += f(x)
+	total += twice(0, f)
+	return
+}
+
+// captured by reference: f is a local copy then, and calls read it as it is
+swap_and_call :: proc(f: closure(int) -> int, g: closure(int) -> int) -> int {
+	reset := proc[&f, &g]() { f = g }
+	a := f(1)
+	reset()
+	return a * 100 + f(1)
+}
+
+// called from a nested closure, through a by-reference capture
+compose_sum :: proc(xs: []int, f, g: closure(int) -> int) -> int {
+	both := proc[&f, &g](x: int) -> int { return g(f(x)) }
+	return sum_map(xs, both)
+}
+
+// a closure literal's own closure parameter
+
+apply_with :: proc(xs: []int, f: closure(int) -> int) -> int {
+	run := proc[](ys: []int, h: closure(int) -> int) -> (n: int) {
+		for y in ys do n += h(y)
+		return
+	}
+	return run(xs, f)
+}
+
+main :: proc() {
+	k := 3
+	add := proc[k](x: int) -> int { return x + k }
+	dbl := proc[](x: int) -> int { return x * 2 }
+	xs := []int{1, 2, 3}
+	fmt.println(twice(1, add), twice(1, dbl))
+	fmt.println(sum_map(xs, add), sum_map(xs, dbl))
+	fmt.println(swap_and_call(add, dbl))
+	fmt.println(compose_sum(xs, add, dbl), apply_with(xs, add))
+	// a literal passed straight in
+	fmt.println(sum_map(xs, proc[k](x: int) -> int { return x * k }))
+}
