@@ -54,8 +54,8 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 41 | 45 | Index the whole workspace at startup | editor | merged |
 | 42 | 46 | Missing-import fix from `odin root` | editor | merged |
 | 43 | 47 | Generated `json.unmarshal` | perf | merged |
-| 44 | 48 | Hot/cold splitting across procs | perf | todo |
-| 45 | 49 | Loop fusion | perf | todo |
+| 44 | 48 | Hot/cold splitting across procs | perf | dropped |
+| 45 | 49 | Loop fusion | perf | dropped |
 | 46 | 50 | `vidar new` | dev tooling | merged |
 | 47 | 51 | Windows support | platform | merged |
 
@@ -364,6 +364,7 @@ For a `[dynamic]T` whose hot loops (in any proc it is passed to) touch few field
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **48 and 49 dropped** on request: niche (big arrays of wide structs passed between procs; back-to-back passes over large arrays), with more risk than payoff for typical code, and automatic `#soa` already covers the in-proc case of 48. Pipeline macros were dropped before that. The worktree with the partial work was removed unmerged.
 - **47, generated `json.unmarshal`** merged. `src/jsonread.ts`: under `-opt`, `json.unmarshal(data, &x)` / `unmarshal_string` for named structs (tags), enums (integer or name), fixed arrays, slices, dynamic arrays, strings, bools, ints and floats call a generated reader behind the same `when T ==` guard. The input is first checked to be strict JSON (valid UTF-8, nothing trailing, depth 256); anything else, JSON5 included, goes to encoding/json untouched, so errors match. Values it doesn't read itself (a kind mismatch, a float into an int, a map field) go to encoding/json on their own bytes, with error offsets moved back. Keys aren't allocated (encoding/json clones and frees them), so a nearly exhausted allocator can fail later; in README. `negative_cost` "json.unmarshal of an array" (100 structs, ~10 KB, 500 times): 220 to 260 ms with encoding/json, 21 to 23 ms generated, on the linux VM. Case `opt_json_unmarshal` (85 checks against `unmarshal_any`); fuzzed with ~900k mutated documents, no mismatch.
   - Found by 47 and fixed: the generated `%v` printers and json writers weren't file-private, so two files of one package printing or marshaling the same type redeclared them. Case `opt_helpers_two_files`.
 - **43, field and enum-member uses** merged. `src/members.ts` (an LSP-only pass after analysis) resolves `x.field` (pointers, `using`, `#soa`, parametric structs), literal field names, `Enum.Member`, and `.Member` wherever the expected type is known. Hover, definition, references, rename and semantic tokens use it. Rename is refused, naming the place, while any use of that name can't be resolved.
