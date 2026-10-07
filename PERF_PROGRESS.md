@@ -11,7 +11,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 
 | Priority | # | Item | Kind | Status |
 |---|---|---|---|---|
-| 1 | 17 | Benchmark regression check | tooling | todo |
+| 1 | 17 | Benchmark regression check | tooling | done |
 | 2 | 20 | One command to rebuild and reinstall the VS Code extension | tooling | todo |
 | 3 | 18 | `@(no_alloc)` and `@(hot)` checks | tooling | todo |
 | 4 | 19 | Leftovers from the first batch | tooling | todo |
@@ -171,4 +171,6 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **17, benchmark regression check** done in the main tree. `npm run bench` (`scripts/bench.js`) builds `negative_cost` at the working tree and at a ref, runs them alternately, and fails on a section over 0.5 ms that is more than 15% slower, or on a changed checksum (exit 2 when a build fails). New sections: "closure, created in a loop" (19 ms), "closure, from an array" (19 ms), "closure, as a parameter" (11 ms; a closure parameter called once per call, which is what item 1's copy on entry costs). `--against 14d4af1 --section closure` reports "called through" at +188% and fails, so it catches item 1.
+  - Found while writing the array section: `fs := make_closures()`, where `make_closures` has a named result of type `[8]closure(int) -> int`, loses the closure type, and `f(x)` in `for f in fs` fails in Odin with "Cannot call a non-procedure". The section uses a typed declaration instead. Not fixed.
 - **`errdefer` / `or_return X` fix** merged from `claude/festive-yonath-2bae71`. In a proc with named results, a failing `or_return X` now sets only the error result and returns, as Odin's `or_return` does, so `errdefer` sees the other results as they were. Before, it returned `{}` for them first, and the cleanup missed the allocation. New case `tests/cases/errdefer_named_results`.

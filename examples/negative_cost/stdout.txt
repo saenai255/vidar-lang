@@ -11,3 +11,6 @@ collatz, @(table)          4498020
 bodies, 3 of 10 fields     5999890
 closure, called through    12370683590
 closure, specialized       12370683590
+closure, created in a loop 22936266112
+closure, from an array     22934104560
+closure, as a parameter    19660008608

@@ -546,6 +546,7 @@ npm test               # unit tests, fixture tests, language server tests
 npm run test:update    # regenerate fixtures after an intended output change, then review the diff
 node scripts/test.js --only closure    # only the cases and error tests whose name contains "closure"
 VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js   # run the LSP suite against a built binary
+npm run bench          # examples/negative_cost timed against HEAD; --against <ref>, --section <name>, --runs N
 ```
 
 - **Unit tests** (`tests/unit/*.test.js`, `node:test`): lexer semicolon insertion and trivia, parser round-trips of tricky Odin syntax, parsing of the extension syntax and error recovery, compile-time evaluation, hygiene, spacing of generated code, and the import-cycle grouping (Tarjan's algorithm, merged units, prefixes, output layout).
@@ -560,6 +561,7 @@ VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js   # run the LSP su
 - **Examples** (`examples/<name>/`): the larger tour programs, one directory each, fixtured the same way (`expected/` and `stdout.txt` inside the example's directory).
 - **Errors** (`tests/errors/*.vidar`, and `tests/errors_pkg/<name>/` for multi-package programs): about 70 programs that must fail with a specific message. The first line of the file, or of the package's `main.vidar`, says `// error: <expected message>`.
 - **Passthrough:** a few real files from Odin's `core` library must transpile to themselves unchanged.
+- **Benchmark** (`scripts/bench.js`, not part of `npm test`): builds `examples/negative_cost` at the working tree and at a git ref in a temporary worktree, both with `-opt` and `-o:speed`, runs them alternately, and compares each section's median. It fails when a section over 0.5 ms is more than 15% slower, or when a checksum changes.
 - **Language server** (`scripts/test-lsp.js`): starts the server over stdio and drives it like an editor across two workspaces (`tests/lsp/workspace`, and `tests/lsp/cycle` where packages import each other). It checks:
   - diagnostics, including errors in imported files and `odin check` on save
   - hover, definition, references and rename across packages and cycles (the rename edits are applied and the program recompiled)

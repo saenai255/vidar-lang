@@ -8,7 +8,8 @@
     "vidar": "node dist/cli.js",
     "test:update": "npm run build && node scripts/test.js --update",
     "test:unit": "npm run build && node --test tests/unit/",
-    "build:binaries": "npm run build && node scripts/build-binaries.js"
+    "build:binaries": "npm run build && node scripts/build-binaries.js",
+    "bench": "node scripts/bench.js"
   },
   "license": "ISC",
   "description": "Vidar: Odin with closures, interfaces, cyclic imports and typed compile-time macros, transpiled to plain Odin",

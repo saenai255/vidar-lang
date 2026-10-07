@@ -230,6 +230,45 @@ closures :: proc(n, reps: int) {
 	section("closure, specialized", start, total)
 }
 
+// ---- closures as values: creating one, calling one from an array, calling a parameter ----
+
+@(no_specialize)
+apply_once :: #force_no_inline proc(x: int, f: closure(int) -> int) -> int { return f(x) }
+
+make_closures :: #force_no_inline proc() -> (fs: [8]closure(int) -> int) {
+	for i in 0..<len(fs) {
+		k := noise(i) & 7
+		fs[i] = proc[k](y: int) -> int { return y * k + 1 }
+	}
+	return
+}
+
+closure_shapes :: proc(n, reps: int) {
+	a := make([]int, n)
+	defer delete(a)
+	for i in 0..<n do a[i] = noise(i)
+	start := time.tick_now()
+	total := 0
+	for _ in 0..<reps do for x, i in a {
+		k := i & 7
+		total += apply_once(x, proc[k](y: int) -> int { return y * k + 1 })
+	}
+	section("closure, created in a loop", start, total)
+
+	fs: [8]closure(int) -> int = make_closures()
+	start = time.tick_now()
+	total = 0
+	for _ in 0..<reps do for x in a[:n / 8] do for f in fs do total += f(x)
+	section("closure, from an array", start, total)
+
+	k := 3
+	f := proc[k](y: int) -> int { return y * k + 1 }
+	start = time.tick_now()
+	total = 0
+	for _ in 0..<reps do for x in a do total += apply_once(x, f)
+	section("closure, as a parameter", start, total)
+}
+
 // ---- @(table): every result computed once ----
 
 // steps the Collatz sequence takes from b + 1 down to 1
@@ -309,4 +348,5 @@ main :: proc() {
 	steps(100_000, scale)
 	bodies(100_000, 10 * scale)
 	closures(100_000, 2 * scale)
+	closure_shapes(100_000, 2 * scale)
 }

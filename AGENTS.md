@@ -44,6 +44,7 @@ Times are from a 12-core M3 Pro.
 | `node scripts/test.js [-jN]` | fixture cases, error cases, passthrough | 43 s at the default `-j6`, 49 s at `-j1` |
 | `node scripts/test.js --only <text>` | only the cases and error tests whose name contains `<text>` (skips the `core` passthrough) | seconds |
 | `npm run test:update` | build, then regenerate every fixture (see below) | as above |
+| `npm run bench` | `examples/negative_cost` timed against `HEAD`; see "Benchmarks" | 15 s |
 | `node scripts/test-lsp.js` | the language server, end to end over stdio | 6 s |
 | `VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js` | the same suite against a built binary | |
 | `node scripts/passthrough.js <files...>` | plain Odin files must come out unchanged; try `$(find "$(odin root)/core" -name '*.odin')` | |
@@ -133,15 +134,18 @@ So a hang fails one case (`odin build timed out`, or `timed out after 30s`) inst
 | `vidar-unit-*` | the unit tests |
 | `vidar-XXXXXX` | `vidar run` and `vidar check` |
 | `slime-bench-*` | the slime_mud benchmark |
+| `vidar-bench-*` | `npm run bench` |
 
 They had reached about 1 GB here. Clean up when no test, benchmark or editor session is running:
 ```bash
-rm -rf "$TMPDIR"/vidar-test-* "$TMPDIR"/vidar-lsp-* "$TMPDIR"/vidar-unit-* "$TMPDIR"/slime-bench-*
+rm -rf "$TMPDIR"/vidar-test-* "$TMPDIR"/vidar-lsp-* "$TMPDIR"/vidar-unit-* "$TMPDIR"/slime-bench-* "$TMPDIR"/vidar-bench-*
 ```
 
 ## Benchmarks
 
 `examples/negative_cost` measures each optimization against the plain version. Every section prints a checksum, and with `--bench` it also prints the time.
+
+**Regression check:** `npm run bench` builds it at the working tree and at `HEAD` (in a temporary worktree), runs both 5 times alternately, and prints old, new and change per section. It exits 1 when a section over 0.5 ms is more than 15% slower or a checksum changed, and 2 when a build fails. `--against <ref>`, `--section <text>` and `--runs N` change what it compares. It takes about 15 s. Run it before merging any perf item.
 
 Measure at `-o:speed`. `vidar run` builds at Odin's default level, which says little about speed.
 ```bash
@@ -154,7 +158,7 @@ out/nc/prog --bench
 - Drop `-opt` to see the plain version.
 - Use `-opt-report` in place of `-opt` to also print every `-opt` decision, as `file:line: name: label: reason`.
 
-**Comparing with an earlier commit:** build that commit in a temporary worktree the same way. Then run the two binaries alternately a few times and compare medians; sections vary by about 5% from run to run.
+**Comparing by hand:** `npm run bench` does this for you. To do it by hand, build that commit in a temporary worktree the same way. Then run the two binaries alternately a few times and compare medians; sections vary by about 5% from run to run.
 ```bash
 git worktree add "$TMPDIR/vidar-base" <commit>
 ln -s "$PWD/node_modules" "$TMPDIR/vidar-base/node_modules"
@@ -162,7 +166,6 @@ ln -s "$PWD/node_modules" "$TMPDIR/vidar-base/node_modules"
 "$TMPDIR/vidar-base/out/nc/prog" --bench
 git worktree remove --force "$TMPDIR/vidar-base"
 ```
-PERF_PROGRESS item 17 turns this into one command, `npm run bench`.
 
 **Reference numbers:** 12-core M3 Pro, `-opt`, `-o:speed`, 2026-10-07. A section much slower than this on the same machine needs an explanation.
 
@@ -181,6 +184,9 @@ PERF_PROGRESS item 17 turns this into one command, `npm run bench`.
 | bodies, 3 of 10 fields | 21 |
 | closure, called through | 8.4 |
 | closure, specialized | 2.9 |
+| closure, created in a loop | 19 |
+| closure, from an array | 19 |
+| closure, as a parameter | 11 |
 
 "Closure, called through" took 2.87 ms before closure values; the 8.4 ms is an open regression (PERF_PROGRESS item 1). README's "What it buys" table compares the plain and Vidar versions.
 
