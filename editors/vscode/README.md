@@ -7,6 +7,7 @@ Syntax highlighting plus a client for the `vidar-lsp` language server:
 - inlay hints showing what `-opt` decides
 - a **Vidar: Optimization Report** view in the explorer, listing every `-opt` decision by file and proc (decisions against marked; click to jump), refreshed on save, and a code lens over each proc, "N optimizations, M not", that opens it on that proc
 - an **Vidar: Show Generated Odin** command
+- **Vidar: Expand at Cursor**: the Odin generated for the statement at the cursor, in a read-only view beside the editor that follows the cursor; **Vidar: Toggle -opt in Expand at Cursor** (or the button on the view) shows the `-opt` output
 
 ## Install from a .vsix (recommended)
 

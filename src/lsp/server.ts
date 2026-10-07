@@ -20,6 +20,7 @@ import { OdinBridge } from "./odin";
 import * as N from "./navigation";
 import * as Sem from "./semantic";
 import * as R from "./optreport";
+import { expandAt } from "./expand";
 
 // editors usually pass --stdio; default to it so `vidar-lsp` alone works too
 if (!process.argv.some((a) => /^--(stdio|node-ipc|socket|pipe)/.test(a))) process.argv.push("--stdio");
@@ -442,6 +443,26 @@ connection.languages.semanticTokens.on(({ textDocument }) => {
 connection.languages.semanticTokens.onRange(({ textDocument, range }) => {
   const { state, path } = stateFor(textDocument.uri);
   return { data: Sem.semanticTokensData(state.current, state.index, path, range) };
+});
+
+/** -opt programs for `vidar/expandAt`, made fresh (not the hints' one, which is optimized without emitting) */
+const expandOpt = new WeakMap<Analysis, Analysis>();
+
+/** Custom request: the Odin code vidar generates for the statement at a position. */
+connection.onRequest("vidar/expandAt", ({ uri, position, opt }: { uri: string; position: F.Position; opt?: boolean }) => {
+  const { state, path } = stateFor(uri);
+  let a = state.current;
+  if (!a) return { error: "not analyzed yet" };
+  try {
+    if (opt && !a.errors.length) {
+      const cur = a;
+      a = expandOpt.get(cur) ?? loadProgram(dirname(path), { tolerant: true, overrides: overrides(), optimize: true });
+      expandOpt.set(cur, a);
+    }
+    return expandAt(a, path, position, !!opt);
+  } catch (err) {
+    return { error: `expansion failed: ${err instanceof Error ? err.message : err}` };
+  }
 });
 
 connection.onShutdown(() => ols?.shutdown());

@@ -1,0 +1,37 @@
+package main
+
+import "core:fmt"
+import "core:strconv"
+
+Error :: enum { None, Bad }
+
+parse :: proc(s: string) -> (int, Error) {
+	n, ok := strconv.parse_int(s)
+	if !ok do return 0, .Bad
+	return n, .None
+}
+
+sum :: proc(xs: []int) -> int {
+	total := 0
+	for i in 0..<len(xs) {
+		total += xs[i]
+	}
+	return total
+}
+
+main :: proc() {
+	k := 10
+	add := proc[k](x: int) -> int {
+		return x + k
+	}
+	n := parse("7") catch err {
+		fmt.println("bad:", err)
+		return
+	}
+	half := do! {
+		v := n * 3
+		take v / 2
+	}
+	plain := add(n) + half
+	fmt.println(plain, sum([]int{1, 2, 3}))
+}

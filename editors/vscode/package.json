@@ -68,6 +68,14 @@
         "title": "Vidar: Show Generated Odin"
       },
       {
+        "command": "vidar.expandAtCursor",
+        "title": "Vidar: Expand at Cursor"
+      },
+      {
+        "command": "vidar.expandAtCursorToggleOpt",
+        "title": "Vidar: Toggle -opt in Expand at Cursor"
+      },
+      {
         "command": "vidar.restartServer",
         "title": "Vidar: Restart Language Server"
       },
@@ -96,6 +104,12 @@
           "command": "vidar.refreshOptReport",
           "when": "view == vidar.optReport",
           "group": "navigation"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "vidar.expandAtCursorToggleOpt",
+          "when": "resourceScheme == vidar-expand"
         }
       ]
     },
