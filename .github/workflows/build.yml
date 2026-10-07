@@ -46,6 +46,11 @@ jobs:
           node-version: 20
           cache: npm
 
+      # vidar:sched's stack switching is a foreign .asm import, which Odin assembles with nasm
+      - name: Install nasm
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y nasm
+
       - name: Install Odin
         run: |
           case "$RUNNER_OS-$RUNNER_ARCH" in

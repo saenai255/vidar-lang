@@ -55,12 +55,40 @@ export function watch(opts: WatchOptions): Watcher {
     return w.names.has(name) || (w.all && SOURCE.test(name));
   };
 
+  /** mtime and size of every file that counts; macOS (FSEvents) can report writes made before the watch began */
+  let seen = "";
+  const snapshot = () => {
+    const out: string[] = [];
+    for (const [dir, w] of wanted) {
+      let names = [...w.names];
+      if (w.all) {
+        try {
+          names = names.concat(readdirSync(dir).filter((n) => SOURCE.test(n)));
+        } catch {}
+      }
+      for (const n of [...new Set(names)].sort()) {
+        try {
+          const st = statSync(join(dir, n));
+          out.push(`${join(dir, n)}:${st.mtimeMs}:${st.size}`);
+        } catch {
+          out.push(`${join(dir, n)}:-`);
+        }
+      }
+    }
+    return out.join("\n");
+  };
+
   const changed = () => {
     if (closed) return;
     dirty = true;
     clearTimeout(timer);
     timer = setTimeout(() => {
       timer = undefined;
+      // nothing that counts changed since the run started: a late or spurious event
+      if (snapshot() === seen) {
+        dirty = false;
+        return;
+      }
       if (running) ac?.abort();
       else start();
     }, debounce);
@@ -150,6 +178,7 @@ export function watch(opts: WatchOptions): Watcher {
     } catch (err) {
       console.error(err);
     }
+    seen = snapshot();
     ac = new AbortController();
     const signal = ac.signal;
     running = (async () => {

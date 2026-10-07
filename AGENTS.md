@@ -9,6 +9,7 @@ The language is documented in [README.md](README.md) and [SYNTAX.md](SYNTAX.md).
 - **Requirements:**
   - Node 20, tested with 20.15.
   - `odin` on PATH, tested with `dev-2026-07-nightly` (installed through nix).
+  - `nasm` on PATH on linux/amd64: `vidar:sched` (every program with goroutines) has a `.asm` file that Odin assembles with it.
   - `ols`, optionally. Without it, the LSP suite skips its forwarding checks.
 - **Platform:** only darwin/arm64 is tested. `vidar:sched` has stack-switching assembly for darwin/arm64, linux/arm64 and linux/amd64.
 - **Build:** run `npm install`, then `npm run build`. The build runs `tsc` into `dist/` and copies `src/prelude.vidar` there.
