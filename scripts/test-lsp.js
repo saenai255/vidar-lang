@@ -178,6 +178,9 @@ function change(text) {
 
   const gen = await request("vidar/generatedOdin", { uri });
   check("generated Odin request covers the whole program", (gen.result?.files?.["geo/geo.odin"] ?? "").includes("add :: proc") && gen.result?.main === "main.odin", JSON.stringify(gen.result).slice(0, 200));
+  const genAt = await request("vidar/generatedOdin", { uri, line: at("fmt.println(v.x", "fmt").line });
+  const genLine = (genAt.result?.files?.["main.odin"] ?? "").split("\n")[genAt.result?.line ?? -1] ?? "";
+  check("generated Odin request finds the line matching a .vidar line, past expanded macros", genLine.includes("fmt.println(v.x") && genAt.result.line > at("fmt.println(v.x", "fmt").line, JSON.stringify([genAt.result?.line, genLine]));
 
   // completion while typing (the edited line does not parse yet)
   const typing = (line) => original.replace("\tinc()\n", `\tinc()\n\t${line}\n`);

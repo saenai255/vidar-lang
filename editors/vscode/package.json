@@ -12,7 +12,10 @@
     "Programming Languages"
   ],
   "main": "./extension.js",
-  "activationEvents": [],
+  "activationEvents": [
+    "onDebugResolve:vidar",
+    "onDebugInitialConfigurations"
+  ],
   "contributes": {
     "languages": [
       {
@@ -121,6 +124,11 @@
           "default": "vidar-lsp",
           "description": "Language server to run: an executable name or path, or the path to dist/lsp/server.js. Leave unset to use the server bundled in the extension, falling back to vidar-lsp on PATH."
         },
+        "vidar.cliPath": {
+          "type": "string",
+          "default": "",
+          "description": "vidar CLI the `vidar` debug configuration runs `vidar build -debug` with: an executable, or the path to dist/cli.js. Leave empty to use the binary bundled in the extension, falling back to `vidar` on PATH."
+        },
         "vidar.odinCheckOnSave": {
           "type": "boolean",
           "default": true,
@@ -154,7 +162,125 @@
           "description": "A code lens over each proc with `-opt` decisions, \"N optimizations, M not\", that opens the Optimization Report on that proc. None while `vidar.optHints` is off."
         }
       }
-    }
+    },
+    "debuggers": [
+      {
+        "type": "vidar",
+        "label": "Vidar",
+        "languages": [
+          "vidar"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "The package directory or .vidar file to debug.",
+                "default": "${workspaceFolder}"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Arguments for the program.",
+                "default": []
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory for the build and the program (default: the workspace folder).",
+                "default": "${workspaceFolder}"
+              },
+              "env": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Extra environment variables for the program.",
+                "default": {}
+              },
+              "outDir": {
+                "type": "string",
+                "description": "Where `vidar build -debug` writes the generated Odin and the binary (default: out/<name>-debug).",
+                "default": "${workspaceFolder}/out/debug"
+              },
+              "opt": {
+                "type": "boolean",
+                "description": "Build with -opt.",
+                "default": false
+              },
+              "odinFlags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Extra flags for `odin build`, such as -define:VIDAR_THREADS=4.",
+                "default": []
+              },
+              "debugger": {
+                "type": "string",
+                "enum": [
+                  "lldb",
+                  "gdb"
+                ],
+                "enumDescriptions": [
+                  "CodeLLDB (vadimcn.vscode-lldb)",
+                  "gdb through the C/C++ extension (ms-vscode.cpptools)"
+                ],
+                "description": "Debugger that runs the binary.",
+                "default": "lldb"
+              },
+              "debuggerPath": {
+                "type": "string",
+                "description": "gdb executable, with \"debugger\": \"gdb\".",
+                "default": "gdb"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop at the program's entry.",
+                "default": false
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "vidar",
+            "request": "launch",
+            "name": "Debug Vidar program",
+            "program": "${workspaceFolder}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Vidar: Debug with CodeLLDB",
+            "description": "Build with `vidar build -debug` and run the binary under CodeLLDB",
+            "body": {
+              "type": "vidar",
+              "request": "launch",
+              "name": "Debug Vidar program",
+              "program": "^\"\\${workspaceFolder}\"",
+              "args": []
+            }
+          },
+          {
+            "label": "Vidar: Debug with gdb",
+            "description": "Build with `vidar build -debug` and run the binary under gdb (C/C++ extension)",
+            "body": {
+              "type": "vidar",
+              "request": "launch",
+              "name": "Debug Vidar program (gdb)",
+              "program": "^\"\\${workspaceFolder}\"",
+              "debugger": "gdb",
+              "args": []
+            }
+          }
+        ]
+      }
+    ]
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"

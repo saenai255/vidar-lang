@@ -16,6 +16,7 @@ import { hotWarnings } from "../checks";
 import { PRELUDE_PATH } from "../prelude";
 import { writeOutput } from "../cli";
 import { formatEdits } from "../format";
+import { generatedLine } from "../runmap";
 import * as F from "./features";
 import * as Actions from "./actions";
 import { OdinBridge } from "./odin";
@@ -408,7 +409,8 @@ connection.onCodeAction(({ textDocument, range, context }) => {
 });
 
 /** Custom request: the Odin code vidar generates for a file. */
-connection.onRequest("vidar/generatedOdin", ({ uri }: { uri: string }) => {
+// `line` (0-based, optional) is a line of the .vidar file; the answer's `line` is the matching line of `main`
+connection.onRequest("vidar/generatedOdin", ({ uri, line }: { uri: string; line?: number }) => {
   const { state, path } = stateFor(uri);
   const a = state.current;
   if (!a) return { error: "not analyzed yet" };
@@ -416,7 +418,9 @@ connection.onRequest("vidar/generatedOdin", ({ uri }: { uri: string }) => {
   const out = emitProgram(a);
   const pkgOf = a.packages.find((p) => p.files.some((f) => f.path === path));
   const file = pkgOf?.files.find((f) => f.path === path);
-  return { files: Object.fromEntries(out.files), main: pkgOf && file ? outputName(pkgOf, file) : undefined };
+  const main = pkgOf && file ? outputName(pkgOf, file) : undefined;
+  const at = main && line !== undefined ? generatedLine(out.lineMap.get(main) ?? [], line + 1, out.files.get(main)?.split("\n")) : 0;
+  return { files: Object.fromEntries(out.files), main, ...(at ? { line: at - 1 } : {}) };
 });
 
 // ---- workspace symbols, implementations, call hierarchy (navigation.ts) ----
