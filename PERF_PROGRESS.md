@@ -28,6 +28,16 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 15 | 11 | String `switch` through a perfect hash | perf | merged |
 | 16 | 13 | Automatic `@(memo)` and two-parameter `@(table)` | perf | merged |
 | 17 | 15 | Struct field reordering, then hot/cold splitting | perf | merged (reordering only) |
+| 18 | 22 | `vidar test` | dev tooling | todo |
+| 19 | 23 | Run-time crash locations mapped to `.vidar` | dev tooling | todo |
+| 20 | 24 | `--watch` for `run`, `check` and `test` | dev tooling | todo |
+| 21 | 25 | Expand-at-cursor view of generated Odin | dev tooling | todo |
+| 22 | 26 | Code actions (quick fixes) | dev tooling | todo |
+| 23 | 27 | Semantic tokens | dev tooling | todo |
+| 24 | 28 | Workspace symbols, call hierarchy, find implementations | dev tooling | todo |
+| 25 | 29 | `-opt` decisions panel and code lens | dev tooling | todo |
+| 26 | 30 | `vidar fmt` | dev tooling | todo |
+| 27 | 31 | Debugger support: `vidar build -debug` and a launch config | dev tooling | todo |
 
 ## Tooling
 
@@ -170,11 +180,72 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - **Hot/cold splitting** comes second: for a `[dynamic]T` whose hot loops touch few fields, move the rarely used ones to a parallel array. Same use analysis as automatic `#soa` (`src/soa.ts`), for cases `#soa` doesn't take.
 - Hints: `reordered: <bytes> saved`, or the reason not to.
 
+## Developer tooling
+
+Items 22 to 31 make Vidar nicer to work in day to day. None of them changes generated code, so none should change a fixture. Each is built in its own worktree and merged one at a time, like the perf items.
+
+### 22. `vidar test`
+There is no way to unit-test a Vidar program.
+- `vidar test <dir|file> [-opt] [-- odin flags]` transpiles to a temp dir and runs `odin test` on it, so `@(test)` procs (with `t: ^testing.T`) work as in Odin.
+- `-define:ODIN_TEST_NAMES=...` passes through, plus a `--run <name>` shorthand for it.
+- Failures, `testing.expect` messages and panics are reported at `.vidar` locations (shares item 23's mapping).
+- Exits with `odin test`'s status. New `examples/testing` with passing tests, and an error-path check in the runner for a failing one.
+
+### 23. Run-time crash locations mapped to `.vidar`
+Panics, failed `assert`s, bounds-check failures and `testing` messages print locations in the generated `.odin`.
+- `vidar run` and `vidar test` pipe the program's stderr (and stdout for `testing`) through a filter that rewrites `path.odin(line:col)` to the `.vidar` location, with the same mapping `mapLocations` in `src/cli.ts` uses for compile errors.
+- Only exact generated paths are rewritten; everything else passes through unchanged and unbuffered per line.
+- `vidar build` can't wrap the program, so it also writes `<out>/vidar.map.json`, and `vidar map <out> < log` rewrites a saved log.
+
+### 24. `--watch`
+- `vidar run --watch`, `check --watch` and `test --watch` rerun when a `.vidar` file in the program (every package it imports from the project, not `core:`) changes.
+- Debounced (about 100 ms); a running program is killed before the rerun; the screen is not cleared unless `--clear`.
+- `fs.watch` with a polling fallback where recursive watching isn't supported.
+
+### 25. Expand-at-cursor view
+Hover shows a macro's expansion (21); *Show Generated Odin* shows the whole file. In between: the Odin for the construct at the cursor.
+- A *Vidar: Expand at Cursor* command (custom LSP request `vidar/expandAt`) shows the generated lines for the statement at the cursor (a closure literal, `catch`, `do!`, a `go` call, a lowered `for`, an interface call), using the line structure the emitter keeps.
+- Opens in a side editor as Odin, updates when the cursor moves to another statement. A `-opt` toggle shows the `-opt` output.
+
+### 26. Code actions
+Quick fixes for the common compile errors, from the analyzer's diagnostics.
+- Converting a plain value to an interface: `&x` is the preferred fix (what "fix all" and fix-on-save apply). `new_clone(x)` is a separate action, never preferred, labelled "Allocate a heap copy (new_clone, caller frees)": an allocation is never added without the coder choosing it. When `src/escape.ts` says `&x` would dangle, only the `new_clone` action is offered, with why.
+- A missing import for a known package (`fmt.println` without `import "core:fmt"`).
+- An opt-out attribute (`@(no_table)`, `@(no_specialize)`, ...) from an `-opt` hint, when the coder wants the decision undone.
+- Writing to a by-value capture: capture by reference (`&x`) instead.
+
+### 27. Semantic tokens
+Only a TextMate grammar today, so closures, interfaces, captures and macros look like any other identifier.
+- `textDocument/semanticTokens/full` (and `/range`) from the analyzer's symbols: interfaces, interface methods, closures and closure parameters, captured variables (by value and by reference), macros, comptime calls, goroutine calls. Generated `__` names never get a token.
+- Standard token types where they fit (`interface`, `function`, `parameter`, `macro`), modifiers for `captured`, `byRef`, `readonly`. The extension maps the custom ones to theme scopes.
+
+### 28. Workspace symbols, call hierarchy, find implementations
+- `workspace/symbol` over every package the server has analyzed.
+- `textDocument/implementation`: from an interface, its implementations (the analyzer's `variants`); from an interface method, the bound procs.
+- `callHierarchy/*`: incoming and outgoing calls, through proc groups and closed interfaces where the analyzer knows the targets.
+
+### 29. `-opt` decisions panel and code lens
+`-opt-report` prints every decision, and inlay hints show them inline, but there is no overview.
+- A code lens over each proc: "N optimizations, M not" (from `an.hint`), which opens the list.
+- A *Vidar: Optimization Report* tree view in the extension, grouped by file and proc, decisions against marked, each entry jumping to its location. Custom request `vidar/optReport`.
+
+### 30. `vidar fmt`
+- Formats `.vidar` files: plain Odin parts through `odinfmt` when it is on PATH, Vidar syntax (closures, `catch`, macros, `interface`, `impl`) laid out by the same rules (tabs, spacing around operators, brace style).
+- `--check` exits 1 when a file would change, `--write` rewrites in place (default prints to stdout). LSP `textDocument/formatting`.
+- Must be idempotent and must never change what a file transpiles to apart from whitespace; the runner checks both over every case.
+
+### 31. Debugger support
+Odin has no `#line` directive, so stepping happens in the generated Odin.
+- `vidar build -debug` builds with `odin build -debug`, keeps the generated `.odin` next to the binary, and writes a `vidar.map.json` (shared with 23).
+- The extension adds a `vidar` debug configuration that runs `vidar build -debug` and launches lldb (CodeLLDB) or gdb on the result, plus *Vidar: Show Generated Odin* opening at the line matching the current `.vidar` line so breakpoints can be set there.
+- README section on debugging.
+
 ## Parallel plan
 - **Wave 1 (tooling first):** 17, 20, 18, 21 and 19, plus 2, 3 and 5. These touch mostly separate files. Merge in priority order: 17, 20, 18, 21, 19, then the bugs.
 - **Wave 2:** 1, measured with 17, merged first because it is a small emitter change that the rest build on. Then 6, 7, 9, 10, 11, 13 and 15 in parallel.
   - Expected conflicts: `src/emitter.ts` (1, 6, 7, 11, 15), `src/optimize.ts` (9, 10, 19), `src/autoopt.ts` (13, 18), `src/analyzer.ts` (3, 6, 15, 18).
 - **Wave 3:** 8, after 2 is merged.
+- **Wave 4 (developer tooling):** 22 to 31 in parallel. Expected conflicts: `src/cli.ts` (22, 23, 24, 30, 31), `src/lsp/server.ts` and `src/lsp/features.ts` (25 to 30), `editors/vscode` (25, 27, 29, 31). Merge order: 23, 22, 24, 31, 30, then the language-server items 26, 28, 27, 25, 29.
 - After each wave: `npm test`, `npm run bench`, and `npm run vsix` if the editor's output changed.
 
 ## Not in this batch
