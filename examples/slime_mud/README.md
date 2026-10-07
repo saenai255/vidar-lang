@@ -110,7 +110,7 @@ node examples/slime_mud/bench/bench.js           # about 2 minutes; --quick for 
 
 The harness builds both versions and checks they agree. Then it measures:
 
-- **Build**: the transpile step and `odin build` at the default level and at `-o:speed`.
+- **Build**: the transpile step (`vidar build -opt`) and `odin build` at the default level and at `-o:speed`.
 - **Startup**: from process start until both ports are bound (`--ready-exit`).
 - **Simulation**: 2000 ticks of 500 bots in a world of 20,000 slimes, on one thread with no I/O. This is the pure game logic: command parsing and dispatch, combat, string formatting, monsters acting.
 - **Server under load**: 64 clients on loopback, each logging in and sending 2000 commands, waiting for the prompt after each. The world ticks every 50 ms.

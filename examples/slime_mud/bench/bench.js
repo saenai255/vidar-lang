@@ -51,9 +51,9 @@ function timeRuns(n, f) {
 const out = (name) => join(WORK, name);
 const builds = {};
 console.error("building...");
-builds.transpile = timeRuns(RUNS.build, () => run("node", [CLI, "build", join(EX, "vidar"), "-o", out("vidar_src")]).ms);
+builds.transpile = timeRuns(RUNS.build, () => run("node", [CLI, "build", join(EX, "vidar"), "-opt", "-o", out("vidar_src")]).ms);
 for (const opt of ["minimal", "speed"]) {
-  builds[`vidar_${opt}`] = timeRuns(RUNS.build, () => run("odin", ["build", out("vidar_src"), `-out:${out(`vidar_${opt}`)}`, `-o:${opt}`]).ms);
+  builds[`vidar_${opt}`] = timeRuns(RUNS.build, () => run("odin", ["build", out("vidar_src"), `-out:${out(`vidar_${opt}`)}`, `-o:${opt}`, "-define:VIDAR_CLOSURE_ENV=128"]).ms);
   builds[`odin_${opt}`] = timeRuns(RUNS.build, () => run("odin", ["build", join(EX, "odin"), `-out:${out(`odin_${opt}`)}`, `-o:${opt}`]).ms);
 }
 run("odin", ["build", join(EX, "bench/loadgen"), `-out:${out("loadgen")}`, "-o:speed"]);
@@ -173,32 +173,52 @@ async function main() {
   lines.push(`Measured on ${cpus()[0].model}, ${cpus().length} cores, ${(totalmem() / 2 ** 30).toFixed(0)} GB, ${process.platform} ${release()}; Odin ${odinVersion}, Node ${process.version}.`);
   lines.push(`Each number is the median of the runs listed. Both versions agree: simulation ${simSame && bigSimSame ? "identical" : "DIFFERENT"}, transcript ${transcriptSame ? "identical" : "DIFFERENT"}.`);
   lines.push("");
-  const signedPct = (d) => (Math.abs(d) < 0.05 ? "0%" : `${d > 0 ? "+" : "−"}${fmt(Math.abs(d))}%`);
   // seeded so the report doesn't change between reruns of the same numbers
   let seed = 0x2545f491;
   const rand = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32);
   const resample = (xs) => xs.map(() => xs[Math.floor(rand() * xs.length)]);
-  /** 95% bootstrap interval of (stat(vidar) − stat(odin)) / stat(odin), in percent */
+  /** 95% bootstrap interval of stat(vidar) / stat(odin) */
   const interval = (vidar, odin, stat) => {
-    const ds = [];
-    for (let i = 0; i < 4000; i++) {
-      const o = stat(resample(odin));
-      ds.push(((stat(resample(vidar)) - o) / o) * 100);
-    }
-    ds.sort((a, b) => a - b);
-    return [ds[Math.floor(ds.length * 0.025)], ds[Math.floor(ds.length * 0.975)]];
+    const rs = [];
+    for (let i = 0; i < 4000; i++) rs.push(stat(resample(vidar)) / stat(resample(odin)));
+    rs.sort((a, b) => a - b);
+    return [rs[Math.floor(rs.length * 0.025)], rs[Math.floor(rs.length * 0.975)]];
   };
-  // vidar, odin: samples (one per run); stat reduces them; show formats a cell
-  const cmp = (label, vidar, odin, show, stat = median) => {
+  const LOWER = { lower: true, good: "faster", bad: "slower" };
+  const HIGHER = { lower: false, good: "faster", bad: "slower" };
+  const SMALLER = { lower: true, good: "smaller", bad: "larger" };
+  const LATENCY = { lower: true, good: "lower", bad: "higher" };
+  const SIZE = { lower: true, good: "smaller", bad: "larger", exact: true };
+  const FEWER = { lower: true, good: "fewer", bad: "more", exact: true };
+  const tally = { wins: [], losses: [], ties: 0 };
+  const times = (x) => `${fmt(x, 2)}×`;
+  // vidar, odin: samples (one per run); stat reduces them; show formats a cell; dir says which way is better
+  const cmp = (label, vidar, odin, show, dir = LOWER, stat = median, section = "") => {
     const v = stat(vidar);
     const o = stat(odin);
-    const diff = signedPct(((v - o) / o) * 100);
-    if (vidar.length < 2) return row(label, show(v), show(o), diff, "–", "exact");
-    const [lo, hi] = interval(vidar, odin, stat);
-    row(label, show(v), show(o), diff, `${signedPct(lo)} to ${signedPct(hi)}`, lo <= 0 && hi >= 0 ? "no, within noise" : "yes");
+    // > 1 means Vidar is better
+    const gain = (ratio) => (dir.lower ? 1 / ratio : ratio);
+    const g = gain(v / o);
+    const better = g >= 1;
+    const word = better ? dir.good : dir.bad;
+    const flip = (x) => (better ? x : 1 / x);
+    const verdict = Math.abs(g - 1) < 0.005 ? "same" : `${times(flip(g))} ${word}`;
+    let real = !!dir.exact;
+    let span = "–";
+    if (vidar.length >= 2) {
+      const [lo, hi] = interval(vidar, odin, stat).map(gain).map(flip).sort((a, b) => a - b);
+      span = `${times(lo)} to ${times(hi)} ${word}`;
+      real = lo > 1 || hi < 1;
+    }
+    const name = `${section}${section && label ? " " : ""}${label}`;
+    if (!real || verdict === "same") tally.ties++;
+    else (better ? tally.wins : tally.losses).push(`${name}: ${verdict}`);
+    const shown = real && better && verdict !== "same" ? `**${verdict}**` : verdict;
+    const why = dir.exact ? "exact" : vidar.length < 2 ? "one run, can't tell" : !real ? "no, within noise" : better ? "yes, Vidar better" : "yes, Odin better";
+    row(label, show(v), show(o), shown, span, why);
   };
   const header = () => {
-    row("", "Vidar", "Odin", "Vidar vs Odin", "95% interval", "Real difference?");
+    row("", "Vidar", "Odin", "Vidar is", "95% interval", "Real difference?");
     row("---", "---:", "---:", "---:", "---:", "---");
   };
   const msOf = (d) => (x) => `${fmt(x, d)} ms`;
@@ -209,39 +229,48 @@ async function main() {
   lines.push("**Build** (" + RUNS.build + " runs)");
   lines.push("");
   header();
-  row("transpile (`vidar build`, Node)", `${fmt(median(builds.transpile), 0)} ms`, "–", "–", "–", "–");
-  cmp("`odin build` default (`-o:minimal`)", builds.vidar_minimal, builds.odin_minimal, msOf(0));
-  cmp("`odin build -o:speed`", builds.vidar_speed, builds.odin_speed, msOf(0));
-  cmp("total, default", builds.vidar_minimal.map((x, i) => x + builds.transpile[i]), builds.odin_minimal, msOf(0));
-  cmp("binary size (`-o:speed`)", [statSync(BIN.vidar).size / 1024], [statSync(BIN.odin).size / 1024], (x) => `${fmt(x, 0)} KB`);
-  cmp("source lines (non-blank, non-comment)", [sourceLines(join(EX, "vidar"), ".vidar")], [sourceLines(join(EX, "odin"), ".odin")], String);
+  row("transpile (`vidar build -opt`, Node)", `${fmt(median(builds.transpile), 0)} ms`, "–", "–", "–", "–");
+  cmp("`odin build` default (`-o:minimal`)", builds.vidar_minimal, builds.odin_minimal, msOf(0), LOWER, median, "build");
+  cmp("`odin build -o:speed`", builds.vidar_speed, builds.odin_speed, msOf(0), LOWER, median, "build");
+  cmp("total, default", builds.vidar_minimal.map((x, i) => x + builds.transpile[i]), builds.odin_minimal, msOf(0), LOWER, median, "build");
+  cmp("binary size (`-o:speed`)", [statSync(BIN.vidar).size / 1024], [statSync(BIN.odin).size / 1024], (x) => `${fmt(x, 0)} KB`, SIZE);
+  cmp("source lines (non-blank, non-comment)", [sourceLines(join(EX, "vidar"), ".vidar")], [sourceLines(join(EX, "odin"), ".odin")], String, FEWER);
   row("generated Odin lines (without runtime and sched)", `${generatedLines(out("vidar_src"))}`, "–", "–", "–", "–");
   lines.push("");
   lines.push(`**Startup**: process start to ports bound, \`--ready-exit\` (${RUNS.startup} runs)`);
   lines.push("");
   header();
-  cmp("median", startup.vidar, startup.odin, msOf(1));
-  cmp("p90", startup.vidar, startup.odin, msOf(1), p90);
+  cmp("median", startup.vidar, startup.odin, msOf(1), LOWER, median, "startup");
+  cmp("p90", startup.vidar, startup.odin, msOf(1), LOWER, p90, "startup");
   lines.push("");
   lines.push(`**Simulation**: \`${SIM_ARGS.join(" ")}\`, one thread, no I/O (${RUNS.sim} runs)`);
   lines.push("");
   header();
-  cmp("time", sim.vidar, sim.odin, msOf(0));
-  cmp("bot commands per second", ...both((k) => sim[k].map((t) => (2000 * 500) / (t / 1000))), (x) => fmt(x, 0));
+  cmp("time", sim.vidar, sim.odin, msOf(0), LOWER, median, "simulation");
+  cmp("bot commands per second", ...both((k) => sim[k].map((t) => (2000 * 500) / (t / 1000))), (x) => fmt(x, 0), HIGHER);
   lines.push("");
   lines.push(`**Server under load**: ${LOAD.clients} clients × ${LOAD.commands} commands over loopback, 50 ms ticks (${RUNS.load} runs)`);
   lines.push("");
   header();
-  cmp("throughput", ...loadRuns((x) => x.throughput), (x) => `${fmt(x, 0)} cmd/s`);
-  cmp("latency p50", ...loadRuns((x) => x.p50_ms), msOf(3));
-  cmp("latency p99", ...loadRuns((x) => x.p99_ms), msOf(3));
-  cmp("latency max", ...loadRuns((x) => x.max_ms), msOf(1));
+  cmp("throughput", ...loadRuns((x) => x.throughput), (x) => `${fmt(x, 0)} cmd/s`, HIGHER, median, "server");
+  cmp("latency p50", ...loadRuns((x) => x.p50_ms), msOf(3), LATENCY, median, "server");
+  cmp("latency p99", ...loadRuns((x) => x.p99_ms), msOf(3), LATENCY, median, "server");
+  cmp("latency max", ...loadRuns((x) => x.max_ms), msOf(1), LATENCY, median, "server");
   row("failed clients", ...both((k) => `${Math.max(...load[k].map((x) => x.failed))}`), "–", "–", "–");
-  cmp("RSS idle", ...loadRuns((x) => x.idle), (x) => `${fmt(x)} MB`);
-  cmp("RSS after load", ...loadRuns((x) => x.peak), (x) => `${fmt(x)} MB`);
+  cmp("RSS idle", ...loadRuns((x) => x.idle), (x) => `${fmt(x)} MB`, SMALLER, median, "server");
+  cmp("RSS after load", ...loadRuns((x) => x.peak), (x) => `${fmt(x)} MB`, SMALLER, median, "server");
   lines.push("");
-  lines.push("Vidar vs Odin is (Vidar − Odin) / Odin: negative means Vidar is smaller, which is better for times, sizes and latency and worse for throughput.");
-  lines.push("The 95% interval comes from resampling the runs (bootstrap). When it includes 0%, the difference is within run-to-run noise. With only 3 to 5 runs, an interval is roughly the spread between runs; size and line counts are exact.");
+  lines.push("\"Vidar is\" says how many times faster, lower, smaller or fewer Vidar is than Odin, or how many times slower, higher, larger or more; bold marks a real Vidar win. Only real differences count as wins or losses in the summary.");
+  lines.push("The 95% interval comes from resampling the runs (bootstrap). When it includes 1×, the difference is within run-to-run noise. With only 3 to 5 runs, an interval is roughly the spread between runs; size and line counts are exact.");
+
+  const summary = [
+    `**Vidar wins ${tally.wins.length} of ${tally.wins.length + tally.losses.length + tally.ties} measures, loses ${tally.losses.length}; ${tally.ties} within noise or too few runs to tell.**`,
+    "",
+    ...tally.wins.map((w) => `- better: ${w}`),
+    ...tally.losses.map((l) => `- worse: ${l}`),
+    "",
+  ];
+  lines.splice(3, 0, ...summary);
 
   const report = lines.join("\n") + "\n";
   writeFileSync(join(EX, "bench/results.md"), report);
