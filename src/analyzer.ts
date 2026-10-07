@@ -1248,12 +1248,38 @@ export class Analyzer {
     return (info.eligible = out);
   }
 
+  /**
+   * Odin rejects a constant range with nothing in it (`for i in 0..<0`), so a parameter isn't made
+   * compile-time for a value that would turn one of the proc's `lo..<p` or `lo..=p` loops into that.
+   */
+  emptiesRange(lit: ProcLit, param: string, arg: Expr, scope: Scope): boolean {
+    let v: Val;
+    try {
+      v = this.interp.evalIn(arg, scope);
+    } catch {
+      return false;
+    }
+    if (v.k !== "int") return false;
+    let empty = false;
+    const visit = (n: Node): void => {
+      if (empty) return;
+      if (n.k === "RangeFor" && n.x.k === "Binary" && (n.x.op === "..<" || n.x.op === "..=") && n.x.y.k === "Ident" && n.x.y.name === param) {
+        const lo = n.x.x;
+        const text = lo.k === "Lit" && lo.kind === "int" ? lo.toks[lo.start].text.replace(/_/g, "") : undefined;
+        if (text && /^\d+$/.test(text) && (n.x.op === "..<" ? v.v <= BigInt(text) : v.v < BigInt(text))) empty = true;
+      }
+      for (const c of children(n)) visit(c);
+    };
+    if (lit.body) visit(lit.body);
+    return empty;
+  }
+
   /** A call passing constants to some of a @(specialize) proc's parameters calls the copy where they are compile-time. */
   private specializeCall(e: Call, sym: GlobalSym, info: SpecInfo, scope: Scope): void {
     if (e.args.some((a) => a.k === "FieldValue" || a.k === "Spread")) return;
     const eligible = this.specParams(info);
     const names = info.lit.sig.params.flatMap((p) => p.names.map((n) => n.name));
-    const consts = names.filter((n, i) => i < e.args.length && eligible.has(n) && this.isConstant(e.args[i], scope));
+    const consts = names.filter((n, i) => i < e.args.length && eligible.has(n) && this.isConstant(e.args[i], scope) && !this.emptiesRange(info.lit, n, e.args[i], scope));
     if (e.args.some((a) => a.k === "ProcLit" && a.captures)) this.closureCalls.push({ e, sym, info, consts });
     else this.specializeConsts(e, sym, info, consts);
   }

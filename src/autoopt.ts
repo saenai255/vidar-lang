@@ -225,7 +225,7 @@ function autoSpecialize(an: Analyzer, sym: GlobalSym, lit: ProcLit, sites: CallS
   const constArgs = (site: CallSite, of: (name: string) => boolean) =>
     site.call.args.some((a) => a.k === "FieldValue" || a.k === "Spread")
       ? []
-      : names.filter((n, i) => i < site.call.args.length && of(n) && an.isConstant(site.call.args[i], site.scope));
+      : names.filter((n, i) => i < site.call.args.length && of(n) && an.isConstant(site.call.args[i], site.scope) && !an.emptiesRange(lit, n, site.call.args[i], site.scope));
   if (!sites.some((s) => constArgs(s, (n) => eligible.has(n)).length)) return;
 
   const roles = drivers(lit, new Set(eligible));

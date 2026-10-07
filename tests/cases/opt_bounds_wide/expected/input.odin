@@ -61,8 +61,8 @@ main :: proc() {
 	__fmt_0(out, back(a))
 	__fmt_0(first_negative({3, -1, 2}, 10), guarded(a, 6))
 	// a loop that runs zero times checks nothing
-	zero := len(a) - 6
-	__fmt_1(scale(a, zero))
+	// a constant 0 bound: no copy where n is compile-time (Odin rejects `0..<0`)
+	__fmt_1(scale(a, 0))
 	__fmt_1(nested(a, 3, 2))
 	__fmt_0(runes("ab", {1, 2}), fixed({1, 2, 3, 4}, {1, 1, 1, 1}))
 }
