@@ -1,0 +1,14 @@
+fixed: 10
+fixed: 20
+fixed: 30
+indexed: 15
+plain: 110
+plain: 210
+unnamed: 5
+unnamed: 1
+slice: 11
+slice: 12
+dynamic: 9
+struct: -3 9 27 true
+struct array: 4
+struct array: 8

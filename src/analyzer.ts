@@ -940,6 +940,11 @@ export class Analyzer {
         return e.type ? { t: "node", node: e.type, scope } : undefined;
       case "ProcLit":
         return { t: "sig", closure: !!e.captures, sig: e.sig, scope };
+      case "Directive": {
+        // `#force_inline proc(...)`, `#force_no_inline proc(...)`: the proc's own type
+        const lit = unwrapProc(e);
+        return lit ? this.typeOf(lit, scope, depth + 1) : undefined;
+      }
       case "MacroCall":
         return A(e)._expansion ? this.typeOf(A(e)._expansion, scope, depth + 1) : undefined;
       case "Call": {
@@ -979,7 +984,7 @@ export class Analyzer {
         if (d.type) return { t: "node", node: d.type, scope: sym.scope };
         const v = d.values[sym.index];
         if (!v || isTypeExpr(v)) return undefined;
-        if (v.k === "ProcLit" && v.comptime) return undefined;
+        if (unwrapProc(v)?.comptime) return undefined;
         return this.typeOf(v, sym.scope, depth + 1);
       }
     }

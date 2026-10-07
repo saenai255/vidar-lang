@@ -1,0 +1,60 @@
+package main
+
+import "core:fmt"
+
+// closures returned through named results (and procs behind a directive) keep their type in `:=`
+
+Ops :: struct { f: closure(int) -> int, g: [2]closure(int) -> int }
+
+make_closures :: #force_no_inline proc() -> (fs: [3]closure(int) -> int) {
+	for i in 0..<len(fs) do fs[i] = proc[i](y: int) -> int { return y * (i + 1) }
+	return
+}
+
+plain :: proc() -> (fs: [2]closure(x: int) -> int) {
+	fs[0] = proc[](x: int) -> int { return x + 100 }
+	fs[1] = proc[](x: int) -> int { return x + 200 }
+	return
+}
+
+unnamed :: #force_inline proc() -> [2]closure(int) -> int {
+	return {proc[](y: int) -> int { return y / 2 }, proc[](y: int) -> int { return y % 3 }}
+}
+
+sliced :: #force_no_inline proc() -> (fs: []closure(int) -> int) {
+	fs = make([]closure(int) -> int, 2)
+	fs[0] = proc[](y: int) -> int { return y + 1 }
+	fs[1] = proc[](y: int) -> int { return y + 2 }
+	return
+}
+
+dyn :: #force_no_inline proc() -> (fs: [dynamic]closure(int) -> int) {
+	append(&fs, proc[](y: int) -> int { return y - 1 })
+	return
+}
+
+ops :: #force_no_inline proc() -> (o: Ops, ok: bool) {
+	o.f = proc[](y: int) -> int { return -y }
+	o.g[0] = proc[](y: int) -> int { return y * y }
+	o.g[1] = proc[](y: int) -> int { return y * y * y }
+	return o, true
+}
+
+main :: proc() {
+	fs := make_closures()
+	for f in fs do fmt.println("fixed:", f(10))
+	fmt.println("indexed:", fs[2](5))
+	ps := plain()
+	for f in ps do fmt.println("plain:", f(10))
+	us := unnamed()
+	for f in us do fmt.println("unnamed:", f(10))
+	ss := sliced()
+	defer delete(ss)
+	for f in ss do fmt.println("slice:", f(10))
+	ds := dyn()
+	defer delete(ds)
+	for f in ds do fmt.println("dynamic:", f(10))
+	o, ok := ops()
+	fmt.println("struct:", o.f(3), o.g[0](3), o.g[1](3), ok)
+	for g in o.g do fmt.println("struct array:", g(2))
+}
