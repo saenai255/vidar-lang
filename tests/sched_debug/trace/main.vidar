@@ -1,0 +1,28 @@
+package main
+
+import "core:fmt"
+import "core:time"
+import "vidar:sched"
+
+// A little of everything the trace records: go, park on a channel, a Mutex and a sleep, wakeups,
+// I/O, idle waits, and goroutines finishing.
+
+main :: proc() {
+	results := sched.make_chan(int)
+	mu: sched.Mutex
+	wg: sched.Wait_Group
+	total := 0
+	sched.add(&wg, 8)
+	for i in 0..<8 do sched.go(proc[i, results, &mu, &wg, &total]() {
+		sched.sleep(time.Millisecond)
+		sched.lock(&mu)
+		total += i
+		sched.unlock(&mu)
+		sched.send(results, i * i)
+		sched.done(&wg)
+	})
+	sum := 0
+	for _ in 0..<8 do sum += sched.recv(results)
+	sched.wait(&wg)
+	fmt.println("sum:", sum, "total:", total)
+}

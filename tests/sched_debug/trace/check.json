@@ -1,0 +1,37 @@
+{
+  "stdout": "sum: 140 total: 28\n",
+  "runs": [
+    {
+      "name": "1 thread",
+      "flags": ["-define:VIDAR_SCHED_TRACE=true"],
+      "env": { "VIDAR_TRACE_FILE": "{dir}/trace.json" },
+      "json": "{dir}/trace.json",
+      "jsonHas": [
+        "\"traceEvents\"",
+        "\"name\":\"go\"",
+        "\"name\":\"goroutine 2\",\"cat\":\"run\",\"ph\":\"X\"",
+        "\"on\":\"chan receive\"",
+        "\"on\":\"sleep\"",
+        "\"name\":\"io submit\"",
+        "\"name\":\"io done\"",
+        "\"name\":\"wake\"",
+        "\"name\":\"exit\"",
+        "\"name\":\"idle\""
+      ]
+    },
+    {
+      "name": "4 threads, -o:speed",
+      "flags": ["-define:VIDAR_SCHED_TRACE=true", "-define:VIDAR_THREADS=4", "-o:speed"],
+      "env": { "VIDAR_TRACE_FILE": "{dir}/trace.json" },
+      "json": "{dir}/trace.json",
+      "jsonHas": ["\"name\":\"sched thread 3\"", "\"name\":\"go\"", "\"on\":\"sleep\"", "\"name\":\"exit\""]
+    },
+    {
+      "name": "small ring",
+      "flags": ["-define:VIDAR_SCHED_TRACE=true", "-define:VIDAR_TRACE_EVENTS=16"],
+      "env": { "VIDAR_TRACE_FILE": "{dir}/trace.json" },
+      "json": "{dir}/trace.json",
+      "jsonHas": ["\"name\":\"exit\""]
+    }
+  ]
+}

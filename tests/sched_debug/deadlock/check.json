@@ -43,6 +43,15 @@
       "notStderr": ["goroutine 1"]
     },
     {
+      "name": "2 threads, trace written before the panic",
+      "flags": ["-define:VIDAR_THREADS=2", "-define:VIDAR_SCHED_TRACE=true"],
+      "env": { "VIDAR_TRACE_FILE": "{dir}/trace.json" },
+      "fails": true,
+      "stderr": ["panic: all goroutines are asleep - deadlock!"],
+      "json": "{dir}/trace.json",
+      "jsonHas": ["\"on\":\"sched.Wait_Group\"", "\"on\":\"select\""]
+    },
+    {
       "name": "1 thread, -o:speed, VIDAR_SCHED_DEBUG",
       "flags": ["-o:speed", "-define:VIDAR_SCHED_DEBUG=true"],
       "fails": true,

@@ -54,6 +54,15 @@ IDLE_POLL :: 10 * time.Millisecond
 // where each goroutine started and what it waits on, printed on a deadlock and on SIGQUIT; on
 // unless built with -o:speed (-define:VIDAR_SCHED_DEBUG=true turns it on there, false turns it off)
 SCHED_DEBUG :: #config(VIDAR_SCHED_DEBUG, ODIN_OPTIMIZATION_MODE < .Speed)
+// each thread keeps its last TRACE_EVENTS scheduler events (go, run, park, wake, steal, I/O, idle),
+// written at exit, on a deadlock and on SIGQUIT as Chrome trace JSON (Perfetto, chrome://tracing) to
+// vidar-trace.json, or to the file $VIDAR_TRACE_FILE names
+TRACE :: #config(VIDAR_SCHED_TRACE, false)
+TRACE_EVENTS :: #config(VIDAR_TRACE_EVENTS, 1 << 16)
+#assert(TRACE_EVENTS > 0 && TRACE_EVENTS & (TRACE_EVENTS - 1) == 0, "VIDAR_TRACE_EVENTS must be a power of two")
+// goroutines get numbers, and record what they wait on
+@(private)
+IDS :: SCHED_DEBUG || TRACE
 
 @(private)
 G :: struct {
@@ -69,7 +78,7 @@ G :: struct {
 	// run), where it parked, and the list of every goroutine
 	id:         int,
 	go_loc:     runtime.Source_Code_Location,
-	wait:       string,
+	wait:       Wait,
 	wait_on:    rawptr,
 	wait_cases: []Select_Case,
 	wait_loc:   runtime.Source_Code_Location,
@@ -92,6 +101,9 @@ Scheduler :: struct {
 	wake:        sync.Sema,
 	is_proc:     bool,
 	index:       int,
+	// with TRACE: this thread's ring of events, and how many it has recorded
+	trace:       []Trace_Event,
+	trace_n:     int,
 }
 
 @(private, thread_local)
@@ -143,9 +155,14 @@ sched_init :: proc() {
 	err := nbio.acquire_thread_event_loop()
 	assert(err == nil, "vidar:sched: could not start the I/O event loop")
 	sched.loop = nbio.current_thread_event_loop()
-	when SCHED_DEBUG {
+	when TRACE {
+		if !sched.is_proc && trace_start._nsec == 0 do trace_start = time.tick_now()
+		sched.trace = make([]Trace_Event, TRACE_EVENTS, runtime.heap_allocator())
+	}
+	when IDS {
 		// the program's main goroutine; scheduler threads' own stacks aren't goroutines
 		if !sched.is_proc {
+			sched.main.id = sync.atomic_add(&next_gid, 1) + 1
 			track(&sched.main)
 			sync.once_do(&sigquit_once, install_sigquit)
 		}
@@ -187,6 +204,7 @@ ready :: proc(g: ^G) {
 	}
 	p.tail = g
 	munlock(&p.q_lock)
+	trace(.Wake, g, p.index)
 	when MULTI {
 		if p != &sched {
 			sync.sema_post(&p.wake)
@@ -222,6 +240,7 @@ steal :: proc() -> ^G {
 				sync.mutex_unlock(&p.q_lock)
 				g.next = nil
 				g.owner = &sched
+				trace(.Steal, g, p.index)
 				return g
 			}
 			sync.mutex_unlock(&p.q_lock)
@@ -247,11 +266,15 @@ pick :: proc() -> ^G {
 			if sched.io_waiting > 0 {
 				nbio.tick(0)
 				if g := pop_ready(); g != nil do return g
+				trace(.Idle, nil)
 				nbio.tick(IDLE_POLL)
+				trace(.Idle_End, nil)
 			} else {
 				// the thread that makes them all idle looks for a deadlock
 				if sync.atomic_add(&idle_threads, 1) + 1 == THREADS do check_deadlock()
+				trace(.Idle, nil)
 				sync.sema_wait_with_timeout(&sched.wake, IDLE_POLL)
+				trace(.Idle_End, nil)
 				sync.atomic_add(&idle_epoch, 1)
 				sync.atomic_sub(&idle_threads, 1)
 			}
@@ -259,17 +282,23 @@ pick :: proc() -> ^G {
 	} else {
 		for {
 			if g := pop_ready(); g != nil do return g
-			if sched.io_waiting == 0 {
-				when SCHED_DEBUG do dump_goroutines("all goroutines are asleep - deadlock!")
-				panic("all goroutines are asleep - deadlock!")
-			}
+			if sched.io_waiting == 0 do deadlock()
 			sched.since_poll = 0
 			// ops done without the kernel complete at tick start, then the tick blocks anyway
 			nbio.tick(0)
 			if g := pop_ready(); g != nil do return g
+			trace(.Idle, nil)
 			nbio.tick()
+			trace(.Idle_End, nil)
 		}
 	}
+}
+
+@(private)
+deadlock :: proc() -> ! {
+	when SCHED_DEBUG do dump_goroutines("all goroutines are asleep - deadlock!")
+	when TRACE do write_trace()
+	panic("all goroutines are asleep - deadlock!")
 }
 
 // With several threads: panics when every thread is idle and every run queue is empty. An idle
@@ -290,8 +319,7 @@ check_deadlock :: proc() {
 		}
 		if sync.atomic_load(&idle_threads) != THREADS || sync.atomic_load(&idle_epoch) != epoch do return
 		if _, first := sync.atomic_compare_exchange_strong(&dead, false, true); !first do return
-		when SCHED_DEBUG do dump_goroutines("all goroutines are asleep - deadlock!")
-		panic("all goroutines are asleep - deadlock!")
+		deadlock()
 	}
 }
 
@@ -309,26 +337,28 @@ reap :: proc() {
 @(private)
 park :: proc() {
 	from := sched.cur
+	trace(.Park, from, 0, from.wait)
 	next := pick()
+	trace(.Run, next)
 	if next != from {
 		sched.cur = next
 		vidar_switch(&from.sp, next.sp)
 		reap()
 	}
-	when SCHED_DEBUG do from.wait = ""
+	when IDS do from.wait = .None
 }
 
-// With SCHED_DEBUG, records what the current goroutine is about to park on, for the dump.
+// With SCHED_DEBUG or TRACE, records what the current goroutine is about to park on.
 @(private)
-waiting :: #force_inline proc(what: string, on: rawptr, loc: runtime.Source_Code_Location) {
-	when SCHED_DEBUG {
+waiting :: #force_inline proc(what: Wait, on: rawptr, loc: runtime.Source_Code_Location) {
+	when IDS {
 		g := sched.cur
 		g.wait, g.wait_on, g.wait_loc = what, on, loc
 	}
 }
 
 @(private)
-block_forever :: proc(what := "forever", loc := #caller_location) -> ! {
+block_forever :: proc(what := Wait.Forever, loc := #caller_location) -> ! {
 	sched_init()
 	for {
 		waiting(what, nil, loc)
@@ -356,9 +386,11 @@ new_stack :: proc() -> []byte {
 go :: proc(task: closure(), loc := #caller_location) {
 	sched_init()
 	g := new(G, runtime.heap_allocator())
-	when SCHED_DEBUG {
+	when IDS {
+		g.id = sync.atomic_add(&next_gid, 1) + 1
 		g.go_loc = loc
 		track(g)
+		trace(.Go, sched.cur, g.id)
 	}
 	g.stack = new_stack()
 	g.task = task
@@ -408,8 +440,10 @@ go_start :: proc "c" (g: ^G) {
 	reap()
 	g.task()
 	when SCHED_DEBUG do untrack(g)
+	trace(.Exit, g)
 	sched.zombie = g
 	next := pick()
+	trace(.Run, next)
 	sched.cur = next
 	vidar_switch(&g.sp, next.sp)
 	unreachable()
@@ -417,13 +451,46 @@ go_start :: proc "c" (g: ^G) {
 
 // ---- debugging: the goroutine dump ----
 
+// What a parked goroutine waits on.
+@(private)
+Wait :: enum u8 {
+	None, Forever, Chan_Send, Chan_Recv, Chan_Send_Nil, Chan_Recv_Nil, Select, Mutex, Wait_Group, Sleep, Blocking,
+	IO, IO_Accept, IO_Close, IO_Dial, IO_Read, IO_Recv, IO_Send, IO_Write, IO_Poll, IO_Send_File, IO_Open, IO_Stat,
+}
+
+@(private, rodata)
+WAIT_NAMES := [Wait]string{
+	.None          = "",
+	.Forever       = "forever",
+	.Chan_Send     = "chan send",
+	.Chan_Recv     = "chan receive",
+	.Chan_Send_Nil = "chan send (nil chan)",
+	.Chan_Recv_Nil = "chan receive (nil chan)",
+	.Select        = "select",
+	.Mutex         = "sched.Mutex",
+	.Wait_Group    = "sched.Wait_Group",
+	.Sleep         = "sleep",
+	.Blocking      = "sched.blocking",
+	.IO            = "I/O",
+	.IO_Accept     = "I/O accept",
+	.IO_Close      = "I/O close",
+	.IO_Dial       = "I/O dial",
+	.IO_Read       = "I/O read",
+	.IO_Recv       = "I/O receive",
+	.IO_Send       = "I/O send",
+	.IO_Write      = "I/O write",
+	.IO_Poll       = "I/O poll",
+	.IO_Send_File  = "I/O send file",
+	.IO_Open       = "I/O open",
+	.IO_Stat       = "I/O stat",
+}
+
 @(private)
 all_tail: ^G
 
 @(private)
 track :: proc(g: ^G) {
 	when SCHED_DEBUG {
-		g.id = sync.atomic_add(&next_gid, 1) + 1
 		mlock(&all_lock)
 		g.all_prev, g.all_next = all_tail, nil
 		if all_tail == nil do all_gs = g
@@ -474,8 +541,8 @@ dump_goroutines :: proc "contextless" (title: string) {
 			runtime.print_string("\ngoroutine ")
 			runtime.print_int(g.id)
 			runtime.print_string(" [")
-			if g.wait != "" {
-				runtime.print_string(g.wait)
+			if g.wait != .None {
+				runtime.print_string(WAIT_NAMES[g.wait])
 				if g.wait_on != nil {
 					runtime.print_byte(' ')
 					print_hex(g.wait_on)
@@ -492,12 +559,12 @@ dump_goroutines :: proc "contextless" (title: string) {
 			}
 			if g.go_loc.file_path == "" do runtime.print_string(" (main)")
 			runtime.print_string(":\n")
-			if g.wait != "" {
+			if g.wait != .None {
 				runtime.print_string("\tparked at ")
 				runtime.print_caller_location(g.wait_loc)
 				runtime.print_byte('\n')
 			}
-			if g.wait == "select" {
+			if g.wait == .Select {
 				for c, i in g.wait_cases {
 					if c.ch == nil do continue
 					runtime.print_string("\t\tcase ")
@@ -520,6 +587,7 @@ dump_goroutines :: proc "contextless" (title: string) {
 // SIGQUIT (Ctrl-\) prints the goroutines, then ends the program as it would have without the handler.
 @(private)
 install_sigquit :: proc() {
+	when !SCHED_DEBUG && !TRACE do return
 	when ODIN_OS == .Linux || ODIN_OS == .Darwin {
 		libc.signal(SIGQUIT, on_sigquit)
 	}
@@ -531,28 +599,147 @@ SIGQUIT :: 3
 @(private)
 on_sigquit :: proc "c" (sig: libc.int) {
 	dump_goroutines("SIGQUIT")
+	write_trace()
 	libc.signal(sig, auto_cast libc.SIG_DFL)
 	libc.raise(sig)
 }
 
 // What a goroutine waiting on op waits on, for the dump.
 @(private)
-io_what :: proc(op: ^nbio.Operation) -> string {
+io_what :: proc(op: ^nbio.Operation) -> Wait {
 	#partial switch op.type {
-	case .Accept:    return "I/O accept"
-	case .Close:     return "I/O close"
-	case .Dial:      return "I/O dial"
-	case .Read:      return "I/O read"
-	case .Recv:      return "I/O receive"
-	case .Send:      return "I/O send"
-	case .Write:     return "I/O write"
-	case .Timeout:   return "sleep"
-	case .Poll:      return "I/O poll"
-	case .Send_File: return "I/O send file"
-	case .Open:      return "I/O open"
-	case .Stat:      return "I/O stat"
+	case .Accept:    return .IO_Accept
+	case .Close:     return .IO_Close
+	case .Dial:      return .IO_Dial
+	case .Read:      return .IO_Read
+	case .Recv:      return .IO_Recv
+	case .Send:      return .IO_Send
+	case .Write:     return .IO_Write
+	case .Timeout:   return .Sleep
+	case .Poll:      return .IO_Poll
+	case .Send_File: return .IO_Send_File
+	case .Open:      return .IO_Open
+	case .Stat:      return .IO_Stat
 	}
-	return "I/O"
+	return .IO
+}
+
+// ---- debugging: the trace ----
+
+@(private)
+Trace_Kind :: enum u8 { Go, Run, Park, Exit, Wake, Steal, IO_Submit, IO_Done, Idle, Idle_End }
+
+// arg: for Go the new goroutine, for Wake the thread it is queued on, for Steal the thread it came from
+@(private)
+Trace_Event :: struct {
+	ts:   i64,
+	g:    i32,
+	arg:  i32,
+	kind: Trace_Kind,
+	wait: Wait,
+}
+
+@(private)
+trace_start: time.Tick
+@(private)
+trace_written: bool
+
+@(private)
+trace :: #force_inline proc(kind: Trace_Kind, g: ^G, arg := 0, wait := Wait.None) {
+	when TRACE {
+		if sched.trace == nil do return
+		sched.trace[sched.trace_n & (TRACE_EVENTS - 1)] = {time.tick_now()._nsec, i32(g.id) if g != nil else 0, i32(arg), kind, wait}
+		sync.atomic_store(&sched.trace_n, sched.trace_n + 1)
+	}
+}
+
+when TRACE {
+	@(private, fini)
+	trace_at_exit :: proc "contextless" () { write_trace() }
+}
+
+// Writes every thread's events, oldest first, as Chrome trace JSON: a slice per goroutine run and per
+// idle wait, an instant per other event. Other threads may still be adding events; at most the
+// newest few are torn.
+@(private)
+write_trace :: proc "contextless" () {
+	when TRACE {
+		if _, first := sync.atomic_compare_exchange_strong(&trace_written, false, true); !first do return
+		path := libc.getenv("VIDAR_TRACE_FILE")
+		if path == nil || (^u8)(path)^ == 0 do path = "vidar-trace.json"
+		f := libc.fopen(path, "w")
+		if f == nil {
+			runtime.print_strings("vidar:sched: could not write the trace to ", string(path), "\n")
+			return
+		}
+		libc.fprintf(f, "%s", cstring("{\"displayTimeUnit\":\"ns\",\"traceEvents\":[" + "\n"))
+		libc.fprintf(f, "%s", cstring("{\"name\":\"process_name\",\"ph\":\"M\",\"pid\":1,\"tid\":0,\"args\":{\"name\":\"vidar:sched\"}}"))
+		ts :: proc "contextless" (f: ^libc.FILE, t: i64) {
+			t := max(t - trace_start._nsec, 0)
+			libc.fprintf(f, "\"ts\":%lld.%03lld", t / 1000, t % 1000)
+		}
+		head :: proc "contextless" (f: ^libc.FILE, name: string, ph: cstring, tid: int, t: i64) {
+			libc.fprintf(f, ",\n{\"name\":\"%.*s\",\"ph\":\"%s\",\"pid\":1,\"tid\":%lld,", i32(len(name)), raw_data(name), ph, i64(tid))
+			ts(f, t)
+		}
+		for p, tid in procs {
+			if p == nil || p.trace == nil do continue
+			libc.fprintf(f, ",\n{\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":1,\"tid\":%lld,\"args\":{\"name\":\"sched thread %lld\"}}", i64(tid), i64(tid))
+			n := sync.atomic_load(&p.trace_n)
+			run_g, run_ts, idle_ts := i32(0), i64(-1), i64(-1)
+			end_run :: proc "contextless" (f: ^libc.FILE, tid: int, g: i32, from, to: i64) {
+				libc.fprintf(f, ",\n{\"name\":\"goroutine %d\",\"cat\":\"run\",\"ph\":\"X\",\"pid\":1,\"tid\":%lld,", g, i64(tid))
+				ts(f, from)
+				libc.fprintf(f, ",\"dur\":%lld.%03lld,\"args\":{\"g\":%d}}", (to - from) / 1000, (to - from) % 1000, g)
+			}
+			for i in max(0, n - TRACE_EVENTS)..<n {
+				e := p.trace[i & (TRACE_EVENTS - 1)]
+				wait := e.wait if e.wait <= max(Wait) else .None
+				// a run ends at the next event that switches away
+				if run_ts >= 0 && (e.kind == .Run || e.kind == .Park || e.kind == .Exit || e.kind == .Idle) {
+					end_run(f, tid, run_g, run_ts, e.ts)
+					run_ts = -1
+				}
+				switch e.kind {
+				case .Run:
+					run_g, run_ts = e.g, e.ts
+				case .Idle:
+					idle_ts = e.ts
+				case .Idle_End:
+					if idle_ts >= 0 {
+						head(f, "idle", "X", tid, idle_ts)
+						libc.fprintf(f, ",\"cat\":\"idle\",\"dur\":%lld.%03lld}", (e.ts - idle_ts) / 1000, (e.ts - idle_ts) % 1000)
+					}
+					idle_ts = -1
+				case .Park:
+					name := WAIT_NAMES[wait] if wait != .None else "yield"
+					head(f, "park", "i", tid, e.ts)
+					libc.fprintf(f, ",\"s\":\"t\",\"args\":{\"g\":%d,\"on\":\"%.*s\"}}", e.g, i32(len(name)), raw_data(name))
+				case .Exit:
+					head(f, "exit", "i", tid, e.ts)
+					libc.fprintf(f, ",\"s\":\"t\",\"args\":{\"g\":%d}}", e.g)
+				case .Go:
+					head(f, "go", "i", tid, e.ts)
+					libc.fprintf(f, ",\"s\":\"t\",\"args\":{\"g\":%d,\"by\":%d}}", e.arg, e.g)
+				case .Wake:
+					head(f, "wake", "i", tid, e.ts)
+					libc.fprintf(f, ",\"s\":\"t\",\"args\":{\"g\":%d,\"thread\":%d}}", e.g, e.arg)
+				case .Steal:
+					head(f, "steal", "i", tid, e.ts)
+					libc.fprintf(f, ",\"s\":\"t\",\"args\":{\"g\":%d,\"from\":%d}}", e.g, e.arg)
+				case .IO_Submit:
+					name := WAIT_NAMES[wait]
+					head(f, "io submit", "i", tid, e.ts)
+					libc.fprintf(f, ",\"s\":\"t\",\"args\":{\"g\":%d,\"op\":\"%.*s\"}}", e.g, i32(len(name)), raw_data(name))
+				case .IO_Done:
+					head(f, "io done", "i", tid, e.ts)
+					libc.fprintf(f, ",\"s\":\"t\",\"args\":{\"g\":%d}}", e.g)
+				}
+			}
+		}
+		libc.fprintf(f, "%s", cstring("\n]}\n"))
+		libc.fclose(f)
+	}
 }
 
 // ---- I/O: start an nbio operation, park, resume from its callback ----
@@ -570,6 +757,7 @@ io_done :: proc(op: ^nbio.Operation) {
 	w := (^Io_Wait)(op.user_data[0])
 	w.result = op^
 	sched.io_waiting -= 1
+	trace(.IO_Done, w.g)
 	ready(w.g)
 }
 
@@ -580,6 +768,7 @@ await_op :: proc(op: ^nbio.Operation, loc: runtime.Source_Code_Location) -> nbio
 	op.user_data[0] = &w
 	sched.io_waiting += 1
 	waiting(io_what(op), nil, loc)
+	trace(.IO_Submit, sched.cur, 0, io_what(op))
 	nbio.exec(op)
 	park()
 	return w.result
@@ -636,6 +825,7 @@ worker_done :: proc(op: ^nbio.Operation) {
 resume_from_worker :: proc(op: ^nbio.Operation) {
 	w := (^Io_Wait)(op.user_data[0])
 	sched.io_waiting -= 1
+	trace(.IO_Done, w.g)
 	ready(w.g)
 }
 
@@ -652,6 +842,7 @@ await_on_worker :: proc(op: ^nbio.Operation, loc: runtime.Source_Code_Location) 
 	op.user_data[1] = sched.loop
 	sched.io_waiting += 1
 	waiting(io_what(op), nil, loc)
+	trace(.IO_Submit, sched.cur, 0, io_what(op))
 	nbio.exec(op)
 	park()
 	return w.result
@@ -682,7 +873,8 @@ blocking :: proc(task: closure(), loc := #caller_location) {
 	op.user_data[0] = &w
 	op.user_data[1] = sched.loop
 	sched.io_waiting += 1
-	waiting("sched.blocking", nil, loc)
+	waiting(.Blocking, nil, loc)
+	trace(.IO_Submit, sched.cur, 0, .Blocking)
 	nbio.exec(op)
 	park()
 }
@@ -900,7 +1092,7 @@ lock :: proc(m: ^Mutex, loc := #caller_location) {
 	}
 	w := Waiter{g = sched.cur}
 	enqueue(&m.waiters, &w)
-	waiting("sched.Mutex", m, loc)
+	waiting(.Mutex, m, loc)
 	munlock(&m.guard)
 	park()
 }
@@ -1059,7 +1251,7 @@ try_recv_raw :: proc(c: ^Raw_Chan, out: rawptr) -> (done, ok: bool) {
 chan_send :: proc(c: Chan($T), v: T, loc := #caller_location) {
 	sched_init()
 	v := v
-	if c.raw == nil do block_forever("chan send (nil chan)", loc)
+	if c.raw == nil do block_forever(.Chan_Send_Nil, loc)
 	mlock(&c.raw.guard)
 	if try_send_raw(c.raw, &v) {
 		munlock(&c.raw.guard)
@@ -1067,7 +1259,7 @@ chan_send :: proc(c: Chan($T), v: T, loc := #caller_location) {
 	}
 	w := Waiter{g = sched.cur, elem = &v}
 	enqueue(&c.raw.sendq, &w)
-	waiting("chan send", c.raw, loc)
+	waiting(.Chan_Send, c.raw, loc)
 	munlock(&c.raw.guard)
 	park()
 	if !w.ok do panic("send on closed channel")
@@ -1076,7 +1268,7 @@ chan_send :: proc(c: Chan($T), v: T, loc := #caller_location) {
 // Blocks until a value arrives; ok is false once the channel is closed and drained.
 chan_recv :: proc(c: Chan($T), loc := #caller_location) -> (v: T, ok: bool) #optional_ok {
 	sched_init()
-	if c.raw == nil do block_forever("chan receive (nil chan)", loc)
+	if c.raw == nil do block_forever(.Chan_Recv_Nil, loc)
 	mlock(&c.raw.guard)
 	if done, got := try_recv_raw(c.raw, &v); done {
 		munlock(&c.raw.guard)
@@ -1084,7 +1276,7 @@ chan_recv :: proc(c: Chan($T), loc := #caller_location) -> (v: T, ok: bool) #opt
 	}
 	w := Waiter{g = sched.cur, elem = &v}
 	enqueue(&c.raw.recvq, &w)
-	waiting("chan receive", c.raw, loc)
+	waiting(.Chan_Recv, c.raw, loc)
 	munlock(&c.raw.guard)
 	park()
 	return v, w.ok
@@ -1205,7 +1397,7 @@ select_raw :: proc(cases: []Select_Case, nonblocking: bool, loc: runtime.Source_
 		waiters[i] = Waiter{g = sched.cur, elem = c.elem, sel = &sel, case_index = i}
 		enqueue(&c.ch.sendq if c.is_send else &c.ch.recvq, &waiters[i])
 	}
-	waiting("select", nil, loc)
+	waiting(.Select, nil, loc)
 	when SCHED_DEBUG do sched.cur.wait_cases = cases
 	select_lock(cases, false)
 	locked = false
@@ -1254,7 +1446,7 @@ wait :: proc(wg: ^Wait_Group, loc := #caller_location) {
 	}
 	w := Waiter{g = sched.cur}
 	enqueue(&wg.waiters, &w)
-	waiting("sched.Wait_Group", wg, loc)
+	waiting(.Wait_Group, wg, loc)
 	munlock(&wg.guard)
 	park()
 }
