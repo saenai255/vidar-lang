@@ -1,0 +1,66 @@
+package main
+
+import "core:fmt"
+
+Shape :: interface { area, grow }
+area :: proc(s: Shape) -> f64 ---
+grow :: proc(s: Shape, k: f64) ---
+
+Circle :: struct { r: f64 }
+Rect :: struct { w, h: f64 }
+
+circle_area :: proc(c: ^Circle) -> f64 { return 3 * c.r * c.r }
+circle_grow :: proc(c: ^Circle, k: f64) { c.r += k }
+rect_area :: proc(r: ^Rect) -> f64 { return r.w * r.h }
+rect_grow :: proc(r: ^Rect, k: f64) { r.w += k; r.h += k }
+
+impl Shape for Circle { area = circle_area, grow = circle_grow }
+impl Shape for Rect { area = rect_area, grow = rect_grow }
+
+// held inline: grow changes the elements in place, as it changed the clones before
+inline :: proc() -> f64 {
+	list: [dynamic]Shape
+	defer delete(list)
+	append(&list, new_clone(Circle{1}), new_clone(Rect{2, 3}))
+	append(&list, new_clone(Circle{2}))
+	for s in list do grow(s, 1)
+	for s, i in list do if i > 0 do grow(s, 0.5)
+	total := 0.0
+	for s in list do total += area(s)
+	grow(list[0], 10)
+	return total + area(list[0]) + f64(len(list))
+}
+
+// not inline: a value converted twice shares its data, which a copy wouldn't
+shared :: proc() -> f64 {
+	c := new_clone(Circle{1})
+	list: [dynamic]Shape
+	defer delete(list)
+	append(&list, c, c)
+	for s in list do grow(s, 1)
+	return area(list[0]) + area(list[1])
+}
+
+// not inline: an element is kept outside the array
+kept :: proc() -> f64 {
+	list: [dynamic]Shape
+	defer delete(list)
+	append(&list, new_clone(Circle{1}))
+	first: Shape
+	for s in list do first = s
+	grow(first, 1)
+	return area(list[0])
+}
+
+// not inline: appending while looping over it
+grows :: proc() -> int {
+	list: [dynamic]Shape
+	defer delete(list)
+	append(&list, new_clone(Rect{1, 1}))
+	for s in list do if area(s) < 2 do append(&list, new_clone(Rect{2, 2}))
+	return len(list)
+}
+
+main :: proc() {
+	fmt.println(inline(), shared(), kept(), grows())
+}

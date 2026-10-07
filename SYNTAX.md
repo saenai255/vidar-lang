@@ -299,6 +299,7 @@ for s in shapes do total += area(s)        // a direct call per type
 - indexes proven in bounds by their loop (`for i in 0..<len(a)`, `for x, i in a`, `for i := 0; i < len(a); i += 1`, and `a[i ± k]` when the range leaves room) get `#no_bounds_check`
 - an array indexed by `i` on every pass of a loop with no early exit gets one bounds check before the loop instead of one per index (the panic comes before the loop runs)
 - adjacent `make`/`new` freed only by `defer delete`/`defer free` in the same block become one allocation
+- a local `[dynamic]I` filled only with `new_clone(value)` and used only to call I's methods on its elements holds the values inline, as a union
 - `%v` / `%#v` of a plain struct, enum, array or slice is written by generated code, with fmt's exact output; so is `json.marshal(x)`, with encoding/json's
 - a `switch` on a string with 8 or more literal cases goes through a perfect hash and one compare (`@(no_perfect_hash)` opts out)
 - `x := make([]T, N)` with a constant `N` and a `defer delete(x)` in the same block goes on the stack when `x` doesn't escape (4 KB in a proc a goroutine can reach, 64 KB elsewhere; `@(no_stack_buffer)` opts out)

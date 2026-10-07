@@ -4,6 +4,7 @@ import { fmtPlan } from "./fmtspec";
 import { sizeOf, soaLocals } from "./soa";
 import { stackBuffers } from "./stackbuf";
 import { stringSwitches } from "./strswitch";
+import { valueInterfaces } from "./valueiface";
 import type { LocalSym, Sym, Ty } from "./scope";
 
 /**
@@ -23,6 +24,7 @@ export function optimizeProc(body: Block, an: Analyzer, closureCopies = false): 
   reserves(body, facts, an);
   soaLocals(body, an);
   stringSwitches(body, an);
+  valueInterfaces(body, an);
   if (!an.hints) return;
   walk(body, (n) => {
     if (n.k !== "Call") return;

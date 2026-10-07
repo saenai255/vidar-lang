@@ -1,5 +1,6 @@
 interface array            152119
 pool                       152119
+interface values, built    183286
 fmt.sbprintf               728890
 loop with indexes          350662169760
 bounds, hoisted            100

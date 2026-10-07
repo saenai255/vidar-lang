@@ -1042,7 +1042,7 @@ export class Analyzer {
 
   // ---- interfaces ----
 
-  private ifaceOf(ty: Ty | undefined): GlobalSym | undefined {
+  ifaceOf(ty: Ty | undefined): GlobalSym | undefined {
     const n = this.normalize(ty);
     return n?.t === "node" && n.node.k === "InterfaceType" ? A(n.node)._ifaceSym : undefined;
   }
@@ -1595,7 +1595,7 @@ export class Analyzer {
   }
 
   /** The impl whose array in a pool of `iface` holds values of type `ty`. */
-  private poolBin(iface: GlobalSym, ty: Ty | undefined): ImplInfo | undefined {
+  poolBin(iface: GlobalSym, ty: Ty | undefined): ImplInfo | undefined {
     if (ty?.t !== "node" || (ty.node.k !== "Ident" && ty.node.k !== "Selector")) return undefined;
     const sym = this.resolveName(ty.node, ty.scope, null);
     return sym && this.variants(iface).find((i) => (A(i.node.target)._sym ?? A(i.node.target)._pkgMember) === sym);

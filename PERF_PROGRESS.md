@@ -20,7 +20,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 7 | 2 | `sched_pending_io` busy loop | bug | blocked |
 | 8 | 3 | Dangling by-reference captures in returned closures | bug | merged |
 | 9 | 5 | Intermittent Odin compiler hang | bug | blocked |
-| 10 | 6 | Value interfaces / closed unions | perf | todo |
+| 10 | 6 | Value interfaces / closed unions | perf | merged (as an -opt rewrite) |
 | 11 | 7 | Generated per-type printers and JSON code | perf | merged (no unmarshal) |
 | 12 | 8 | Multithreaded (M:N) scheduler | perf | todo |
 | 13 | 9 | Constant-size `make` on the stack | perf | merged |
@@ -181,6 +181,11 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **6, value interfaces** merged, as the second option: an `-opt` rewrite where nobody can tell the difference, with no new syntax (the value form for the coder to choose can still come later).
+  - `src/valueiface.ts`: a local `[dynamic]I` (typed or from `make`) of a closed interface without bases or extensions, whose every use is `append(&xs, new_clone(v))` with `v` of an implementation type, a `for s in xs` whose `s` is only a method receiver, `m(xs[i], ...)`, `len`, `cap`, `clear(&xs)` or `delete(xs)`, and nothing in a loop over it touching it. Not captured by a closure. Each implementation at most 64 bytes, and each bound method uses its receiver only through `.field` or `^`, so no pointer to an element can be kept past a reallocation.
+  - Emitted as `[dynamic]__I_Value` (`union { T1, T2, ... }`), `append(&xs, v)`, `for &s in xs`, and `__I_v_m(&s, ...)`: a `#force_inline` type switch calling the bound proc with `&v`.
+  - `negative_cost`: new "interface values, built" (10,000 shapes appended and summed, 50 times), plain vs `-opt`: 10.8 → 2.6 ms; no allocation per element. "interface array" (the loop alone) is unchanged against `-opt` before this (4.0 vs 4.2 ms), which already devirtualized those calls and had the clones packed by the temp allocator.
+  - New case `opt_value_iface`: in-place growth through `for s in xs` and `xs[0]`, and the three refusals (a clone converted twice, an element kept in a variable, an append inside a loop over the array).
 - **7, JSON (second half)** merged: `json.marshal`; `json.unmarshal` is not done.
   - `src/jsonopt.ts`: `json.marshal(x)` with one argument (default options) and a type resolved like the printers' (structs may have tags here) calls `__json_marshal_T(x)`, a `$T` proc whose `when T == <type>` branch writes with generated `__jsonw_T` procs and whose `else` calls `json.marshal`. It follows `marshal_to_writer` for `.JSON`, not pretty: keys through `io.write_quoted_string` (not escaped for JSON, so keys needing escapes are left to encoding/json), string values with `for_json`, runes quoted, floats through `io.write_f16/f32/f64`, enums as their integer value, `json:"name"`, `json:"-"`, and `omitempty`, which drops only what `is_omitempty` calls empty (strings, slices, dynamic arrays; a 0 int stays). Programs that register their own marshalers keep encoding/json.
   - `negative_cost` "json.marshal of a struct" (the same `Particle`), plain vs `-opt`: 172 → 77 ms.

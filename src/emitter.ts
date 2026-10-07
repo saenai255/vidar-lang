@@ -10,6 +10,7 @@ import { StrHash, strHashProc } from "./strswitch";
 import { MemoInfo, memoHelpers } from "./memo";
 import { Printers, registersFormatters } from "./printers";
 import { JsonWriters, registersMarshalers } from "./jsonopt";
+import type { ValueCall, ValueIface } from "./valueiface";
 import type { CaptureSym, GlobalSym, LocalSym, PackageInfo, PkgSym, Sym, Ty, Unit } from "./scope";
 
 type ProcLit = Extract<Expr, { k: "ProcLit" }>;
@@ -343,6 +344,8 @@ export class Emitter {
   private helpers: string[] = [];
   /** -opt: printers for %v of known types; null when the program registers its own formatters */
   private printers: Printers | null | undefined = undefined;
+  /** -opt: unions and dispatchers for inline interface arrays, written in this file */
+  private valueHelpers = new Set<string>();
   /** -opt: json.marshal of known types; null when the program registers its own marshalers */
   private json: JsonWriters | null | undefined = undefined;
   /** -opt: string switches through a perfect hash, and their helper procs */
@@ -389,6 +392,7 @@ export class Emitter {
     this.pkg = pkg;
     this.helpers = [];
     this.printers = undefined;
+    this.valueHelpers.clear();
     this.json = undefined;
     this.callHelpers.clear();
     this.extraImports.clear();
@@ -461,6 +465,11 @@ export class Emitter {
   }
 
   emit(n: Node): string {
+    // -opt: an element of an array of interface values stored inline, without its new_clone
+    const valueOf: Expr | undefined = A(n)._valueOf;
+    if (valueOf) return this.emit(valueOf);
+    const vi: ValueIface | undefined = A(n)._valueIface;
+    if (vi) return `[dynamic]${this.valueUnion(vi)}`;
     const iface: GlobalSym | undefined = A(n)._wrapIface;
     let text: string = A(n)._emitAs ?? this.emitNode(n);
     if (iface) text = `${this.qualify(iface, fromName(iface))}(${text})`;
@@ -595,9 +604,12 @@ export class Emitter {
         const syms: LocalSym[] = A(n)._syms ?? [];
         const shadowed = syms.filter((s) => s.refCaptured);
         if (shadowed.length) this.prologue.set(n.body, shadowed.map(addressable));
+        // -opt: elements of an inline interface array are used in place
+        if (A(n)._valueLoop) return this.generic(n).replace(/^for(\s+)/, "for$1&");
         return this.generic(n);
       }
       case "Call": {
+        if (A(n)._valueCall) return this.valueCall(A(n)._valueCall) + this.skipLines(n);
         if (A(n)._closureSpec) return this.closureSpecCall(n, A(n)._closureSpec);
         if (this.an.optimize) {
           if (this.json === undefined) this.json = registersMarshalers(this.an) ? null : new JsonWriters(this.an, (sym) => this.typeRef(sym));
@@ -1020,6 +1032,37 @@ export class Emitter {
         (this.an.pooled.has(sym) ? "\n\n" + this.poolHelpers(sym).trimEnd() : ""),
     );
     return keepLines(t, `struct { data: rawptr, __vtable: ^__${name}_VTable }`);
+  }
+
+  /** -opt: `__I_Value`, the union an inline interface array holds; written once per file. */
+  private valueUnion(v: ValueIface): string {
+    const name = `__${v.iface.odinName}_Value`;
+    if (!this.valueHelpers.has(name)) {
+      this.valueHelpers.add(name);
+      this.helpers.push(`// ${v.iface.name} values stored inline\n${name} :: union { ${v.variants.map((i) => this.implTarget(i)).join(", ")} }`);
+    }
+    return name;
+  }
+
+  /** -opt: `m(s, args)` on an inline element: a switch on its type, calling the impl directly. */
+  private valueCall(c: ValueCall): string {
+    const m = c.method;
+    const name = `__${c.iface.odinName}_v_${m.name}`;
+    if (!this.valueHelpers.has(name)) {
+      this.valueHelpers.add(name);
+      const union = this.valueUnion({ iface: c.iface, variants: this.an.variants(c.iface) });
+      const { decl, forward } = this.paramList(m.rest);
+      const res = this.results(m.rest);
+      const cases = this.an.variants(c.iface).map((i) => {
+        const bound = i.methods.get(m.name)!;
+        const call = `${this.qualify(bound, bound.odinName, `call '${bound.name}'`)}(${["&v", ...forward].join(", ")})`;
+        return `\tcase ${this.implTarget(i)}: ${res ? "return " : ""}${call}\n`;
+      });
+      this.helpers.push(
+        `${name} :: #force_inline proc(self: ^${union}${decl ? ", " + decl : ""})${res} {\n\tswitch &v in self^ {\n${cases.join("")}\tcase: unreachable()\n\t}\n${res ? "\tunreachable()\n" : ""}}`,
+      );
+    }
+    return `${name}(${[`&${this.emit(c.receiver)}`, ...c.args.map((a) => this.emit(a))].join(", ")})`;
   }
 
   /** `Pool(I)`: a dynamic array per implementation, so a loop over it runs over each type's values in turn. */
