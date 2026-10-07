@@ -24,7 +24,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 11 | 7 | Generated per-type printers and JSON code | perf | todo |
 | 12 | 8 | Multithreaded (M:N) scheduler | perf | todo |
 | 13 | 9 | Constant-size `make` on the stack | perf | merged |
-| 14 | 10 | Wider bounds-check elimination | perf | todo |
+| 14 | 10 | Wider bounds-check elimination | perf | merged |
 | 15 | 11 | String `switch` through a perfect hash | perf | todo |
 | 16 | 13 | Automatic `@(memo)` and two-parameter `@(table)` | perf | todo |
 | 17 | 15 | Struct field reordering, then hot/cold splitting | perf | todo |
@@ -181,6 +181,14 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **10, wider bounds-check elimination** merged (`provenIndexes` in `src/optimize.ts`).
+  - Constant offsets: `a[i + k]` / `a[i - k]` are proven when the range is `lo..<len(a) - m` with `k <= m` and `lo >= k` (also `for i := lo; i < len(a) - m; i += c`).
+  - Hoisting and lockstep, one mechanism: for `for i in lo..<n` (n made of stable locals, literals, `len`, ...) or `for x, i in a` over a slice or array, with no break/return/`or_*` in the body, an array indexed by plain `i` in the body's own statements (not under an if, a loop, `&&`, `||` or `?:`) and declared before the loop gets `__vidar.bounds_upto(n, lo, len(b)...)` before the loop. The runtime helper panics with `max(lo, min len)` and that length, the panic the loop would have hit, just earlier. Statements whose every index is then proven get `#no_bounds_check`; a call statement gets `#no_bounds_check { ... }`, since Odin takes the directive only on some statements. A loop that is a `do` body is put in braces.
+  - The check has to be a statement: folding it into the loop bound (`0..<bounds_upto(n, ...)`) stopped LLVM from vectorizing the loop.
+  - `negative_cost`, plain Odin vs `-opt`, 4-core linux/amd64, medians of 7: "bounds, hoisted" 17.8 → 14.7 ms, "bounds, lockstep" 36.7 → 14.4 ms (now vectorized), "bounds, offsets" 19.9 → 20.5 ms (LLVM already proves `i ± 1` from the range; no gain, kept because offsets let such a statement use a hoisted check).
+  - Bench robustness: each section driver in `negative_cost` is now `#force_no_inline`. With them all inlined into `main`, the one hoisted check in `blur`'s setup loop (outside the timer) made "collatz, computed" 20% slower, a layout effect. "append in a loop" is bimodal on linux (about 55 or 97 ms with identical code), depending on the heap state the earlier sections leave.
+  - Found on the way: `@(specialize)` makes a copy for a constant 0 bound, and its `for i in 0..<0` doesn't compile ("Invalid interval range"). Not fixed.
+  - New case `opt_bounds_wide`.
 - **9, constant-size `make` on the stack** merged (`src/stackbuf.ts`, run before alloc grouping). `x := make([]T, N)` with `N` made of literals and constants, freed once by a `defer delete(x)` later in the same block, never assigned, addressed or captured, becomes `__x_buf: [N]T; x := __x_buf[:]` and the defer becomes a comment. Every use of `x` must be indexing (not `&x[i]`), `len`/`cap`, a `for v in x`, or an argument to a proc that doesn't keep it: `core:fmt`, `core:math`, a list from `core:slice` and `core:mem`, or a proc with a body whose parameter passes the same check (4 calls deep). A `#soa` buffer becomes `#soa[N]T`. `@(no_stack_buffer)` opts out.
   - Size cap: 4 KB in a proc reachable from a literal passed to `sched.go` (through calls and nested closures; every proc when a goroutine runs a closure value), 64 KB elsewhere. Sizes are `soa.sizeOf`'s estimate, which ignores padding.
   - `negative_cost`: "scratch allocations" 63 → 46 ms (`weights` in `smooth` went on the stack). "append in a loop" read 40% slower with identical code; it runs right after, and with `allocs` removed from both builds the two match (57 ms each), so that is heap state left by the previous section, not this change.

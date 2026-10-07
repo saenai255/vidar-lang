@@ -3,6 +3,7 @@ package main; import __vidar "vidar_runtime"
 // Code written at a high level that comes out faster than the plain Odin you'd write by hand.
 // Every section prints a checksum; with --bench it also prints how long it took.
 // Compare: `vidar run examples/negative_cost -- --bench`, then the same with -opt.
+// Each section runs in a proc of its own (#force_no_inline), so a change in one doesn't shift the code LLVM makes for another.
 
 import "core:fmt"
 import "core:os"
@@ -39,7 +40,7 @@ tri_grow    :: proc(t: ^Tri, k: f64) { t.b += k }
 
 @(private) noise :: proc(x: int) -> int { return (x * 1103515245 + 12345) & 0xffff }
 
-shapes :: proc(n, reps: int) {
+shapes :: #force_no_inline proc(n, reps: int) {
 	// the usual way: each shape allocated on its own, kept as interface values in no particular order
 	context.allocator = context.temp_allocator
 	list := make([dynamic]Shape, 0, n)
@@ -94,7 +95,7 @@ shapes :: proc(n, reps: int) {
 
 Slime :: struct { name: string, hp, max_hp: int, angry: bool }
 
-status :: proc(n: int) {
+status :: #force_no_inline proc(n: int) {
 	b := strings.builder_make()
 	defer strings.builder_destroy(&b)
 	s := Slime{"green slime", 7, 12, true}
@@ -119,12 +120,52 @@ checksum :: proc(a: []int, reps: int) -> (sum: int) {
 	return
 }
 
-bounds :: proc(n, reps: int) {
+bounds :: #force_no_inline proc(n, reps: int) {
 	a := make([]int, n)
 	defer delete(a)
 	for i in 0..<len(a) do a[i] = i * 7
 	start := time.tick_now()
 	section("loop with indexes", start, checksum(a, reps))
+}
+
+// ---- -opt: checks a loop's range doesn't prove, done once before the loop ----
+
+// the bound isn't len(a): one check that a and out are at least n long
+scaled :: #force_no_inline proc(a, out: []int, n: int) -> int {
+	for i in 0..<n do out[i] = a[i] * 3 + 1
+	return out[n - 1]
+}
+
+// b is indexed by a's index: one check that b is as long as a
+mix :: #force_no_inline proc(a, b: []int, k: int) -> (sum: int) {
+	for x, i in a do sum += (x ~ b[i]) + k
+	return
+}
+
+// a[i - 1] and a[i + 1] are proven by the range 1..<len(a) - 1, out[i] by one check before the loop
+peaks :: #force_no_inline proc(a, out: []int, k: int) -> int {
+	for i in 1..<len(a) - 1 do out[i] = max(a[i - 1], a[i + 1]) ~ (a[i] + k)
+	return out[len(out) / 2]
+}
+
+wide_bounds :: #force_no_inline proc(n, reps: int) {
+	a := make([]int, n)
+	b := make([]int, n)
+	defer delete(a)
+	defer delete(b)
+	for i in 0..<n do a[i], b[i] = i % 13, i % 7
+	start := time.tick_now()
+	total := 0
+	for _ in 0..<reps do total += scaled(a, b, n)
+	section("bounds, hoisted", start, total)
+	start = time.tick_now()
+	total = 0
+	for r in 0..<reps do total += mix(a, b, r)
+	section("bounds, lockstep", start, total)
+	start = time.tick_now()
+	total = 0
+	for r in 0..<reps do total += peaks(a, b, r)
+	section("bounds, offsets", start, total)
 }
 
 // ---- -opt: allocations freed together are made together ----
@@ -142,7 +183,7 @@ smooth :: proc(src: []f32) -> f32 {
 	return out[len(out) / 2]
 }
 
-allocs :: proc(calls: int) {
+allocs :: #force_no_inline proc(calls: int) {
 	src := []f32{1, 4, 2, 8, 5, 7, 3, 6, 9, 0, 2, 4}
 	start := time.tick_now()
 	sum: f32
@@ -159,7 +200,7 @@ doubled :: proc(src: []int) -> int {
 	return len(out) + out[len(out) / 2]
 }
 
-appends :: proc(n, calls: int) {
+appends :: #force_no_inline proc(n, calls: int) {
 	src := make([]int, n)
 	defer delete(src)
 	for i in 0..<n do src[i] = i % 97
@@ -189,7 +230,7 @@ box_blur_plain :: #force_no_inline proc(dst, src: []int, radius: int) {
 	}
 }
 
-blur :: proc(n, reps: int) {
+blur :: #force_no_inline proc(n, reps: int) {
 	src := make([]int, n)
 	dst := make([]int, n)
 	defer delete(src)
@@ -223,7 +264,7 @@ pairs :: proc(a: []int, f: __vidar.Closure(proc(__vidar.Env, int, int) -> int)) 
 	return
 }
 
-closures :: proc(n, reps: int) {
+closures :: #force_no_inline proc(n, reps: int) {
 	a := make([]int, n)
 	defer delete(a)
 	for i in 0..<n do a[i] = noise(i)
@@ -251,7 +292,7 @@ make_closures :: #force_no_inline proc() -> (fs: [8]__vidar.Closure(proc(__vidar
 	return
 }
 
-closure_shapes :: proc(n, reps: int) {
+closure_shapes :: #force_no_inline proc(n, reps: int) {
 	a := make([]int, n)
 	defer delete(a)
 	for i in 0..<n do a[i] = noise(i)
@@ -302,7 +343,7 @@ collatz_plain :: proc(b: u8) -> int {
 	return steps
 }
 
-steps :: proc(n, reps: int) {
+steps :: #force_no_inline proc(n, reps: int) {
 	data := make([]u8, n)
 	defer delete(data)
 	for i in 0..<n do data[i] = u8(noise(i))
@@ -327,7 +368,7 @@ Body :: struct {
 	tags:       [4]u32,
 }
 
-bodies :: proc(n, reps: int) {
+bodies :: #force_no_inline proc(n, reps: int) {
 	bs := make([]Body, n)
 	defer delete(bs)
 	for i in 0..<n do bs[i] = Body{vx = f32(noise(i) % 7), vy = f32(noise(i + 1) % 5), vz = 1, mass = 1, id = i, name = "rock"}
@@ -350,6 +391,7 @@ main :: proc() {
 	shapes(30_000 if BENCH else 3_000, 2 * scale)
 	status(20_000 * scale)
 	bounds(100_000, 10 * scale)
+	wide_bounds(100_000, 10 * scale)
 	allocs(20_000 * scale)
 	appends(1_000, 1_000 * scale)
 	blur(100_000, 2 * scale)
@@ -433,7 +475,7 @@ __closure_0 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env, int, int) ->
 	__Caps :: struct {
 		k: T0,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:225: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:266: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env, int, int) -> int){
 		call = proc(__env_raw: __vidar.Env, x, y: int) -> int { __env := transmute(__Env)__env_raw; return x * __env.k - y if x > y else y - x },
@@ -445,7 +487,7 @@ __closure_1 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env, int, int) ->
 	__Caps :: struct {
 		k: T0,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:229: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:270: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env, int, int) -> int){
 		call = proc(__env_raw: __vidar.Env, x, y: int) -> int { __env := transmute(__Env)__env_raw; return x * __env.k - y if x > y else y - x },
@@ -457,7 +499,7 @@ __closure_2 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env, int) -> int)
 	__Caps :: struct {
 		k: T0,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:241: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:282: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env, int) -> int){
 		call = proc(__env_raw: __vidar.Env, y: int) -> int { __env := transmute(__Env)__env_raw; return y * __env.k + 1 },
@@ -469,7 +511,7 @@ __closure_3 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env, int) -> int)
 	__Caps :: struct {
 		k: T0,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:254: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:295: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env, int) -> int){
 		call = proc(__env_raw: __vidar.Env, y: int) -> int { __env := transmute(__Env)__env_raw; return y * __env.k + 1 },
@@ -481,7 +523,7 @@ __closure_4 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env, int) -> int)
 	__Caps :: struct {
 		k: T0,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:265: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:306: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env, int) -> int){
 		call = proc(__env_raw: __vidar.Env, y: int) -> int { __env := transmute(__Env)__env_raw; return y * __env.k + 1 },

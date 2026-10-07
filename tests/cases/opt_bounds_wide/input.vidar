@@ -1,0 +1,90 @@
+package main
+
+import "core:fmt"
+
+// a bound that isn't len(a): one check before the loop, none inside
+scale :: proc(a: []int, n: int) -> (total: int) {
+	for i in 0..<n {
+		a[i] *= 2
+		total += a[i]
+	}
+	return
+}
+
+// lockstep: b is indexed by a's index
+dot :: proc(a, b: []f64) -> (sum: f64) {
+	for x, i in a do sum += x * b[i]
+	return
+}
+
+// two arrays, one bound
+add_into :: proc(dst, src: []int, n: int) {
+	for i in 2..<n do dst[i] = src[i] + 1
+}
+
+// constant offsets the range already proves
+diffs :: proc(src: []int, out: []int) {
+	for i in 0..<len(src) - 1 do out[i] = src[i + 1] - src[i]
+}
+
+back :: proc(src: []int) -> (total: int) {
+	for i in 2..<len(src) do total += src[i] - src[i - 2]
+	return
+}
+
+// not hoisted: an early exit, or an index under an `if`
+first_negative :: proc(a: []int, n: int) -> int {
+	for i in 0..<n {
+		if a[i] < 0 do return i
+	}
+	return -1
+}
+
+guarded :: proc(a: []int, n: int) -> (total: int) {
+	for i in 0..<n {
+		if i % 2 == 0 do total += a[i]
+	}
+	return
+}
+
+main :: proc() {
+	a := []int{1, 2, 3, 4, 5, 6}
+	fmt.println(scale(a, 4), a)
+	fmt.println(dot({1, 2, 3}, {4, 5, 6, 7}))
+	dst := make([]int, 6)
+	defer delete(dst)
+	add_into(dst, a, 6)
+	fmt.println(dst)
+	out := make([]int, 5)
+	defer delete(out)
+	diffs(a, out)
+	fmt.println(out, back(a))
+	fmt.println(first_negative({3, -1, 2}, 10), guarded(a, 6))
+	// a loop that runs zero times checks nothing
+	zero := len(a) - 6
+	fmt.println(scale(a, zero))
+	fmt.println(nested(a, 3, 2))
+	fmt.println(runes("ab", {1, 2}), fixed({1, 2, 3, 4}, {1, 1, 1, 1}))
+}
+
+// a string's index is a byte offset: no check before the loop; a fixed array gets one
+runes :: proc(s: string, b: []int) -> (n: int) {
+	for r, i in s do n += int(r) * b[i]
+	return
+}
+
+fixed :: proc(a: [4]int, b: []int) -> (n: int) {
+	for x, i in a do n += x * b[i]
+	return
+}
+
+// a loop that is the body of a `do`, and a labeled one: the check still goes right before the loop
+nested :: proc(a: []int, n, reps: int) -> (total: int) {
+	for _ in 0..<reps do for i in 0..<n do total += a[i]
+	if reps > 0 do for i in 0..<n do total += a[i]
+	outer: for i in 0..<n {
+		total += a[i]
+		for j in 0..<n do if j > i do continue outer
+	}
+	return
+}

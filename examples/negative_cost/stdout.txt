@@ -2,6 +2,9 @@ interface array            152119
 pool                       152119
 fmt.sbprintf               728890
 loop with indexes          350662169760
+bounds, hoisted            100
+bounds, lockstep           22114880
+bounds, offsets            61
 scratch allocations        108319
 append in a loop           1030000
 blur, radius at run time   28708

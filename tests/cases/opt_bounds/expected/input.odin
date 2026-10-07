@@ -17,9 +17,9 @@ sum :: proc(a: []int) -> (total: int) {
 }
 
 dot :: proc(a, b: []int) -> (d: int) {
-	// b[i] is not proven: only len(a) bounds i
-	for i in 0..<len(a) {
-		d += a[i] * b[i]
+	// only len(a) bounds i: b gets one check before the loop
+	__vidar.bounds_upto(len(a), 0, len(b)); for i in 0..<len(a) {
+		#no_bounds_check d += a[i] * b[i]
 	}
 	return
 }

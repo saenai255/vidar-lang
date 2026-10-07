@@ -191,6 +191,8 @@ git worktree remove --force "$TMPDIR/vidar-base"
 | closure, from an array | 19 |
 | closure, as a parameter | 11 |
 
+"bounds, hoisted", "bounds, lockstep" and "bounds, offsets" are newer than this table; on a 4-core linux/amd64 VM they run 14.7, 14.4 and 20.5 ms. "Append in a loop" is bimodal there (about 55 or 97 ms with identical code), from heap state left by earlier sections.
+
 "Closure, called through" was 8.4 ms until item 1 of PERF_PROGRESS; it should now match "closure, specialized" (re-measure on the M3; measured on linux/amd64 so far). README's "What it buys" table compares the plain and Vidar versions.
 
 **slime_mud:**

@@ -123,73 +123,226 @@ function isLen(e: Expr | null): LocalSym | undefined {
   return localOf(e.args[0]);
 }
 
-function nonNegative(e: Expr): boolean {
-  return e.k === "Lit" && e.kind === "int" && !e.toks[e.start].text.startsWith("-");
+/**
+ * A loop's index `i` and the range it covers, `lo..<hi` with a step of 1 unless `step1` is false:
+ * `for i in lo..<hi`, `for x, i in a` (hi is `len(a)`), `for i := lo; i < hi; i += c`.
+ * `hiLen`/`hiMinus`: hi is `len(hiLen) - hiMinus`.
+ */
+interface LoopRange {
+  index: LocalSym;
+  lo: bigint;
+  step1: boolean;
+  hiLen?: LocalSym;
+  hiMinus: bigint;
+  /** a range's `hi`, which a check before the loop can wrap */
+  hi?: Expr;
+  /** the array of `for x, i in a`, which a check before the loop can wrap */
+  over?: Expr;
+  body: Block;
 }
 
-/** Index variables proven in bounds for an array: `for i in 0..<len(a)`, `for x, i in a`, `for i := 0; i < len(a); i += 1`. */
-function loopProof(s: Node, facts: Facts): { array: LocalSym; index: LocalSym } | undefined {
+function intLit(e: Expr | null | undefined): bigint | undefined {
+  while (e?.k === "Paren") e = e.x;
+  if (e?.k !== "Lit" || e.kind !== "int") return undefined;
+  const t = e.toks[e.start].text.replace(/_/g, "");
+  return /^\d+$/.test(t) ? BigInt(t) : undefined;
+}
+
+/** `len(a)` or `len(a) - k` with a literal k */
+function lenMinus(e: Expr | null): { array: LocalSym; minus: bigint } | undefined {
+  while (e?.k === "Paren") e = e.x;
+  const array = isLen(e);
+  if (array) return { array, minus: 0n };
+  if (e?.k !== "Binary" || e.op !== "-") return undefined;
+  const k = intLit(e.y);
+  const a = isLen(e.x);
+  return a && k !== undefined ? { array: a, minus: k } : undefined;
+}
+
+function loopRange(s: Node, facts: Facts): LoopRange | undefined {
   if (s.k === "RangeFor") {
     const syms: LocalSym[] = A(s)._syms ?? [];
     if (A(s)._pool) return undefined;
     const x = s.x;
-    if (x.k === "Binary" && x.op === "..<" && nonNegative(x.x)) {
-      const array = isLen(x.y);
-      return stable(array, s.body, facts) && syms[0] ? { array, index: syms[0] } : undefined;
+    if (x.k === "Binary" && x.op === "..<") {
+      const lo = intLit(x.x);
+      if (lo === undefined || !syms[0] || s.vals[0].name === "_") return undefined;
+      const len = lenMinus(x.y);
+      const hiLen = len && stable(len.array, s.body, facts) ? len.array : undefined;
+      return { index: syms[0], lo, step1: true, hiLen, hiMinus: hiLen ? len!.minus : 0n, hi: x.y, body: s.body };
     }
     const array = localOf(x);
-    return stable(array, s.body, facts) && syms[1] && s.vals[1].name !== "_" && !s.vals[1].byRef ? { array, index: syms[1] } : undefined;
+    if (!stable(array, s.body, facts) || !syms[1] || s.vals[1].name === "_" || s.vals[1].byRef) return undefined;
+    return { index: syms[1], lo: 0n, step1: true, hiLen: array, hiMinus: 0n, over: x, body: s.body };
   }
-  if (s.k === "For" && s.init?.k === "ValueDecl" && s.init.names.length === 1 && s.init.values.length === 1 && nonNegative(s.init.values[0])) {
+  if (s.k === "For" && s.init?.k === "ValueDecl" && s.init.names.length === 1 && s.init.values.length === 1) {
+    const lo = intLit(s.init.values[0]);
     const index = (A(s.init)._syms as LocalSym[] | undefined)?.[0];
     const cond = s.cond;
     const post = s.post;
-    if (!index || cond?.k !== "Binary" || cond.op !== "<" || localOf(cond.x) !== index) return undefined;
-    if (post?.k !== "Assign" || post.op !== "+=" || localOf(post.lhs[0]) !== index || !nonNegative(post.rhs[0])) return undefined;
+    if (lo === undefined || !index || cond?.k !== "Binary" || cond.op !== "<" || localOf(cond.x) !== index) return undefined;
+    const step = post?.k === "Assign" && post.op === "+=" && localOf(post.lhs[0]) === index ? intLit(post.rhs[0]) : undefined;
+    if (step === undefined) return undefined;
     if (facts.addressed.has(index) || (facts.assigned.get(index) ?? []).some((a) => a !== post)) return undefined;
-    const array = isLen(cond.y);
-    return stable(array, s.body, facts) ? { array, index } : undefined;
+    const len = lenMinus(cond.y);
+    if (!len || !stable(len.array, s.body, facts)) return undefined;
+    return { index, lo, step1: step === 1n, hiLen: len.array, hiMinus: len.minus, body: s.body };
   }
   return undefined;
 }
 
-/** Marks the statements of loop bodies whose every index is proven in bounds. */
+/** `i`, `i + k` or `i - k` with a literal k: the local and the offset. */
+function offsetIndex(e: Expr | null): { sym: LocalSym; off: bigint } | undefined {
+  while (e?.k === "Paren") e = e.x;
+  if (!e) return undefined;
+  const sym = localOf(e);
+  if (sym) return { sym, off: 0n };
+  if (e.k !== "Binary" || (e.op !== "+" && e.op !== "-")) return undefined;
+  const k = intLit(e.y);
+  const l = localOf(e.x);
+  if (l && k !== undefined) return { sym: l, off: e.op === "+" ? k : -k };
+  const k2 = intLit(e.x);
+  const r = localOf(e.y);
+  return e.op === "+" && r && k2 !== undefined ? { sym: r, off: k2 } : undefined;
+}
+
+/** Locals declared inside `body`, which don't exist before the loop. */
+function declaredIn(body: Block): Set<LocalSym> {
+  const out = new Set<LocalSym>();
+  walk(body, (n) => {
+    for (const s of (A(n)._syms ?? []) as Sym[]) if (s?.kind === "local") out.add(s);
+  });
+  return out;
+}
+
+/** Indexes evaluated on every pass through `body`: in its own statements, not under an if, a loop, `&&`, `||` or `?:`. */
+function unconditionalIndexes(body: Block): Extract<Expr, { k: "Index" }>[] {
+  const out: Extract<Expr, { k: "Index" }>[] = [];
+  const visit = (n: Node): void => {
+    if (n.k === "ProcLit" || n.k === "Block" || COMPOUND.has(n.k) || n.k === "Defer" || n.k === "Case") return;
+    if (n.k === "Index") out.push(n);
+    if (n.k === "Binary" && (n.op === "&&" || n.op === "||")) return visit(n.x);
+    if (n.k === "Ternary") return visit(n.cond);
+    if (n.k === "Postfix" && n.op.startsWith("or_")) return visit(n.x);
+    for (const c of kids(n)) visit(c);
+  };
+  for (const s of body.stmts) visit(s);
+  return out;
+}
+
+/** An array whose length a check before the loop can take: a slice, dynamic array, fixed array or string. */
+function measurable(an: Analyzer, x: LocalSym, at: Expr): boolean {
+  const t = an.normalize(an.typeOf(at, A(at)._scope ?? an.global));
+  if (t?.t !== "node") return false;
+  if (t.node.k === "Ident") return t.node.name === "string";
+  return t.node.k === "TypeExpr" && ["slice", "dynamic", "array"].includes(t.node.what) && x.declKind !== "other";
+}
+
+/** `for x, i in e` counts i from 0 by 1: e is a slice, dynamic array or fixed array (not a string, a map or a bit set). */
+function indexedByPosition(an: Analyzer, e: Expr): boolean {
+  const t = an.normalize(an.typeOf(e, A(e)._scope ?? an.global));
+  return t?.t === "node" && t.node.k === "TypeExpr" && ["slice", "dynamic", "array"].includes(t.node.what);
+}
+
+/** `bounds_upto(hi, lo, len(counts)...)`, written before a loop */
+export interface BoundsGuard {
+  lo: string;
+  /** the range's end, or the array `for x, i in over` goes over */
+  hi: Expr | null;
+  over: Expr | null;
+  counts: Expr[];
+}
+
+interface Proof {
+  range: LoopRange;
+  /** arrays indexed by plain `i` on every pass, which one check before the loop covers */
+  guardable: Map<LocalSym, Expr>;
+  used: Map<LocalSym, Expr>;
+}
+
+/**
+ * Marks the statements of loop bodies whose every index is proven in bounds: by the loop's range,
+ * or, for an array indexed on every pass of a loop with no early exit, by one check before the
+ * loop that fails the way the loop would have (`bounds_upto` in the runtime).
+ */
 function provenIndexes(body: Block, facts: Facts, an: Analyzer): void {
-  const proofs: { array: LocalSym; index: LocalSym }[] = [];
-  const proven = (e: Extract<Expr, { k: "Index" }>) =>
-    !e.slice && e.indices.length === 1 && proofs.some((p) => localOf(e.x) === p.array && localOf(e.indices[0] ?? undefined) === p.index);
-  /** whether every index in `n` is proven, and whether it has any */
-  const check = (n: Node): { all: boolean; any: boolean } => {
+  const proofs: Proof[] = [];
+  /** the proof covering `e`, and the guarded array it needs, if any */
+  const proof = (e: Extract<Expr, { k: "Index" }>): { p: Proof; guard?: LocalSym } | undefined => {
+    if (e.slice || e.indices.length !== 1) return undefined;
+    const x = localOf(e.x);
+    const idx = offsetIndex(e.indices[0]);
+    if (!x || !idx) return undefined;
+    for (const p of proofs) {
+      const r = p.range;
+      if (idx.sym !== r.index) continue;
+      if (x === r.hiLen && idx.off <= r.hiMinus && r.lo + idx.off >= 0n) return { p };
+      if (idx.off === 0n && p.guardable.has(x)) return { p, guard: x };
+    }
+    return undefined;
+  };
+  /** whether every index in `n` is proven, whether it has any, and the guards it needs */
+  const check = (n: Node): { all: boolean; any: boolean; guards: { p: Proof; guard: LocalSym }[] } => {
     let all = true;
     let any = false;
+    const guards: { p: Proof; guard: LocalSym }[] = [];
     walk(n, (m) => {
       if (m.k !== "Index") return;
       any = true;
-      if (!proven(m)) all = false;
+      const pr = proof(m);
+      if (!pr) all = false;
+      else if (pr.guard) guards.push({ p: pr.p, guard: pr.guard });
     });
-    return { all, any };
+    return { all, any, guards };
   };
-  const stmts = (list: Stmt[]) => list.forEach(stmt);
+  const enter = (s: Node): Proof | undefined => {
+    const range = loopRange(s, facts);
+    if (!range) return undefined;
+    const guardable = new Map<LocalSym, Expr>();
+    const wrap = range.hi && simple(range.hi) && [...locals(range.hi)].every((l) => stable(l, range.body, facts));
+    if (range.step1 && (wrap || (range.over && indexedByPosition(an, range.over))) && straight(range.body)) {
+      const inner = declaredIn(range.body);
+      for (const ix of unconditionalIndexes(range.body)) {
+        const x = localOf(ix.x);
+        const idx = offsetIndex(ix.indices[0] ?? null);
+        if (!x || inner.has(x) || ix.slice || ix.indices.length !== 1 || idx?.sym !== range.index || idx.off !== 0n || x === range.hiLen) continue;
+        if (stable(x, range.body, facts) && measurable(an, x, ix.x)) guardable.set(x, ix.x);
+      }
+    }
+    return { range, guardable, used: new Map() };
+  };
+  const leave = (p: Proof, loop: Node) => {
+    if (!p.used.size) return;
+    const counts = [...p.used.values()];
+    const names = [...p.used.keys()].map((x) => x.name).join(", ");
+    A(loop)._boundsGuard = { lo: String(p.range.lo), hi: p.range.hi ?? null, over: p.range.over ?? null, counts } satisfies BoundsGuard;
+    an.hint(loop, "bounds hoisted", `one check before the loop that ${names} ${p.used.size > 1 ? "are" : "is"} long enough for every index; the indexes inside are unchecked`);
+  };
+  const stmts = (list: Stmt[]) => list.forEach((s) => stmt(s));
   let loops = 0;
-  const stmt = (s: Stmt): void => {
-    const proof = loopProof(s, facts);
-    if (proof) proofs.push(proof);
+  /** `holder`: the statement the loop is written as, with its label or directive */
+  const stmt = (s: Stmt, holder: Stmt = s): void => {
+    const p = enter(s);
+    if (p) proofs.push(p);
     const loop = s.k === "For" || s.k === "RangeFor";
     if (loop) loops++;
     try {
-      if (proof || proofs.length) {
+      if (p || proofs.length) {
         const inner = s.k === "Labeled" || s.k === "DirectiveStmt" ? s.stmt : s;
         const body = inner.k === "For" || inner.k === "RangeFor" ? inner.body : null;
         // the loop header itself isn't covered: mark statements inside it
         if (body) {
-          if (inner !== s) stmt(inner);
+          if (inner !== s) stmt(inner, s);
           else stmts(body.stmts);
           return;
         }
-        const { all, any } = check(s);
+        const { all, any, guards } = check(s);
         if (all && any && proofs.length) {
+          for (const g of guards) g.p.used.set(g.guard, g.p.guardable.get(g.guard)!);
           A(s)._noBounds = true;
-          an.hint(s, "unchecked", "every index here is proven in bounds by its loop, so it gets #no_bounds_check");
+          an.hint(s, "unchecked", guards.length
+            ? "every index here is proven in bounds, by its loop or by one check before it, so it gets #no_bounds_check"
+            : "every index here is proven in bounds by its loop, so it gets #no_bounds_check");
           return;
         }
       }
@@ -201,7 +354,10 @@ function provenIndexes(body: Block, facts: Facts, an: Analyzer): void {
         else if (COMPOUND.has(c.k)) stmt(c as Stmt);
       }
     } finally {
-      if (proof) proofs.pop();
+      if (p) {
+        proofs.pop();
+        leave(p, holder);
+      }
       if (loop) loops--;
     }
   };

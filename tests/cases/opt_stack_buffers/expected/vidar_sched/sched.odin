@@ -746,9 +746,9 @@ select_cases :: proc(cases: []Select_Case, nonblocking: bool) -> int {
 	}
 	index, ok := select_raw(cases, nonblocking)
 	if index >= 0 && cases[index].ok != nil do cases[index].ok^ = ok
-	for c, i in cases {
+	__vidar.bounds_upto(len(cases), 0, len(scratch)); for c, i in cases {
 		if c.is_send do free(c.elem, runtime.heap_allocator())
-		delete(scratch[i], runtime.heap_allocator())
+		#no_bounds_check { delete(scratch[i], runtime.heap_allocator()) }
 	}
 	delete(scratch, runtime.heap_allocator())
 	if index >= 0 && cases[index].is_send && !ok do panic("send on closed channel")

@@ -144,6 +144,15 @@ failed :: #force_inline proc(e: $T) -> bool {
 // -opt: `if expect(failed(e), false)` marks the failure path cold
 expect :: intrinsics.expect
 
+// -opt: a loop over lo..<hi indexing arrays of these lengths, checked once before it; fails with the
+// index the loop would have failed on, and returns hi
+bounds_upto :: #force_inline proc "contextless" (hi, lo: int, counts: ..int, loc := #caller_location) -> int {
+	m := hi
+	for c in counts do m = min(m, c)
+	if lo < hi && m < hi do runtime.bounds_check_error_loc(loc, max(lo, m), m)
+	return hi
+}
+
 // `catch unreachable`: the error was not supposed to happen
 @(cold)
 unexpected :: proc(e: $T, loc := #caller_location) -> ! {

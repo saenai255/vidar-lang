@@ -4,7 +4,7 @@ import { posix } from "node:path";
 import { A, AnonField, AnonTemp, Analyzer, ClosureSpec, IfaceMethod, ImplInfo, MAX_DEVIRTUAL, SpecInfo, TableInfo, isStmt, nodeText, posOf } from "./analyzer";
 import { joinTokens, repeatable } from "./comptime";
 import { decodeString, encodeString, fmtPlan } from "./fmtspec";
-import { AllocGroup, Reserve, optimizeProc } from "./optimize";
+import { AllocGroup, BoundsGuard, Reserve, optimizeProc } from "./optimize";
 import type { StackBuf } from "./stackbuf";
 import type { CaptureSym, GlobalSym, LocalSym, PackageInfo, PkgSym, Sym, Ty, Unit } from "./scope";
 
@@ -158,6 +158,15 @@ failed :: #force_inline proc(e: $T) -> bool {
 
 // -opt: \`if expect(failed(e), false)\` marks the failure path cold
 expect :: intrinsics.expect
+
+// -opt: a loop over lo..<hi indexing arrays of these lengths, checked once before it; fails with the
+// index the loop would have failed on, and returns hi
+bounds_upto :: #force_inline proc "contextless" (hi, lo: int, counts: ..int, loc := #caller_location) -> int {
+	m := hi
+	for c in counts do m = min(m, c)
+	if lo < hi && m < hi do runtime.bounds_check_error_loc(loc, max(lo, m), m)
+	return hi
+}
 
 // \`catch unreachable\`: the error was not supposed to happen
 @(cold)
@@ -404,8 +413,16 @@ export class Emitter {
     if (up) text = `${this.qualify(up.from, upcastName(up.from, up.to), `convert '${up.from.name}' to '${up.to.name}'`)}(${text})`;
     const fix: { prefix: string; suffix: string } | undefined = A(n)._fix;
     if (fix) text = fix.prefix + text + fix.suffix;
-    // -opt: every index in the statement is proven in bounds
-    return A(n)._noBounds ? `#no_bounds_check ${text}` : text;
+    // -opt: every index in the statement is proven in bounds (Odin takes the directive on a block, not a call)
+    if (A(n)._noBounds) text = n.k === "ExprStmt" ? `#no_bounds_check { ${text} }` : `#no_bounds_check ${text}`;
+    // -opt: the bounds checks of a loop's indexes, done once before it (a statement of its own, so LLVM still vectorizes the loop)
+    const guard: BoundsGuard | undefined = A(n)._boundsGuard;
+    if (guard) {
+      this.usesRuntime = this.fileUsesRuntime = true;
+      const hi = guard.hi ? this.emit(guard.hi) : `len(${this.emit(guard.over!)})`;
+      text = `${RUNTIME_ALIAS}.bounds_upto(${hi}, ${guard.lo}, ${guard.counts.map((c) => `len(${this.emit(c)})`).join(", ")}); ${text}`;
+    }
+    return text;
   }
 
   private emitNode(n: Node): string {
@@ -451,7 +468,7 @@ export class Emitter {
         if (this.pretty && this.tok(n.toks[n.start]) === "{") return this.compact ? `{ ${n.stmts.map((s) => this.withPre(s)).join("; ")} }` : this.prettyBlock(n);
         if (this.tok(n.toks[n.start]) !== "do") return this.block(n);
         // statements hoisted before the body, or a prologue, must stay under the `do`
-        if (n.stmts.some((s) => A(s)._pre?.length) || this.prologue.has(n)) {
+        if (n.stmts.some((s) => A(s)._pre?.length || A(s)._boundsGuard) || this.prologue.has(n)) {
           const lines = this.prologue.get(n) ?? [];
           this.prologue.delete(n);
           return `{ ${[...lines, ...n.stmts.map((s) => this.withPre(s))].join("; ")} }`;

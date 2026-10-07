@@ -17,7 +17,7 @@ sum :: proc(a: []int) -> (total: int) {
 }
 
 dot :: proc(a, b: []int) -> (d: int) {
-	// b[i] is not proven: only len(a) bounds i
+	// only len(a) bounds i: b gets one check before the loop
 	for i in 0..<len(a) {
 		d += a[i] * b[i]
 	}
