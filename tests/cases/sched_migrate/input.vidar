@@ -1,0 +1,45 @@
+package main
+
+import "core:fmt"
+import "vidar:sched"
+
+// Goroutines that park and yield all the time, with uneven work, so that at
+// -define:VIDAR_THREADS=N idle threads take goroutines that have already run. Each one keeps
+// temp-allocated strings and locals across its parks, which must survive the move.
+
+work :: proc(id, rounds: int, mu: ^sched.Mutex, count: ^int, ping: sched.Chan(int)) -> int {
+	acc := 0
+	for i in 0..<rounds {
+		label := fmt.tprintf("job %d round %d", id, i)
+		x := id * 7919 + i
+		for _ in 0..<(id % 5 + 1) * 200 do x = (x * 1103515245 + 12345) & 0x7fffffff
+		sched.yield()
+		sched.lock(mu)
+		count^ += 1
+		sched.unlock(mu)
+		if i % 16 == 0 {
+			sched.send(ping, id)
+			sched.recv(ping)
+		}
+		want := fmt.tprintf("job %d round %d", id, i)
+		if label != want do fmt.println("lost a temp string:", label, want)
+		acc = (acc + x % 1000) % 1_000_007
+	}
+	return acc
+}
+
+main :: proc() {
+	jobs := 24
+	mu: sched.Mutex
+	count := 0
+	results := sched.make_chan(int, jobs)
+	ping := sched.make_chan(int, 1)
+	for id in 0..<jobs {
+		rounds := 400 if id % 4 == 0 else 60
+		sched.go(proc[id, rounds, &mu, &count, ping, results]() { sched.send(results, work(id, rounds, &mu, &count, ping)) })
+	}
+	total := 0
+	for _ in 0..<jobs do total += sched.recv(results)
+	fmt.println("total:", total)
+	fmt.println("count:", count)
+}

@@ -3,27 +3,38 @@ package main
 // CPU-bound work fanned out over goroutines. With -define:VIDAR_THREADS=N they run on N threads:
 //   vidar build examples/fanout -o out/fanout
 //   odin build out/fanout -o:speed -define:VIDAR_THREADS=4 -out:out/fanout/prog && out/fanout/prog --bench
-// The checksum is the same at any thread count; --bench also prints the time.
+// The checksum is the same at any thread count; --bench also prints the time. --uneven runs jobs
+// of very different sizes that yield as they go, so they are spread out only by moving goroutines
+// that have already run: every fourth job is 8 times longer, and they all start on one thread.
 
 import "core:fmt"
 import "core:os"
 import "core:time"
 import "vidar:sched"
 
-work :: proc(seed, steps: int) -> int {
+work :: proc(seed, steps: int, yield_every := 0) -> int {
 	x := seed
-	for _ in 0..<steps do x = (x * 1103515245 + 12345) & 0x7fffffff
+	for i in 0..<steps {
+		x = (x * 1103515245 + 12345) & 0x7fffffff
+		if yield_every > 0 && i % yield_every == 0 do sched.yield()
+	}
 	return x
 }
 
 main :: proc() {
-	bench := len(os.args) > 1 && os.args[1] == "--bench"
+	bench := len(os.args) > 1 && (os.args[1] == "--bench" || os.args[1] == "--uneven")
+	uneven := len(os.args) > 1 && os.args[1] == "--uneven"
 	jobs, steps := 64, 2_000_000 if bench else 20_000
+	if uneven do jobs, steps = 32, 1_000_000
 	start := time.tick_now()
 	results := sched.make_chan(int, jobs)
-	for i in 0..<jobs do sched.go(proc[i, steps, results]() { sched.send(results, work(i, steps)) })
+	for i in 0..<jobs {
+		n := steps * 8 if uneven && i % 4 == 0 else steps
+		every := 20_000 if uneven else 0
+		sched.go(proc[i, n, every, results]() { sched.send(results, work(i, n, every)) })
+	}
 	total := 0
 	for _ in 0..<jobs do total += sched.recv(results)
 	fmt.println("checksum", total)
-	if bench do fmt.printfln("%d jobs on %d threads: %.1f ms", jobs, sched.THREADS, time.duration_milliseconds(time.tick_since(start)))
+	if bench do fmt.printfln("%d %sjobs on %d threads: %.1f ms", jobs, "uneven " if uneven else "", sched.THREADS, time.duration_milliseconds(time.tick_since(start)))
 }
