@@ -55,7 +55,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 42 | 46 | Missing-import fix from `odin root` | editor | merged |
 | 43 | 47 | Generated `json.unmarshal` | perf | merged |
 | 44 | 48 | Hot/cold splitting across procs | perf | todo |
-| 45 | 49 | Loop fusion and pipeline macros | perf | todo |
+| 45 | 49 | Loop fusion | perf | todo |
 | 46 | 50 | `vidar new` | dev tooling | merged |
 | 47 | 51 | Windows support | platform | merged |
 
@@ -338,10 +338,10 @@ Item 7 generates `json.marshal` only. Generate `json.unmarshal(data, &x)` for th
 ### 48. Hot/cold splitting across procs
 For a `[dynamic]T` whose hot loops (in any proc it is passed to) touch few fields, store the rarely used fields in a parallel array. Interprocedural: every proc the array reaches must be rewritten consistently, or it isn't split. Same refusal rules as reordering (15) for anything that can see the layout. Bench section in `negative_cost`.
 
-### 49. Loop fusion and pipeline macros
-- Macros `map!`, `filter!`, `fold!` (or a `|>` pipeline) over slices and dynamic arrays that expand into one loop with no intermediate arrays.
+### 49. Loop fusion
 - `-opt` fusion of adjacent plain loops over the same range when neither reads what the other writes after it.
-- Bench sections for both.
+- A bench section.
+- Pipeline macros (`map!`, `filter!`, `fold!`) were dropped: not wanted.
 
 ### 50. `vidar new`
 `vidar new <dir> [--lib]`: `main.vidar` (hello world, or a library package with a test), `.gitignore` (`out/`), a `.vscode/launch.json` with the `vidar` debug configuration, and a README stub. Refuses a non-empty directory.
