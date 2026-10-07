@@ -1,6 +1,6 @@
 name: Build binaries and VS Code extension
 
-# Every push to main is released as <epoch>-<year>-<month>-<day>-<short hash>, dated by the commit (UTC).
+# Every push to main is released as <epoch>.<yyyymmdd>.<short hash>, dated by the commit (UTC).
 on:
   push:
     branches: [main]
@@ -15,10 +15,16 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.v.outputs.version }}
+      extension: ${{ steps.v.outputs.extension }}
     steps:
       - uses: actions/checkout@v4
       - id: v
-        run: echo "version=$EPOCH-$(TZ=UTC git log -1 --date=format-local:%Y-%m-%d --format=%cd)-$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          day=$(TZ=UTC git log -1 --date=format-local:%Y%m%d --format=%cd)
+          time=$(TZ=UTC git log -1 --date=format-local:%H%M%S --format=%cd)
+          echo "version=$EPOCH.$day.$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+          # an extension version must be semver, and a hex hash isn't a number: the commit's time of day stands in
+          echo "extension=$EPOCH.$day.$((10#$time))" >> "$GITHUB_OUTPUT"
 
   build:
     needs: version
@@ -33,6 +39,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       VIDAR_VERSION: ${{ needs.version.outputs.version }}
+      EXTENSION_VERSION: ${{ needs.version.outputs.extension }}
     steps:
       - uses: actions/checkout@v4
 
@@ -57,11 +64,10 @@ jobs:
           bin/${{ matrix.target }}/vidar --version
           bin/${{ matrix.target }}/vidar emit tests/cases/closure_values/input.vidar > /dev/null
 
-      # an extension version must be semver, so the release version goes in its prerelease part
       - name: Package extension
         working-directory: editors/vscode
         run: |
-          npm pkg set version="0.0.0-$VIDAR_VERSION"
+          npm pkg set version="$EXTENSION_VERSION"
           npm run package
           mv ./*.vsix "vidar-vscode-$VIDAR_VERSION-${{ matrix.target }}.vsix"
 
@@ -83,10 +89,41 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+
+      # notes from the conventional commit messages since the previous release
+      - name: Write release notes
+        run: |
+          prev=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName // empty')
+          if [ -n "$prev" ] && git rev-parse -q --verify "refs/tags/$prev" > /dev/null; then range=("$prev..$GITHUB_SHA"); else range=(-1 "$GITHUB_SHA"); fi
+          git log --no-merges --format='%s (%h)' "${range[@]}" > commits.txt
+          section() {
+            lines=$( (grep -E "^$1(\([^)]*\))?!?: " commits.txt || true) | sed -E 's/^[a-z]+(\(([^)]*)\))?!?: /- **\2:** /; s/^- \*\*:\*\* /- /')
+            if [ -n "$lines" ]; then printf '## %s\n\n%s\n\n' "$2" "$lines" >> notes.md; fi
+          }
+          : > notes.md
+          breaking=$( (grep -E '^[a-z]+(\([^)]*\))?!: ' commits.txt || true) | sed 's/^/- /')
+          if [ -n "$breaking" ]; then printf '## Breaking changes\n\n%s\n\n' "$breaking" >> notes.md; fi
+          section feat Features
+          section fix Fixes
+          section perf Performance
+          section refactor Refactoring
+          section docs Documentation
+          section test Tests
+          section build Build
+          section ci CI
+          section chore Chores
+          other=$( (grep -vE '^(feat|fix|perf|refactor|docs|test|build|ci|chore)(\([^)]*\))?!?: ' commits.txt || true) | sed 's/^/- /')
+          if [ -n "$other" ]; then printf '## Other\n\n%s\n\n' "$other" >> notes.md; fi
+          if [ -n "$prev" ]; then echo "**Full changelog:** https://github.com/$GITHUB_REPOSITORY/compare/$prev...$VERSION" >> notes.md; fi
+          cat notes.md
 
       - name: Create release
         run: |
@@ -94,5 +131,5 @@ jobs:
             echo "release $VERSION already exists"
             exit 0
           fi
-          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$VERSION" --generate-notes \
+          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$VERSION" --notes-file notes.md \
             dist/bin/*.tar.gz dist/editors/vscode/*.vsix
