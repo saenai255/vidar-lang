@@ -39,8 +39,8 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 26 | 30 | `vidar fmt` | dev tooling | merged |
 | 27 | 31 | Debugger support: `vidar build -debug` and a launch config | dev tooling | merged |
 | 28 | 32 | Run the tests in CI before every release | infra | merged |
-| 29 | 33 | Escape analysis through calls | bug | todo |
-| 30 | 34 | Closure arrays returned through named results lose their type | bug | todo |
+| 29 | 33 | Escape analysis through calls | bug | merged |
+| 30 | 34 | Closure arrays returned through named results lose their type | bug | merged |
 | 31 | 35 | Close 2 and 5 as not reproduced | bug | done |
 | 32 | 36 | Goroutine dump and deadlock detection at N threads | scheduler | todo |
 | 33 | 37 | Debug race check at N threads | scheduler | todo |
@@ -48,7 +48,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 35 | 39 | Work stealing of goroutines that have run | scheduler | todo |
 | 36 | 40 | Closure bodies that use the enclosing proc's constants, types and `$T` | language | todo |
 | 37 | 41 | Anonymous struct literals everywhere | language | todo |
-| 38 | 42 | Generic impls, and proc groups or polymorphic procs as bound methods | language | todo |
+| 38 | 42 | Generic impls, and proc groups or polymorphic procs as bound methods | language | merged |
 | 39 | 43 | Resolve field and enum-member uses in the analyzer | editor | todo |
 | 40 | 44 | Forward rewritten lines to ols | editor | todo |
 | 41 | 45 | Index the whole workspace at startup | editor | todo |
@@ -364,6 +364,10 @@ For a `[dynamic]T` whose hot loops (in any proc it is passed to) touch few field
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **42, generic impls** merged. `impl I for Box($T) { m = box_m }` (bound procs take `^Box($T)` or a more general `^$T`), `impl I for Box(int)` for one instance, and `m = group` / `m = poly`. A generic impl emits a polymorphic `__I_from_Box_T` with its vtable in a `@(static, rodata)` local, so Odin makes one per instance used, including from generic code. A group binds the member taking `^T` with the method's arity (an exact `^T` beats polymorphic ones); a polymorphic bound proc more general than `^T` gets a `#force_inline` wrapper. New errors: overlap with a covered instance, a concrete receiver in a generic impl, `X(..)` of a non-parametric type, no or several fitting group members, `Pool(I)` with a generic impl. `-opt`: devirtualization and inline interface arrays skip generic impls (hinted); `@(no_alloc)` follows into them, and no longer treats `T(x)` with a polymorphic `$T` as a call. Cases `interface_generic`, `opt_iface_generic`.
+- **33, escape analysis through calls** merged. `src/escape.ts` computes, for each proc's parameters, whether they escape (stored through a pointer, in a global or slice, appended to something not owned, passed to `sched.go*` or to an escaping parameter), to a fixed point over the call graph across packages; `checkCallEscapes` reports `&x` closures and interface values that escape through a call, naming the chain (`passed to later (line 17), where it is passed to keep (line 11), where it is appended to memory behind a pointer (line 7)`). Departures from the spec: a returned parameter flows back as the call's value (`return id(f)` is an error, `id(f)()` isn't); `main` is exempt, since its frame lasts until exit (`sched.go(proc[&wg, ...])` from `main` stays legal; from any other proc it is an error, even when that proc waits); storing through any pointer counts, even into the caller's own local (a false positive, in Limits). Proc values, closures, interface methods, foreign and `core:` callees are trusted. The `&x` quick fix uses the same summaries.
+- **34, closure types through calls** merged. Not named results: `make_closures` was `#force_no_inline proc`, and the type lookup didn't look through a directive. Case `closure_named_results`.
+- Full suite after these three: 361 passed.
 - **32, 46, 50** merged (one worktree).
   - 32: a `test` job (ubuntu-24.04, macos-14) gates `build` and `release`: Odin `dev-2026-07` from Odin's GitHub release tarball, `npm ci`, `npm test`, the case suite at `VIDAR_THREADS=4`, and 500 stress runs of `sched_pending_io`; hang reports uploaded on failure. Checked locally (YAML, tarball URLs, the linux tarball's `odin` passing a case); the first real run is the next push.
   - 46: the missing-import fix indexes every package under `odin root` (`core/`, `base/`, `vendor/`; cached, 5 s timeout), keeping the table first and as the fallback. A name shared by several packages (`noise`) offers one action each, none preferred, so fix-all doesn't guess.
