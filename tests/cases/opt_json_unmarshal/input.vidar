@@ -93,6 +93,11 @@ check_scalars :: proc(name, data: string) {
 }
 
 report :: proc(name, got, want: string) {
+	// an out-of-range float converted to an int is the CPU's choice (x86: min, arm64: saturated), so only agreement is printed
+	if name == "big float into int" {
+		fmt.println(name, got == want ? "same" : "DIFFERENT")
+		return
+	}
 	fmt.println(name, got == want ? "same" : "DIFFERENT", got)
 	if got != want do fmt.println("   want", want)
 }

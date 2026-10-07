@@ -93,8 +93,13 @@ check_scalars :: proc(name, data: string) {
 }
 
 report :: proc(name, got, want: string) {
-	__fmt_6(name, got == want ? "same" : "DIFFERENT", got)
-	if got != want do __fmt_7(want)
+	// an out-of-range float converted to an int is the CPU's choice (x86: min, arm64: saturated), so only agreement is printed
+	if name == "big float into int" {
+		__fmt_6(name, got == want ? "same" : "DIFFERENT")
+		return
+	}
+	__fmt_7(name, got == want ? "same" : "DIFFERENT", got)
+	if got != want do __fmt_8(want)
 }
 
 main :: proc() {
@@ -209,12 +214,12 @@ main :: proc() {
 	// more arrays than the check keeps lengths for: the rest are counted again
 	many := strings.builder_make()
 	strings.write_string(&many, "[")
-	for i in 0..<300 do __fmt_8(&many, i > 0 ? ",\n" : "", i, -i)
+	for i in 0..<300 do __fmt_9(&many, i > 0 ? ",\n" : "", i, -i)
 	strings.write_string(&many, "]")
 	check_nested("many arrays", strings.to_string(many))
 	strings.builder_reset(&many)
 	strings.write_string(&many, "[")
-	for i in 0..<300 do __fmt_9(&many, i > 0 ? ",\n" : "", i, i == 290 ? "true" : "1")
+	for i in 0..<300 do __fmt_10(&many, i > 0 ? ",\n" : "", i, i == 290 ? "true" : "1")
 	strings.write_string(&many, "]")
 	check_nested("many arrays, one bad", strings.to_string(many))
 
@@ -298,7 +303,20 @@ __fmt_5 :: proc(a0: $T0, a1: $T1, a2: $T2, a3: $T3, a4: $T4, a5: $T5, a6: $T6, a
 }
 
 // fmt.println
-__fmt_6 :: proc(a0: $T0, a1: $T1, a2: $T2) -> (n: int) {
+__fmt_6 :: proc(a0: $T0, a1: $T1) -> (n: int) {
+	buf: [1024]byte
+	bw: __vidar.File_Writer
+	w := __vidar.std_writer(&bw, buf[:], false)
+	n += __vidar.w_v(w, a0)
+	n += __vidar.w_str(w, " ")
+	n += __vidar.w_v(w, a1)
+	n += __vidar.w_str(w, "\n")
+	__vidar.w_flush(w)
+	return
+}
+
+// fmt.println
+__fmt_7 :: proc(a0: $T0, a1: $T1, a2: $T2) -> (n: int) {
 	buf: [1024]byte
 	bw: __vidar.File_Writer
 	w := __vidar.std_writer(&bw, buf[:], false)
@@ -313,7 +331,7 @@ __fmt_6 :: proc(a0: $T0, a1: $T1, a2: $T2) -> (n: int) {
 }
 
 // fmt.println
-__fmt_7 :: proc(a0: $T0) -> (n: int) {
+__fmt_8 :: proc(a0: $T0) -> (n: int) {
 	buf: [1024]byte
 	bw: __vidar.File_Writer
 	w := __vidar.std_writer(&bw, buf[:], false)
@@ -325,7 +343,7 @@ __fmt_7 :: proc(a0: $T0) -> (n: int) {
 }
 
 // fmt.sbprintf "%s[%d, %d]"
-__fmt_8 :: proc(b: ^__vidar.Builder, a0: $T0, a1: $T1, a2: $T2) -> string {
+__fmt_9 :: proc(b: ^__vidar.Builder, a0: $T0, a1: $T1, a2: $T2) -> string {
 	__vidar.sb_s(b, a0)
 	__vidar.sb_str(b, "[")
 	__vidar.sb_d(b, a1)
@@ -336,7 +354,7 @@ __fmt_8 :: proc(b: ^__vidar.Builder, a0: $T0, a1: $T1, a2: $T2) -> string {
 }
 
 // fmt.sbprintf "%s[%d, %s]"
-__fmt_9 :: proc(b: ^__vidar.Builder, a0: $T0, a1: $T1, a2: $T2) -> string {
+__fmt_10 :: proc(b: ^__vidar.Builder, a0: $T0, a1: $T1, a2: $T2) -> string {
 	__vidar.sb_s(b, a0)
 	__vidar.sb_str(b, "[")
 	__vidar.sb_d(b, a1)
