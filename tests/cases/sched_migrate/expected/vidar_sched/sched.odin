@@ -18,6 +18,8 @@ when ODIN_OS == .Darwin && ODIN_ARCH == .arm64 {
 	foreign import switcher "switch_linux_arm64.asm"
 } else when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
 	foreign import switcher "switch_linux_amd64.asm"
+} else when ODIN_OS == .Windows && ODIN_ARCH == .amd64 {
+	foreign import switcher "switch_windows_amd64.asm"
 } else {
 	#panic("vidar:sched: goroutines are not supported on this target yet")
 }
@@ -510,6 +512,17 @@ go :: proc(task: __vidar.Closure(proc(__vidar.Env)), loc := #caller_location) {
 		mem.zero(frame, 160)
 		frame[0] = uintptr(g)
 		frame[11] = uintptr(rawptr(vidar_entry))
+	} else when ODIN_OS == .Windows {
+		// vidar_switch's frame: xmm6..xmm15, the TIB's StackBase, StackLimit and DeallocationStack,
+		// r15, r14, r13, r12, rsi, rdi, rbx, rbp, return address; above it a zero return address,
+		// which ends stack walks (unwinding, debuggers) at vidar_entry
+		frame := ([^]uintptr)(rawptr(top - 272))
+		mem.zero(frame, 272)
+		frame[20] = uintptr(raw_data(g.stack)) + uintptr(len(g.stack))
+		frame[21] = uintptr(raw_data(g.stack)) + GUARD_SIZE
+		frame[22] = uintptr(raw_data(g.stack))
+		frame[26] = uintptr(g)
+		frame[31] = uintptr(rawptr(vidar_entry))
 	} else {
 		// r15, r14, r13, r12, rbx, rbp, return address
 		frame := ([^]uintptr)(rawptr(top - 72))
@@ -1677,7 +1690,7 @@ __closure_0 :: proc(__c0: $T0, __c1: $T1, __c2: $T2) -> __vidar.Closure(proc(__v
 		c: T1,
 		loc: T2,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at sched.vidar:1121: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at sched.vidar:1134: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env)){
 		call = proc(__env_raw: __vidar.Env) { __env := transmute(__Env)__env_raw;
@@ -1693,7 +1706,7 @@ __closure_1 :: proc(__c0: $T0, __c1: $T1) -> __vidar.Closure(proc(__vidar.Env)) 
 		hostname_and_maybe_port: T0,
 		r: T1,
 	}
-	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at sched.vidar:1216: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at sched.vidar:1229: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env)){
 		call = proc(__env_raw: __vidar.Env) { __env := transmute(__Env)__env_raw;
