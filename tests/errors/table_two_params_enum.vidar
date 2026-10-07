@@ -1,0 +1,6 @@
+// error: @(table) with two parameters needs both of type bool, u8 or i8
+package main
+Color :: enum { Red, Green }
+@(table)
+shade :: proc(c: Color, dark: bool) -> int { return int(c) * (2 if dark else 1) }
+main :: proc() {}

@@ -271,7 +271,9 @@ Example: [examples/comptime](examples/comptime).
 |---|---|
 | `@(table) f :: proc(x: T) -> R { ... }` | `T` is `bool`, `u8`, `i8` or an enum (without explicit member values): every result is stored once, and `f(x)` becomes a table lookup. Computed at compile time when the body can run there, else at startup. The body must depend only on `x` |
 | `@(specialize) f :: proc(...) { ... }` | each call passing constants to basic or enum parameters calls a copy where those are compile-time (`$p`); a call passing a closure literal to a closure parameter `f`'s body only calls calls a copy that calls the literal's body directly (also without `-opt`); other calls call `f` |
-| `@(no_table)`, `@(no_specialize)` | `-opt` won't make `f` a table / specialize it on its own |
+| `@(table) f :: proc(x: T, y: U) -> R { ... }` | two parameters of type `bool`, `u8` or `i8`: a two-dimensional table, `table[x][y]` |
+| `@(memo) f :: proc(...) -> R { ... }` | each outer call gets a memo table its recursive calls share, freed on return: an array when every parameter is `bool`, `u8` or `i8`, else a map |
+| `@(no_table)`, `@(no_specialize)`, `@(no_memo)`, `@(no_stack_buffer)`, `@(no_perfect_hash)` | `-opt` won't do that to `f` on its own |
 | `@(no_alloc) f :: proc(...) { ... }` | compile error when `f`, or anything it calls, can allocate (or calls something that can't be checked: a closure, a proc value, an interface with unknown impls, an unlisted `core:` proc); in builds below `-o:size` its allocators also panic |
 | `@(hot) f :: proc(...) { ... }` | with `-opt`, every decision against something inside `f` is a warning: a bounds check left in a loop, an indirect call, a closure not inlined, a vtable call, an allocation in a loop |
 | `Pool(I)` | values of every implementation of interface `I`, one array per type; `I` must not be extended in another package |
@@ -299,6 +301,7 @@ for s in shapes do total += area(s)        // a direct call per type
 - adjacent `make`/`new` freed only by `defer delete`/`defer free` in the same block become one allocation
 - a `switch` on a string with 8 or more literal cases goes through a perfect hash and one compare (`@(no_perfect_hash)` opts out)
 - `x := make([]T, N)` with a constant `N` and a `defer delete(x)` in the same block goes on the stack when `x` doesn't escape (4 KB in a proc a goroutine can reach, 64 KB elsewhere; `@(no_stack_buffer)` opts out)
+- pure integer procs over two `bool`/`u8`/`i8` parameters become 2D tables (4096 results at most); pure integer procs that call themselves more than once per call get `@(memo)`
 - procs over `bool`/`u8`/`i8` that are pure integer code and loop become tables; procs whose constant arguments bound a loop, or divide, shift or branch inside one, are specialized (at most 4 copies, not when every call passes the same constant); a call passing a closure literal (`proc[...]`) to a closure parameter the callee only calls gets a copy calling the literal's body directly, with its captures on the stack (at most 4 copies per proc, written in the caller's file; not when the callee uses a private name the caller can't see)
 
 `-opt-report` in place of `-opt` also prints what it decided per proc, and why not where it didn't.

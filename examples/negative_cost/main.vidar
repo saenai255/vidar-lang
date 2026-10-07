@@ -188,6 +188,18 @@ keywords :: #force_no_inline proc(n: int) {
 	section("string switch", start, total)
 }
 
+// ---- -opt: a pure proc that calls itself twice per call gets a memo table ----
+
+fib :: proc(n: int) -> int {
+	if n < 2 do return n
+	return fib(n - 1) + fib(n - 2)
+}
+
+memo :: #force_no_inline proc(n: int) {
+	start := time.tick_now()
+	section("fib, memoized", start, fib(n))
+}
+
 // ---- -opt: allocations freed together are made together ----
 
 smooth :: proc(src: []f32) -> f32 {
@@ -413,6 +425,7 @@ main :: proc() {
 	bounds(100_000, 10 * scale)
 	wide_bounds(100_000, 10 * scale)
 	keywords(100_000 * scale)
+	memo(20 if !BENCH else 32)
 	allocs(20_000 * scale)
 	appends(1_000, 1_000 * scale)
 	blur(100_000, 2 * scale)

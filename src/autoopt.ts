@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import { memoPlan, selfCalls } from "./memo";
 import { Expr, Node, children } from "./ast";
 import { A, Analyzer, CallSite, ClosureSpec, INT_TYPES, markInlined, SpecInfo, nodeText, posOf, unwrapProc } from "./analyzer";
 import type { GlobalSym, LocalSym, Sym } from "./scope";
@@ -11,8 +12,10 @@ const MAX_COPIES = 4;
 const TABLE_OPS = 24;
 /** compile-time steps one input of an automatic table may take */
 const TABLE_STEPS = 20_000;
+/** results a table may hold: each is computed at compile time */
+const TABLE_ENTRIES = 4096;
 
-const KEEPS = new Set(["private", "require_results", "specialize", "table", "no_specialize", "no_table", "no_stack_buffer", "no_perfect_hash", "no_alloc", "hot"]);
+const KEEPS = new Set(["private", "require_results", "specialize", "table", "memo", "no_specialize", "no_table", "no_memo", "no_stack_buffer", "no_perfect_hash", "no_alloc", "hot"]);
 const DIVIDES = new Set(["/", "%", "%%", "<<", ">>"]);
 const ASSIGNS = new Set(["=", "+=", "-=", "*=", "/=", "%=", "%%=", "&=", "|=", "~=", "<<=", ">>=", "&~="]);
 
@@ -28,9 +31,10 @@ export function autoOptimize(an: Analyzer): void {
   }
   for (const [sym, sites] of an.callSites) {
     const lit = procOf(an, sym);
-    if (!lit || an.tables.has(sym)) continue;
+    if (!lit || an.tables.has(sym) || an.memos.has(sym)) continue;
     const off = an.optOut.get(sym);
     if (!off?.has("table") && autoTable(an, sym, lit)) continue;
+    if (!off?.has("memo") && autoMemo(an, sym, lit)) continue;
     if (!off?.has("specialize")) autoSpecialize(an, sym, lit, closureSpecialize(an, sym, lit, sites));
   }
 }
@@ -74,26 +78,31 @@ function procOf(an: Analyzer, sym: GlobalSym): ProcLit | undefined {
 
 function autoTable(an: Analyzer, sym: GlobalSym, lit: ProcLit): boolean {
   const { params, results, unnamed, resultsUnnamed } = lit.sig;
-  const param = params[0];
-  if (params.length !== 1 || param.names.length !== 1 || !param.type || param.value || param.names[0].prefix || unnamed) return false;
+  const flat = params.flatMap((p) => p.names.map((n) => ({ n, p })));
+  if (flat.length < 1 || flat.length > 2 || unnamed || flat.some(({ n, p }) => !p.type || p.value || n.prefix)) return false;
   if (results.length !== 1 || !resultsUnnamed || !results[0].type) return false;
   const typeName = (t: Expr) => an.typeName({ t: "node", node: t, scope: A(t)._scope ?? sym.scope });
-  const domain = ({ bool: "bool", u8: "u8", byte: "u8", i8: "i8" } as const)[typeName(param.type) ?? ""];
-  if (!domain || !isIntOrBool(typeName(results[0].type))) return false;
+  const domains = flat.map(({ p }) => ({ bool: "bool", u8: "u8", byte: "u8", i8: "i8" } as const)[typeName(p.type!) ?? ""]);
+  if (domains.some((d) => !d) || !isIntOrBool(typeName(results[0].type))) return false;
   if (!(lit.toks[lit.start].text === "proc" && lit.toks[lit.start + 1]?.text === "(")) return false;
+  const size = (d: string | undefined) => (d === "bool" ? 2 : 256);
+  const entries = domains.reduce((n, d) => n * size(d), 1);
+  const label = flat.length === 2 ? "table 2D" : "table";
+  if (entries > TABLE_ENTRIES) return no(an, sym, `${domains.join(" × ")} is ${entries} results, more than ${TABLE_ENTRIES}`, flat.length === 2);
 
   const shape = integerOnly(an, sym, lit, new Set([sym]));
-  if (shape.why) return no(an, sym, `it ${shape.why}`);
-  if (!shape.loop && shape.ops < TABLE_OPS) return no(an, sym, `${shape.ops} operation${shape.ops === 1 ? "" : "s"} and no loop, cheaper than a memory load`);
-  const values = an.tabulate(sym, domain, TABLE_STEPS);
-  if (!values) return no(an, sym, `the body doesn't finish at compile time for every ${domain} within ${TABLE_STEPS} steps`);
-  an.tables.set(sym, { lit, domain, param: param.names[0].name, type: param.type, result: results[0].type, values });
-  an.hint(sym, "table", `${values.length} results, ${shape.loop ? "has a loop" : `${shape.ops} operations`}, pure integer code`);
+  if (shape.why) return no(an, sym, `it ${shape.why}`, flat.length === 2);
+  if (!shape.loop && shape.ops < TABLE_OPS) return no(an, sym, `${shape.ops} operation${shape.ops === 1 ? "" : "s"} and no loop, cheaper than a memory load`, flat.length === 2);
+  const values = an.tabulate(sym, domains[0]!, TABLE_STEPS, domains[1]);
+  if (!values) return no(an, sym, `the body doesn't finish at compile time for every ${domains.join(", ")} within ${TABLE_STEPS} steps`, flat.length === 2);
+  const second = flat[1] && { domain: domains[1]!, param: flat[1].n.name, type: flat[1].p.type! };
+  an.tables.set(sym, { lit, domain: domains[0]!, param: flat[0].n.name, type: flat[0].p.type!, result: results[0].type, values, second });
+  an.hint(sym, label, `${values.length} results, ${shape.loop ? "has a loop" : `${shape.ops} operations`}, pure integer code`);
   return true;
 }
 
-function no(an: Analyzer, sym: GlobalSym, why: string): false {
-  an.hint(sym, "no table", why);
+function no(an: Analyzer, sym: GlobalSym, why: string, twoD = false): false {
+  an.hint(sym, twoD ? "no table 2D" : "no table", why);
   return false;
 }
 
@@ -213,6 +222,29 @@ function describe(n: Node): string {
     Defer: "defer", When: "when", Labeled: "a label", ImplicitSelector: "an enum value",
   };
   return names[n.k] ?? `'${n.k}'`;
+}
+
+// ---- memo ----
+
+/**
+ * A pure integer proc that calls itself more than once per call (exponential recursion, like fib)
+ * gets a memo table for the duration of each outer call.
+ */
+function autoMemo(an: Analyzer, sym: GlobalSym, lit: ProcLit): boolean {
+  const calls = selfCalls(lit, sym);
+  if (calls.length < 2) return false;
+  const no = (why: string) => (an.hint(sym, "no memo", why), false);
+  const { params, results } = lit.sig;
+  const typeOk = (t: Expr | undefined) => !!t && isIntOrBool(an.typeName({ t: "node", node: t, scope: A(t)._scope ?? sym.scope }));
+  if (!params.every((p) => typeOk(p.type)) || results.length !== 1 || !typeOk(results[0].type)) return no("it takes or returns more than integers and bools");
+  const shape = integerOnly(an, sym, lit, new Set([sym]));
+  if (shape.why) return no(`it ${shape.why}`);
+  if (an.noAllocProcs.size) return no("the program has @(no_alloc) procs, and a memo allocates its table");
+  const plan = memoPlan(an, sym, lit);
+  if (typeof plan === "string") return no(plan);
+  an.useMemo(sym, plan);
+  an.hint(sym, "memo", `calls itself ${calls.length} times per call, pure integer code: a ${plan.array ? `${plan.array}-entry array` : "map"} for each outer call, shared by the recursive ones`);
+  return true;
 }
 
 // ---- specialization ----

@@ -433,7 +433,7 @@ main.vidar:95: ps: not #soa: ps is passed to 'sum_x' (line 98)
 
 ### `@(table)`
 
-`@(table)` on a proc with one parameter of type `bool`, `u8`, `i8` or an enum turns it into a lookup: the result for every value is stored, and the proc becomes `return table[x]`. For `bool`, `u8` and `i8`, vidar runs the body at compile time and writes the table as a `@(rodata)` literal. For an enum (whose members must not have explicit values), or a body that can't run at compile time, the table is filled once at startup from the original body. The body must not depend on anything but its argument; vidar can't check that for a table you ask for, which is why only the automatic tables are restricted to code it can check.
+`@(table)` on a proc with one parameter of type `bool`, `u8`, `i8` or an enum turns it into a lookup: the result for every value is stored, and the proc becomes `return table[x]`. For `bool`, `u8` and `i8`, vidar runs the body at compile time and writes the table as a `@(rodata)` literal. For an enum (whose members must not have explicit values), or a body that can't run at compile time, the table is filled once at startup from the original body. The body must not depend on anything but its argument; vidar can't check that for a table you ask for, which is why only the automatic tables are restricted to code it can check. Two parameters of type `bool`, `u8` or `i8` give a two-dimensional table, `table[x][y]`; `-opt` makes those on its own when there are at most 4096 results.
 
 ```odin
 @(table)
@@ -445,6 +445,17 @@ collatz :: proc(b: u8) -> int {         // collatz :: #force_inline proc(b: u8) 
 		steps += 1
 	}
 	return steps
+}
+```
+
+### `@(memo)`
+
+`@(memo)` gives each outer call a memo table that the proc's calls to itself share; it is freed when the outer call returns, so nothing is kept between calls and nothing is shared between goroutines. The table is an array when every parameter is `bool`, `u8` or `i8` (4096 results at most), else a map keyed by the parameters. The proc keeps its name and signature; its body becomes `__f_memo_body`, in place. `-opt` adds it on its own to a pure integer proc that calls itself more than once per call (exponential recursion, like `fib`), unless the program has `@(no_alloc)` procs, since the table allocates. `@(no_memo)` opts a proc out.
+
+```odin
+fib :: proc(n: int) -> int {           // -opt: fib(n) makes the table, __fib_memo(n, &table) looks up or computes
+	if n < 2 do return n
+	return fib(n - 1) + fib(n - 2)      // __fib_memo(n - 1, __memo) + __fib_memo(n - 2, __memo)
 }
 ```
 

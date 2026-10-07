@@ -1,0 +1,5 @@
+// error: @(memo) can't apply: '[]int' can't be a map key here
+package main
+@(memo)
+total :: proc(xs: []int) -> int { return 0 if len(xs) == 0 else xs[0] + total(xs[1:]) }
+main :: proc() {}

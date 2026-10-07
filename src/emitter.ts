@@ -7,6 +7,7 @@ import { decodeString, encodeString, fmtPlan } from "./fmtspec";
 import { AllocGroup, BoundsGuard, Reserve, optimizeProc } from "./optimize";
 import type { StackBuf } from "./stackbuf";
 import { StrHash, strHashProc } from "./strswitch";
+import { MemoInfo, memoHelpers } from "./memo";
 import type { CaptureSym, GlobalSym, LocalSym, PackageInfo, PkgSym, Sym, Ty, Unit } from "./scope";
 
 type ProcLit = Extract<Expr, { k: "ProcLit" }>;
@@ -504,6 +505,8 @@ export class Emitter {
         const declared: GlobalSym | undefined = A(n)._syms?.[0];
         const table = declared?.kind === "global" ? this.an.tables.get(declared) : undefined;
         if (table) return this.tableDecl(n, declared!, table);
+        const memo = declared?.kind === "global" ? this.an.memos.get(declared) : undefined;
+        if (memo) return this.memoDecl(n, declared!, memo);
         const spec = declared?.kind === "global" ? this.an.specialized.get(declared) : undefined;
         if (spec) for (const [key, consts] of spec.clones) this.helpers.push(this.specClone(declared!, spec, key, consts));
         if (A(n)._allocGrouped) return `/* ${n.names[0].name}: allocated together with ${A(n)._allocGrouped} */` + this.skipLines(n);
@@ -544,6 +547,8 @@ export class Emitter {
       }
       case "Call": {
         if (A(n)._closureSpec) return this.closureSpecCall(n, A(n)._closureSpec);
+        const memoSelf: GlobalSym | undefined = A(n)._memoSelf;
+        if (memoSelf && this.an.memos.has(memoSelf)) return `__${memoSelf.odinName}_memo(${[...n.args.map((a) => this.emit(a)), "__memo"].join(", ")})` + this.skipLines(n);
         const spec: { sym: GlobalSym; key: string } | undefined = A(n)._spec;
         if (spec) return this.qualify(spec.sym, `${spec.sym.odinName}__${spec.key}`, `call '${spec.sym.name}'`) + this.generic(n, n.fn.end);
         if (A(n)._pool) return this.qualify(A(n)._pool, poolName(A(n)._pool));
@@ -1180,8 +1185,30 @@ export class Emitter {
     const T = this.emit(t.type);
     const R = this.emit(t.result);
     const table = `__${name}_table`;
-    const index = { enum: t.param, u8: t.param, bool: `1 if ${t.param} else 0`, i8: `int(${t.param}) + 128` }[t.domain];
-    const size = t.domain === "enum" ? `[${T}]` : t.domain === "bool" ? "[2]" : "[256]";
+    const indexOf = (domain: TableInfo["domain"], param: string) => ({ enum: param, u8: param, bool: `1 if ${param} else 0`, i8: `int(${param}) + 128` })[domain];
+    const sizeOf = (domain: TableInfo["domain"]) => (domain === "enum" ? `[${T}]` : domain === "bool" ? "[2]" : "[256]");
+    const two = t.second;
+    if (two) {
+      const T2 = this.emit(two.type);
+      const n2 = two.domain === "bool" ? 2 : 256;
+      const head = this.generic(s, s.start, s.values[0].start).trimEnd() + " ";
+      if (t.values) {
+        const rows = Array.from({ length: t.values.length / n2 }, (_, r) =>
+          `\n\t{${t.values!.slice(r * n2, (r + 1) * n2).map((v, i) => `${i && i % 16 === 0 ? "\n\t " : i ? " " : ""}${v}`).join(",")}},`).join("");
+        this.helpers.push(`// ${sym.name}(x, y) for every x and y, computed by vidar\n@(rodata)\n${table} := ${sizeOf(t.domain)}${sizeOf(two.domain)}${R}{${rows}\n}`);
+      } else {
+        const compute = `__${name}_compute`;
+        const value = (d: "bool" | "u8" | "i8", ty: string, i: string) => (d === "bool" ? `${i} == 1` : d === "i8" ? `${ty}(${i} - 128)` : `${ty}(${i})`);
+        this.helpers.push(
+          `${table}: ${sizeOf(t.domain)}${sizeOf(two.domain)}${R}\n\n${compute} :: ${this.emit(t.lit)}\n\n` +
+            `// ${sym.name}(x, y) for every x and y, computed once at startup\n@(init)\n__${name}_fill :: proc "contextless" () {\n\tcontext = ${RUNTIME_ALIAS}.default_context()\n` +
+            `\tfor i in 0..<${t.domain === "bool" ? 2 : 256} do for j in 0..<${n2} do ${table}[i][j] = ${compute}(${value(t.domain as "bool" | "u8" | "i8", T, "i")}, ${value(two.domain, T2, "j")})\n}`,
+        );
+      }
+      return keepLines(s, `${head}#force_inline proc(${t.param}: ${T}, ${two.param}: ${T2}) -> ${R} { return ${table}[${indexOf(t.domain, t.param)}][${indexOf(two.domain, two.param)}] }`);
+    }
+    const index = indexOf(t.domain, t.param);
+    const size = sizeOf(t.domain);
     if (t.values) {
       const rows = t.values.map((v, i) => `${i % 8 ? " " : "\n\t"}${v},`).join("");
       this.helpers.push(`// ${sym.name}(x) for every x, computed by vidar\n@(rodata)\n${table} := ${size}${R}{${rows}\n}`);
@@ -1200,6 +1227,27 @@ export class Emitter {
     }
     const head = this.generic(s, s.start, s.values[0].start).trimEnd() + " ";
     return keepLines(s, `${head}#force_inline proc(${t.param}: ${T}) -> ${R} { return ${table}[${index}] }`);
+  }
+
+  /** `f :: proc(...) -> R { body }` -> `__f_memo_body :: proc(..., __memo: ^__f_Memo) -> R { body }` in place; `f` itself goes to the helpers. */
+  private memoDecl(s: Extract<Stmt, { k: "ValueDecl" }>, sym: GlobalSym, m: MemoInfo): string {
+    const lit = m.lit;
+    const name = sym.odinName;
+    const body = `__${name}_memo_body`;
+    let open = lit.start + 1;
+    let close = open;
+    for (let depth = 0; close < lit.end; close++) {
+      const t = lit.toks[close].text;
+      if (t === "(") depth++;
+      else if (t === ")" && --depth === 0) break;
+    }
+    const head = this.generic(s, s.start, s.values[0].start).trimEnd().replace(new RegExp(`\\b${name}\\b`), body);
+    const before = s.values[0] !== lit ? this.generic(s.values[0], s.values[0].start, lit.start).trim() : "";
+    const params = this.generic(lit, open + 1, close);
+    const sig = `${this.generic(lit, lit.start, open)}(${params}, __memo: ^__${name}_Memo)`;
+    const results = this.generic(lit, close + 1, lit.body!.start).trim();
+    this.helpers.push(memoHelpers(name, m, (e) => this.emit(e), body));
+    return [head, before, sig, results, this.emit(lit.body!)].filter((x) => x).join(" ");
   }
 
   // ---- -opt: allocations freed together ----

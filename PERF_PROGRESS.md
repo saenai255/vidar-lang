@@ -26,7 +26,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 13 | 9 | Constant-size `make` on the stack | perf | merged |
 | 14 | 10 | Wider bounds-check elimination | perf | merged |
 | 15 | 11 | String `switch` through a perfect hash | perf | merged |
-| 16 | 13 | Automatic `@(memo)` and two-parameter `@(table)` | perf | todo |
+| 16 | 13 | Automatic `@(memo)` and two-parameter `@(table)` | perf | merged |
 | 17 | 15 | Struct field reordering, then hot/cold splitting | perf | todo |
 
 ## Tooling
@@ -181,6 +181,11 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **13, automatic `@(memo)` and two-parameter `@(table)`** merged.
+  - 2D tables: `@(table)` takes two `bool`/`u8`/`i8` parameters (`table[x][y]`, computed at compile time or filled at startup). `-opt` makes one on its own under the one-parameter rules (pure integer code, a loop or 24+ operations) when there are at most 4096 results, since each is computed at compile time; past that it hints `no table 2D`.
+  - `@(memo)` (`src/memo.ts`): the declaration becomes `__f_memo_body(..., __memo)` in place, with its calls to itself going to `__f_memo`; the helpers add `f` (makes the table, frees it on return) and `__f_memo` (look up, or compute and store). An array of `done`/`value` when every parameter is `bool`/`u8`/`i8` and there are at most 4096 results, else a map, keyed by a struct for several parameters. By hand on any proc with basic or enum parameters and one result; `-opt` adds it to pure integer procs (`integerOnly`) that call themselves at least twice, unless the program has `@(no_alloc)` procs (the table allocates, which their checks wouldn't see). `@(no_memo)` opts out. Hints `memo` / `no memo`.
+  - `negative_cost` "fib, memoized" (fib(32)): 7 ms plain, 0.02 ms with `-opt`.
+  - New cases `opt_table_2d`, `opt_memo`; error cases `table_three_params`, `table_two_params_enum`, `memo_bad_key`, `memo_and_no_memo`.
 - **11, string `switch` through a perfect hash** merged (`src/strswitch.ts`). A `switch` with a string tag whose cases are all string literals, 8 or more, distinct and without `\x`/octal escapes, gets its tag rewritten to `__strswitch_N(tag)` and each literal to its index. The generated proc hashes, looks the slot up in an `@(rodata)` table and confirms with one compare, returning -1 (the default case) otherwise. The hash is found at compile time: first the length and the first, middle and last bytes mixed by an odd multiplier, then seeded FNV-1a, each with tables of 2^⌈log2 n⌉ to 4× that and 20,000 seeds per size; the TypeScript search computes exactly the Odin u32 arithmetic. Everything is rewritten in place, so lines and `fallthrough` stay. `@(no_perfect_hash)` opts out.
   - `negative_cost` "string switch" (12 keywords, 16 words looked up 5 million times), plain vs `-opt`, linux/amd64: 63 → 15.8 ms.
   - New case `opt_string_switch`: keywords, two strings in one case, `fallthrough`, a default case in the middle, an init statement, `""` and a multi-byte string, strings only FNV tells apart, an opt-out, and a 2-case switch left alone.

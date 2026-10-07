@@ -1,4 +1,4 @@
-// error: a proc is either @(specialize) or @(table), not both
+// error: a proc is at most one of @(specialize), @(table) and @(memo)
 package main
 @(specialize, table)
 f :: proc(b: bool) -> int { return 1 }

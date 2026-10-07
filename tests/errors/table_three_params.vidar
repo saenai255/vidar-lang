@@ -1,0 +1,5 @@
+// error: @(table) needs a proc with one or two parameters and one result
+package main
+@(table)
+add :: proc(a, b, c: u8) -> int { return int(a) + int(b) + int(c) }
+main :: proc() {}

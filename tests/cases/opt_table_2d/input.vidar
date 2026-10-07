@@ -1,0 +1,47 @@
+package main
+
+import "core:fmt"
+
+// two parameters with small domains, pure integer code with a loop: a 2D table, on its own
+gcd_steps :: proc(neg: bool, b: u8) -> int {
+	x := int(b) + 1
+	y := 7 if neg else 12
+	steps := 0
+	for y != 0 {
+		x, y = y, x % y
+		steps += 1
+	}
+	return steps
+}
+
+// by hand, computed at compile time
+@(table)
+mix :: proc(a: i8, b: bool) -> int {
+	return int(a) * (3 if b else -1)
+}
+
+// by hand, filled at startup: a global variable can't be read at compile time
+base := 10
+
+@(table)
+digits :: proc(a: i8, signed: bool) -> int {
+	n := 1 if signed && a < 0 else 0
+	for x := abs(int(a)); x >= base; x /= base do n += 1
+	return n + 1
+}
+
+// u8 × u8 is 65536 results: too many to compute on its own
+popsum :: proc(a, b: u8) -> int {
+	n := 0
+	for x := a ~ b; x != 0; x >>= 1 do n += int(x & 1)
+	return n
+}
+
+main :: proc() {
+	total := 0
+	for b in 0..<256 do total += gcd_steps(b % 2 == 0, u8(b))
+	fmt.println(total, gcd_steps(true, 20), gcd_steps(false, 255))
+	fmt.println(mix(-128, true), mix(127, false), mix(5, true))
+	fmt.println(popsum(0xff, 0x0f))
+	fmt.println(digits(-128, true), digits(5, false), digits(42, true))
+}

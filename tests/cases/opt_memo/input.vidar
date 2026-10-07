@@ -1,0 +1,45 @@
+package main
+
+import "core:fmt"
+
+// calls itself twice per call: memoized on its own, with a map since int has no small domain
+fib :: proc(n: int) -> int {
+	if n < 2 do return n
+	return fib(n - 1) + fib(n - 2)
+}
+
+// two parameters
+paths :: proc(r, c: int) -> int {
+	if r == 0 || c == 0 do return 1
+	return paths(r - 1, c) + paths(r, c - 1)
+}
+
+// a u8 parameter: an array table
+tri :: proc(n: u8) -> u64 {
+	if n < 3 do return u64(n)
+	return tri(n - 1) + tri(n - 2) + tri(n - 3)
+}
+
+// by hand, a parameter that isn't an integer
+@(memo)
+splits :: proc(s: string) -> int {
+	if len(s) < 2 do return 1
+	return splits(s[1:]) + splits(s[2:])
+}
+
+// opted out
+@(no_memo)
+slow_fib :: proc(n: int) -> int {
+	if n < 2 do return n
+	return slow_fib(n - 1) + slow_fib(n - 2)
+}
+
+// calls itself once: nothing to share
+fact :: proc(n: int) -> int {
+	return 1 if n <= 1 else n * fact(n - 1)
+}
+
+main :: proc() {
+	fmt.println(fib(27), paths(10, 10), tri(22))
+	fmt.println(splits("abcdefghijklmnopqrstuvwxyz0123456789"), slow_fib(20), fact(10))
+}

@@ -5,6 +5,7 @@ import { CaptureSym, Ctx, GlobalSym, LocalSym, PackageInfo, PkgSym, Scope, Sym, 
 import { autoOptimize } from "./autoopt";
 import { checkNoAlloc } from "./checks";
 import { checkEscapes } from "./escape";
+import { MemoInfo, memoPlan } from "./memo";
 import { CallSpan, Interp, NotConstant, Val, joinTokens, repeatable, respace, valueToTokens, tokensOf } from "./comptime";
 
 /** Annotation accessor: analysis results live in `_`-prefixed fields on nodes. */
@@ -100,7 +101,14 @@ export interface TableInfo {
   param: string;
   type: Expr;
   result: Expr;
+  /** a two-parameter table's second parameter (bool, u8 or i8); `values` is then row by row */
+  second?: { domain: "bool" | "u8" | "i8"; param: string; type: Expr };
   values?: string[];
+}
+
+/** The values of a bool, u8 or i8 domain, as Odin expressions, in table order. */
+export function domainInputs(domain: "bool" | "u8" | "i8"): string[] {
+  return domain === "bool" ? ["false", "true"] : Array.from({ length: 256 }, (_, i) => (domain === "i8" ? `i8(${i - 128})` : `u8(${i})`));
 }
 
 /** An -opt decision shown after token `tok` of `at` (editor inlay hint) and listed by -opt-report. */
@@ -258,16 +266,17 @@ export class Analyzer {
         });
         A(s)._syms = syms;
         if (inWhen) for (const sym of syms) this.whenDeclared.add(sym);
-        const attrs = this.takeAttrs(s, ["specialize", "table", "no_specialize", "no_table", "no_stack_buffer", "no_perfect_hash", "no_alloc", "hot"]);
+        const attrs = this.takeAttrs(s, ["specialize", "table", "memo", "no_specialize", "no_table", "no_memo", "no_stack_buffer", "no_perfect_hash", "no_alloc", "hot"]);
         if (attrs.size) {
           const lit = s.values.length === 1 && s.isConst ? unwrapProc(s.values[0]) : undefined;
           const which = [...attrs].map((a) => `@(${a})`).join(" and ");
-          if (attrs.has("specialize") && attrs.has("table")) throw new CompileError("a proc is either @(specialize) or @(table), not both", posOf(s));
-          for (const a of ["specialize", "table"])
+          if ([...attrs].filter((a) => ["specialize", "table", "memo"].includes(a)).length > 1) throw new CompileError("a proc is at most one of @(specialize), @(table) and @(memo)", posOf(s));
+          for (const a of ["specialize", "table", "memo"])
             if (attrs.has(a) && attrs.has(`no_${a}`)) throw new CompileError(`@(${a}) and @(no_${a}) contradict each other`, posOf(s));
           if (!lit || !lit.body || lit.comptime || lit.captures) throw new CompileError(`${which} goes on a proc declaration with a body: name :: proc(...) { ... }`, posOf(s));
           if (attrs.has("specialize")) this.specialized.set(syms[0], { lit, scope: fileScope, clones: new Map() });
           else if (attrs.has("table")) this.tables.set(syms[0], { lit } as TableInfo);
+          else if (attrs.has("memo")) this.memoWanted.add(syms[0]);
           if (attrs.has("no_alloc")) this.noAllocProcs.set(syms[0], lit), (A(lit.body)._noAlloc = true);
           if (attrs.has("hot")) this.hotProcs.set(syms[0], lit);
           if (attrs.has("no_stack_buffer")) A(lit.body)._noStackBuffer = true;
@@ -310,6 +319,8 @@ export class Analyzer {
       this.withStmt(s, () => s.values.forEach((v) => this.expr(v, scope)));
       const table = this.tables.get((A(s)._syms as GlobalSym[])[0]);
       if (table) this.guard(() => this.resolveTable((A(s)._syms as GlobalSym[])[0], table));
+      const memoSym = (A(s)._syms as GlobalSym[])[0];
+      if (this.memoWanted.has(memoSym)) this.guard(() => this.resolveMemo(memoSym, unwrapProc(s.values[0])!));
       if (s.type) s.values.forEach((v) => this.convertTo(v, { t: "node", node: s.type!, scope }));
       return;
     }
@@ -1133,6 +1144,9 @@ export class Analyzer {
   readonly specialized = new Map<GlobalSym, SpecInfo>();
   /** @(table) procs: a lookup table over every value of the parameter */
   readonly tables = new Map<GlobalSym, TableInfo>();
+  /** @(memo) procs, by hand or chosen by -opt */
+  readonly memos = new Map<GlobalSym, MemoInfo>();
+  private readonly memoWanted = new Set<GlobalSym>();
   /** declared inside a top-level `when`, so maybe not compiled at all */
   readonly whenDeclared = new Set<GlobalSym>();
   /** @(no_alloc) procs: nothing they run may allocate */
@@ -1455,9 +1469,9 @@ export class Analyzer {
     const pos = posOf(sym.decl);
     const params = lit.sig.params.flatMap((p) => p.names.map((n) => ({ name: n, type: p.type })));
     const res = lit.sig.results;
-    if (params.length !== 1 || !params[0].type || params[0].name.prefix || res.length !== 1 || res[0].names.length > 1 || !res[0].type)
-      throw new CompileError("@(table) needs a proc with one parameter and one result: name :: proc(x: T) -> R { ... }", pos);
-    const type = params[0].type;
+    if (params.length < 1 || params.length > 2 || params.some((p) => !p.type || p.name.prefix) || res.length !== 1 || res[0].names.length > 1 || !res[0].type)
+      throw new CompileError("@(table) needs a proc with one or two parameters and one result: name :: proc(x: T) -> R { ... }", pos);
+    const type = params[0].type!;
     const scope: Scope = A(type)._scope ?? sym.scope;
     const t = this.normalize({ t: "node", node: type, scope });
     const name = nodeText(type);
@@ -1468,14 +1482,36 @@ export class Analyzer {
     } else if (["bool", "u8", "byte", "i8"].includes(this.typeName({ t: "node", node: type, scope }) ?? "")) domain = this.typeName({ t: "node", node: type, scope }) === "bool" ? "bool" : name === "i8" ? "i8" : "u8";
     else throw new CompileError(`@(table) needs a parameter of type bool, u8, i8 or an enum, not ${name}`, posOf(type));
     Object.assign(info, { domain, param: params[0].name.name, type, result: res[0].type });
-    if (domain !== "enum") info.values = this.tabulate(sym, domain);
-    this.hint(sym, "table", info.values ? "@(table): computed at compile time" : "@(table): filled at startup");
+    if (params.length === 2) {
+      const t2 = params[1].type!;
+      const n2 = this.typeName({ t: "node", node: t2, scope: A(t2)._scope ?? sym.scope }) ?? "";
+      if (domain === "enum" || !["bool", "u8", "byte", "i8"].includes(n2))
+        throw new CompileError("@(table) with two parameters needs both of type bool, u8 or i8", posOf(domain === "enum" ? type : t2));
+      info.second = { domain: n2 === "bool" ? "bool" : n2 === "i8" ? "i8" : "u8", param: params[1].name.name, type: t2 };
+    }
+    if (domain !== "enum") info.values = this.tabulate(sym, domain, undefined, info.second?.domain);
+    this.hint(sym, info.second ? "table 2D" : "table", info.values ? "@(table): computed at compile time" : "@(table): filled at startup");
   }
 
-  /** `sym(x)` for every x of a bool, u8 or i8 parameter, run at compile time; undefined when the body can't run there. */
-  tabulate(sym: GlobalSym, domain: "bool" | "u8" | "i8", stepLimit?: number): string[] | undefined {
+  /** @(memo) by hand: the parameters must be usable as a key, and there must be one result. */
+  private resolveMemo(sym: GlobalSym, lit: ProcLit): void {
+    const plan = memoPlan(this, sym, lit);
+    if (typeof plan === "string") throw new CompileError(`@(memo) can't apply: ${plan}`, posOf(sym.decl));
+    this.useMemo(sym, plan);
+    this.hint(sym, "memo", `@(memo): a ${plan.array ? `${plan.array}-entry array` : "map"} shared by the recursive calls`);
+  }
+
+  /** Records a memo, sending the proc's calls to itself to the memoized version. */
+  useMemo(sym: GlobalSym, plan: MemoInfo): void {
+    this.memos.set(sym, plan);
+    for (const c of plan.selfCalls) A(c)._memoSelf = sym;
+  }
+
+  /** `sym(x)` (or `sym(x, y)`) for every value of bool, u8 or i8 parameters, run at compile time; undefined when the body can't run there. */
+  tabulate(sym: GlobalSym, domain: "bool" | "u8" | "i8", stepLimit?: number, second?: "bool" | "u8" | "i8"): string[] | undefined {
     const pos = posOf(sym.decl);
-    const inputs = domain === "bool" ? ["false", "true"] : Array.from({ length: 256 }, (_, i) => (domain === "i8" ? `i8(${i - 128})` : `u8(${i})`));
+    const firsts = domainInputs(domain);
+    const inputs = second ? firsts.flatMap((x) => domainInputs(second).map((y) => `${x}, ${y}`)) : firsts;
     const outer = [this.synthetic, this.interp.stepLimit];
     this.synthetic = true;
     if (stepLimit) this.interp.stepLimit = stepLimit;
@@ -2213,7 +2249,7 @@ export class Analyzer {
     return name;
   }
 
-  private isBasic(ty: Ty): boolean {
+  isBasic(ty: Ty): boolean {
     const name = this.typeName(ty);
     return !!name && (INT_TYPES.has(name) || FLOAT_TYPES.has(name) || ["string", "bool", "rune", "cstring"].includes(name));
   }

@@ -1,0 +1,5 @@
+// error: @(memo) and @(no_memo) contradict each other
+package main
+@(memo, no_memo)
+f :: proc(n: int) -> int { return n }
+main :: proc() {}
