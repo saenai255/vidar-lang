@@ -4,10 +4,10 @@
   "main": "dist/cli.js",
   "scripts": {
     "build": "tsc -p . && node -e \"require('fs').copyFileSync('src/prelude.vidar', 'dist/prelude.vidar')\"",
-    "test": "npm run build && node --test tests/unit/ && node scripts/test.js && node scripts/test-lsp.js",
+    "test": "npm run build && node --test tests/unit/*.test.js && node scripts/test.js && node scripts/test-lsp.js",
     "vidar": "node dist/cli.js",
     "test:update": "npm run build && node scripts/test.js --update",
-    "test:unit": "npm run build && node --test tests/unit/",
+    "test:unit": "npm run build && node --test tests/unit/*.test.js",
     "build:binaries": "npm run build && node scripts/build-binaries.js",
     "bench": "node scripts/bench.js",
     "stress": "node scripts/stress.js",

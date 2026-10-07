@@ -14,7 +14,7 @@ The language is documented in [README.md](README.md) and [SYNTAX.md](SYNTAX.md).
 - **Build:** run `npm install`, then `npm run build`. The build runs `tsc` into `dist/` and copies `src/prelude.vidar` there.
 - **Every script and test runs the compiled `dist/`, not `src/`.**
   - `npm test` builds first.
-  - `node scripts/test.js`, `node scripts/test-lsp.js`, `node --test tests/unit/` and `node dist/cli.js` don't, so run `npm run build` after every change to `src/`.
+  - `node scripts/test.js`, `node scripts/test-lsp.js`, `node --test tests/unit/*.test.js` and `node dist/cli.js` don't, so run `npm run build` after every change to `src/`.
 - **`tsconfig.json` has `noUnusedLocals`:** an unused import or local fails the build.
 
 ## Where things are

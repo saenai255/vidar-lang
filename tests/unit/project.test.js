@@ -103,7 +103,7 @@ test("@(hot) warns about -opt decisions against code inside it, only with -opt",
 mix :: proc(a, b: []int, f: closure(int) -> int) -> (t: int) {
 	for i in 0..<len(a) {
 		t += a[i]
-		t += b[i] + f(i)
+		t += b[a[i]] + f(i)
 		tmp := make([]int, 2)
 		delete(tmp)
 	}
