@@ -1,0 +1,224 @@
+package main
+
+import "core:encoding/json"
+import "core:fmt"
+import "core:strings"
+
+Color :: enum { Red, Green, Blue }
+Level :: enum u8 { Low = 1, High = 200 }
+
+Point :: struct { x, y: f32 }
+
+Item :: struct {
+	id: int,
+	name: string `json:"title"`,
+	note: string `json:"note,omitempty"`,
+	tags: []string,
+	secret: string `json:"-"`,
+	count: int `json:",omitempty"`,
+	color: Color,
+	level: Level,
+	ok: bool,
+	r: rune,
+	at: Point,
+	path: [dynamic]Point,
+	grid: [2][2]i8,
+	big: u64,
+	small: i8,
+	ratio: f64,
+	half: f16,
+	single: f32,
+	inner: struct { a: int, b: string },
+	m: map[string]int,
+	vals: []f64,
+}
+
+// Each call is generated under -opt; json.unmarshal_any is encoding/json either way, so both must agree.
+check_item :: proc(name, data: string, init: Item = {}) {
+	a, b := init, init
+	ea := json.unmarshal(transmute([]byte)data, &a)
+	eb := json.unmarshal_any(transmute([]byte)data, &b)
+	report(name, fmt.tprint(a, ea), fmt.tprint(b, eb))
+}
+
+check_ints :: proc(name, data: string) {
+	a, b: []int
+	ea := json.unmarshal(transmute([]byte)data, &a)
+	eb := json.unmarshal_any(transmute([]byte)data, &b)
+	report(name, fmt.tprint(a, ea), fmt.tprint(b, eb))
+}
+
+check_three :: proc(name, data: string) {
+	a, b := [3]int{7, 8, 9}, [3]int{7, 8, 9}
+	ea := json.unmarshal(transmute([]byte)data, &a, allocator = context.temp_allocator)
+	eb := json.unmarshal_any(transmute([]byte)data, &b, allocator = context.temp_allocator)
+	report(name, fmt.tprint(a, ea), fmt.tprint(b, eb))
+}
+
+check_points :: proc(name, data: string) {
+	a, b: [dynamic]Point
+	ea := json.unmarshal_string(data, &a)
+	eb := json.unmarshal_any(transmute([]byte)data, &b)
+	report(name, fmt.tprint(a, len(a), cap(a), ea), fmt.tprint(b, len(b), cap(b), eb))
+}
+
+check_nested :: proc(name, data: string) {
+	a, b: [][]int
+	ea := json.unmarshal(transmute([]byte)data, &a)
+	eb := json.unmarshal_any(transmute([]byte)data, &b)
+	report(name, fmt.tprint(len(a), a[len(a) - 3:] if len(a) > 3 else a, ea), fmt.tprint(len(b), b[len(b) - 3:] if len(b) > 3 else b, eb))
+}
+
+check_color :: proc(name, data: string) {
+	a, b := Color.Green, Color.Green
+	ea := json.unmarshal(transmute([]byte)data, &a)
+	eb := json.unmarshal_any(transmute([]byte)data, &b)
+	report(name, fmt.tprint(a, ea), fmt.tprint(b, eb))
+}
+
+check_scalars :: proc(name, data: string) {
+	s1, s2: string
+	f1, f2: f64
+	t1, t2: bool
+	n1, n2: i32
+	e1 := json.unmarshal(transmute([]byte)data, &s1)
+	e2 := json.unmarshal_any(transmute([]byte)data, &s2)
+	e3 := json.unmarshal(transmute([]byte)data, &f1)
+	e4 := json.unmarshal_any(transmute([]byte)data, &f2)
+	e5 := json.unmarshal(transmute([]byte)data, &t1)
+	e6 := json.unmarshal_any(transmute([]byte)data, &t2)
+	e7 := json.unmarshal_string(data, &n1)
+	e8 := json.unmarshal_any(transmute([]byte)data, &n2)
+	report(name, fmt.tprintf("%q %v | %v %v | %v %v | %v %v", s1, e1, f1, e3, t1, e5, n1, e7), fmt.tprintf("%q %v | %v %v | %v %v | %v %v", s2, e2, f2, e4, t2, e6, n2, e8))
+}
+
+report :: proc(name, got, want: string) {
+	fmt.println(name, got == want ? "same" : "DIFFERENT", got)
+	if got != want do fmt.println("   want", want)
+}
+
+main :: proc() {
+	full := `{
+		"id": 42, "title": "first", "note": "a note", "tags": ["new", "q\"<&>\n\u00e9"],
+		"count": 3, "color": 2, "level": 200, "ok": true, "r": "é",
+		"at": {"x": 0.5, "y": -3}, "path": [{"x": 1, "y": 2.5}, {"y": 1e21}],
+		"grid": [[1, -2], [3, 4]], "big": 18446744073709551615, "small": -128,
+		"ratio": 0.333333333333333314829616256247390992939472198486328125, "half": 65504.0, "single": 16777217,
+		"inner": {"a": 7, "b": "in"}, "m": {"k": 1}, "vals": [1, 2.5, -0.0, 1E+2, 6.02214076e23, 5e-324]
+	}`
+	check_item("full", full)
+	check_item("whitespace", " \t\r\n{ \"id\" \n:\t1 , \"title\"  :  \"x\"\r\n}\n ")
+	check_item("empty object", `{}`)
+	check_item("kept", `{"id": 5}`, Item{id = 1, name = "kept", count = 9, ok = true})
+	check_item("null root", `null`, Item{id = 1, name = "gone"})
+	check_item("nulls", `{"id": null, "title": null, "tags": null, "color": null, "ok": null, "at": null, "grid": null, "ratio": null, "inner": null, "path": null, "r": null}`,
+		Item{id = 1, name = "x", color = .Blue, ok = true, at = {1, 2}, grid = {{1, 1}, {1, 1}}, ratio = 2, inner = {1, "y"}, r = 'q'})
+
+	// keys: by json name, by field name only without one, "-" still names the `json:"-"` field, "" the first field without a json name
+	check_item("keys", `{"name": "no", "title": "yes", "secret": "no", "-": "dash", "count": 2, "": 77, "unknown": {"a": [1, {"b": "x\\n"}], "c": null}, "u2": [[], {}], "u3": "s"}`)
+	check_item("duplicate keys", `{"id": 1, "id": 2, "tags": ["a"], "tags": ["b", "c"]}`)
+	check_item("escaped key", `{"ti\u0074le": "via escape", "\u0069d": 3}`)
+
+	// strings
+	check_item("escapes", `{"title": "a\"b\\c\/d\b\f\n\r\t\u00e9\u20AC\ud83d\ude00|\ud800\udc00|\ud800 \udc00|\ud800\u0041|\udc00|\u0000|"}`)
+	check_item("empty string", `{"title": "", "tags": ["", "\n"]}`, Item{name = "old"})
+	check_item("unicode", `{"title": "héllo wörld ✓ 😀 \ufffd �"}`)
+
+	// numbers
+	check_item("int edges", `{"id": -9223372036854775808, "big": 18446744073709551616, "small": 300, "count": 123456789012345678901234567890}`)
+	check_item("int digits", `{"id": 999999999999999999, "big": 1000000000000000000, "small": -0}`)
+	check_item("floats", `{"ratio": 1e400, "half": 1e10, "single": 3.4028236e38, "vals": [-1e400, 1.7976931348623157e308, 2.2250738585072014e-308, 0.1, 9007199254740993, 123456789012345678901]}`)
+	check_item("float into int", `{"id": 2.0, "count": 1e2, "small": -5e0}`)
+	check_item("fraction into int", `{"title": "before", "id": 2.5, "count": 3}`)
+	check_item("big float into int", `{"id": 1e300}`)
+	check_item("string into int", `{"id": "12", "ratio": "2.5", "count": "0x10"}`)
+	check_item("bad string into int", "{\"title\": \"t\",\n  \"id\": \"twelve\"}")
+
+	// enums
+	check_item("enum names", `{"color": "Blue", "level": "High"}`)
+	check_item("enum unknown name", `{"color": "Nope", "level": "low"}`, Item{color = .Green, level = .High})
+	check_item("enum numbers", `{"color": 7, "level": 300}`)
+	check_item("enum escaped name", `{"color": "B\u006cue"}`)
+	check_item("enum float", `{"color": 1.0, "level": 1.5}`)
+	check_color("root enum", `"Red"`)
+	check_color("root enum number", `0`)
+
+	// runes go to encoding/json
+	check_item("rune", `{"r": "\u00e9"}`)
+	check_item("rune too long", `{"r": "ab", "id": 1}`)
+	check_item("rune number", `{"r": 65}`)
+
+	// arrays
+	check_item("arrays", `{"grid": [[1], [2, 3]], "vals": [], "tags": []}`)
+	check_item("array too long", "{\"id\": 1,\n\t\"grid\": [[1, 2], [3, 4, 5]], \"id\": 2}")
+	check_item("array too many", `{"grid": [[1], [2], [3]]}`)
+	check_item("nested elements", `{"path": [{"x": 1}, {"y": 2, "z": [1, 2]}, null, {}]}`)
+	check_ints("root slice", ` [1, -2, 3000000000000000000000, 4]`)
+	check_ints("root empty slice", `[]`)
+	check_ints("root slice bad", `[1, "x", 3]`)
+	check_three("short array", `[1]`)
+	check_three("long array", `[1, 2, 3, 4]`)
+	check_points("dynamic", `[{"x": 1, "y": 2}, {"x": 3}]`)
+	check_points("dynamic empty", `[]`)
+
+	// the wrong kind of value: encoding/json's error, at its place in the whole input
+	check_item("bool from int", "{\n\"id\": 1,\n  \"ok\": 1}")
+	check_item("slice from string", `{"tags": "x"}`)
+	check_item("struct from array", `{"at": [1, 2]}`)
+	check_item("array from object", `{"grid": {"a": 1}}`)
+	check_item("string from number", `{"title": 5}`)
+	check_item("string from bool", `{"title": true}`)
+	check_item("root from array", `[1]`)
+	check_item("map field", `{"m": {"a": 1}, "id": 3}`)
+	check_item("map field bad", `{"m": [1]}`)
+	check_scalars("scalar string", `"s\u0074r"`)
+	check_scalars("scalar number", `-12.5e1`)
+	check_scalars("scalar int", `17`)
+	check_scalars("scalar true", `true`)
+	check_scalars("scalar null", `null`)
+
+	// not strict JSON: encoding/json takes it, whatever it makes of it
+	check_item("trailing comma", `{"id": 1,}`)
+	check_item("ident key", `{id: 1}`)
+	check_item("comment", "// c\n{\"id\": 1 /* x */}")
+	check_item("leading zero", `{"id": 01}`)
+	check_item("bad exponent", `{"id": 1e}`)
+	check_item("trailing text", `{"id": 1} x`)
+	check_item("hex", `{"id": 0x10}`)
+	check_item("plus", `{"id": +1}`)
+	check_item("infinity", `{"ratio": Infinity, "half": -Infinity}`)
+	check_item("single quotes", `{'title': 'q'}`)
+	check_item("escaped quote", `{"title": "\'"}`)
+	check_item("vertical tab", "{\"id\":\v1}")
+	check_item("bom", "\uFEFF{\"id\": 1}")
+	check_item("empty", ``)
+	check_item("unclosed", `{"id": 1`)
+	check_item("unclosed array", `{"id": [}`)
+	check_item("missing colon", `{"id" 1}`)
+	check_item("control character", "{\"title\": \"a\tb\"}")
+	check_item("bad utf8", "{\"title\": \"a\xffb\"}")
+	check_item("surrogate in utf8", "{\"title\": \"\xed\xa0\x80\"}")
+	check_item("short escape", `{"title": "\u12"}`)
+	check_item("bad escape", `{"title": "\q"}`)
+	check_item("true prefix", `{"ok": tru}`)
+	check_item("number then letters", `{"id": 1abc}`)
+	check_item("lone minus", `{"id": -}`)
+	check_item("dot", `{"ratio": 1.}`)
+	check_item("nul", "{\"id\": 1}\x00")
+
+	// more arrays than the check keeps lengths for: the rest are counted again
+	many := strings.builder_make()
+	strings.write_string(&many, "[")
+	for i in 0..<300 do fmt.sbprintf(&many, "%s[%d, %d]", i > 0 ? ",\n" : "", i, -i)
+	strings.write_string(&many, "]")
+	check_nested("many arrays", strings.to_string(many))
+	strings.builder_reset(&many)
+	strings.write_string(&many, "[")
+	for i in 0..<300 do fmt.sbprintf(&many, "%s[%d, %s]", i > 0 ? ",\n" : "", i, i == 290 ? "true" : "1")
+	strings.write_string(&many, "]")
+	check_nested("many arrays, one bad", strings.to_string(many))
+
+	// deeper than the reader's check goes: encoding/json does it
+	deep := strings.concatenate({`{"id": 1, "x": `, strings.repeat("[", 300), strings.repeat("]", 300), `}`})
+	check_item("deep", deep)
+}

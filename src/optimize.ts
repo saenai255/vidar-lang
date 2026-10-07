@@ -1,6 +1,7 @@
 import { Block, Expr, File, Node, Stmt, children } from "./ast";
 import { A, Analyzer, INT_TYPES } from "./analyzer";
 import { fmtPlan } from "./fmtspec";
+import { unmarshalPlan } from "./jsonread";
 import { sizeOf, soaLocals } from "./soa";
 import { stackBuffers } from "./stackbuf";
 import { stringSwitches } from "./strswitch";
@@ -28,7 +29,11 @@ export function optimizeProc(body: Block, an: Analyzer, closureCopies = false): 
   if (!an.hints) return;
   walk(body, (n) => {
     if (n.k !== "Call") return;
-    if (fmtPlan(an, n)) an.hint(n, "fmt inlined", "a compiled format: writes each piece directly, no format parsing or `any` boxing at run time");
+    const json = unmarshalPlan(an, n);
+    if (json) {
+      if ("why" in json) an.hint(n, "no json unmarshal", json.why);
+      else an.hint(n, "json unmarshal", `a generated reader for ${json.type}: strict JSON read directly, anything else through encoding/json`);
+    } else if (fmtPlan(an, n)) an.hint(n, "fmt inlined", "a compiled format: writes each piece directly, no format parsing or `any` boxing at run time");
     // copies made for closure literals call those directly
     else if (A(n)._closure && !A(n)._closureSpec && !closureCopies) an.hint(n, "no direct call", "a call through a closure value: an indirect call that can't be inlined");
   });

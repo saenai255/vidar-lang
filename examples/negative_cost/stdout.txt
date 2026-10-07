@@ -11,6 +11,7 @@ structs, reordered         10666636
 fib, memoized              6765
 fmt %v of a struct         179890
 json.marshal of a struct   203890
+json.unmarshal of an array 106340
 scratch allocations        108319
 append in a loop           1030000
 blur, radius at run time   28708

@@ -10,6 +10,7 @@ import { StrHash, strHashProc } from "./strswitch";
 import { MemoInfo, memoHelpers } from "./memo";
 import { Printers, registersFormatters } from "./printers";
 import { JsonWriters, registersMarshalers } from "./jsonopt";
+import { JsonReaders } from "./jsonread";
 import type { ValueCall, ValueIface } from "./valueiface";
 import type { Reorder } from "./reorder";
 import type { CaptureSym, GlobalSym, LocalSym, PackageInfo, PkgSym, Sym, Ty, Unit } from "./scope";
@@ -349,6 +350,8 @@ export class Emitter {
   private valueHelpers = new Set<string>();
   /** -opt: json.marshal of known types; null when the program registers its own marshalers */
   private json: JsonWriters | null | undefined = undefined;
+  /** -opt: json.unmarshal into known types */
+  private jsonRead: JsonReaders | undefined = undefined;
   /** -opt: string switches through a perfect hash, and their helper procs */
   private strSwitches = new Map<Node, string>();
   private callHelpers = new Map<string, string>();
@@ -405,6 +408,7 @@ export class Emitter {
     this.printers = undefined;
     this.valueHelpers.clear();
     this.json = undefined;
+    this.jsonRead = undefined;
     this.callHelpers.clear();
     this.extraImports.clear();
     this.fileUsesRuntime = false;
@@ -417,6 +421,8 @@ export class Emitter {
     if (printers?.procs.size) this.helpers.push(`// fmt's %v for the types printed here, written out\n` + [...printers.procs.values()].join("\n\n"));
     const json = this.json as JsonWriters | null | undefined;
     if (json?.procs.size) this.helpers.push([...json.procs.values()].join("\n\n"));
+    const jsonRead = this.jsonRead as JsonReaders | undefined;
+    if (jsonRead?.procs.size) this.helpers.push([...jsonRead.procs.values()].join("\n\n"));
     const runtime = (this.fileUsesRuntime ? `; import ${RUNTIME_ALIAS} "${relImport(this.unit.outDir, "vidar_runtime")}"` : "") +
       [...this.extraImports].map(([alias, path]) => `; import ${alias} "${path}"`).join("");
     out = out.replace(RUNTIME_MARK, runtime);
@@ -634,6 +640,9 @@ export class Emitter {
             this.fileUsesRuntime = this.usesRuntime = true;
             return marshal + this.skipLines(n);
           }
+          this.jsonRead ??= new JsonReaders(this.an, (sym) => this.typeRef(sym), (path, name) => this.coreRef(path, name));
+          const unmarshal = this.jsonRead.unmarshal(n, (e) => this.emit(e));
+          if (unmarshal) return unmarshal + this.skipLines(n);
         }
         const memoSelf: GlobalSym | undefined = A(n)._memoSelf;
         if (memoSelf && this.an.memos.has(memoSelf)) return `__${memoSelf.odinName}_memo(${[...n.args.map((a) => this.emit(a)), "__memo"].join(", ")})` + this.skipLines(n);
@@ -837,6 +846,16 @@ export class Emitter {
     this.prologue.delete(b);
     const next = b.toks[b.start + 1];
     return this.tok(b.toks[b.start]) + " " + lines.join("; ") + ";" + (this.ws(next.pre) || " ") + this.generic(b, b.start + 1);
+  }
+
+  /** The name core package `path` has in this file; imported as `__<name>` when this file lacks it. */
+  private coreRef(path: string, name: string): string {
+    for (const s of this.pkg.fileScopes.get(this.file)?.syms.values() ?? []) if (s.kind === "pkg" && !s.target && s.path === path) return s.name;
+    for (const [alias, imported] of this.extraImports) if (imported === path) return alias;
+    let alias = `__${name}`;
+    for (let i = 2; this.extraImports.has(alias); i++) alias = `__${name}${i}`;
+    this.extraImports.set(alias, path);
+    return alias;
   }
 
   /** The name another file's import `p` has in this file; imported under a new name when this file lacks it. */

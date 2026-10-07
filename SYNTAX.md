@@ -310,7 +310,7 @@ for s in shapes do total += area(s)        // a direct call per type
 - adjacent `make`/`new` freed only by `defer delete`/`defer free` in the same block become one allocation
 - a struct whose layout nothing can see gets its fields sorted by alignment, saving padding
 - a local `[dynamic]I` filled only with `new_clone(value)` and used only to call I's methods on its elements holds the values inline, as a union
-- `%v` / `%#v` of a plain struct, enum, array or slice is written by generated code, with fmt's exact output; so is `json.marshal(x)`, with encoding/json's
+- `%v` / `%#v` of a plain struct, enum, array or slice is written by generated code, with fmt's exact output; so is `json.marshal(x)`, with encoding/json's, and `json.unmarshal(data, &x)` reads strict JSON directly (anything else, and any value it doesn't read itself, goes to encoding/json)
 - a `switch` on a string with 8 or more literal cases goes through a perfect hash and one compare (`@(no_perfect_hash)` opts out)
 - `x := make([]T, N)` with a constant `N` and a `defer delete(x)` in the same block goes on the stack when `x` doesn't escape (4 KB in a proc a goroutine can reach, 64 KB elsewhere; `@(no_stack_buffer)` opts out)
 - pure integer procs over two `bool`/`u8`/`i8` parameters become 2D tables (4096 results at most); pure integer procs that call themselves more than once per call get `@(memo)`
