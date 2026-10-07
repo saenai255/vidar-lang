@@ -1,0 +1,4 @@
+{"x":1,"name":"a"}
+P{x = 1, name = "a"}
+{"x":2,"name":"b"}
+P{x = 2, name = "b"}

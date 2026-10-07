@@ -1,0 +1,11 @@
+package main
+
+import "core:fmt"
+import "core:encoding/json"
+
+// the same generated json writer and %v printer as a.vidar: each file gets its own copy
+other :: proc() {
+	b, _ := json.marshal(P{2, "b"})
+	fmt.println(string(b))
+	fmt.printfln("%v", P{2, "b"})
+}

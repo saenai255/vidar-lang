@@ -177,6 +177,7 @@ __fmt_10 :: proc(b: ^__vidar.Builder, a0: $T0) -> string {
 }
 
 // fmt's %v for the types printed here, written out
+@(private="file")
 __print_main_Outer :: proc(w: __vidar.Writer, x: Outer) -> (n: int) {
 	n += __vidar.w_str(w, "Outer{")
 	n += __vidar.w_str(w, "name = ")
@@ -236,6 +237,7 @@ __print_main_Outer :: proc(w: __vidar.Writer, x: Outer) -> (n: int) {
 	return
 }
 
+@(private="file")
 __print_main_Color_q :: proc(w: __vidar.Writer, x: Color) -> (n: int) {
 	switch x {
 	case .Red: n += __vidar.w_str(w, "\"Red\"")
@@ -246,6 +248,7 @@ __print_main_Color_q :: proc(w: __vidar.Writer, x: Color) -> (n: int) {
 	return
 }
 
+@(private="file")
 __print_main_Inner :: proc(w: __vidar.Writer, x: Inner) -> (n: int) {
 	n += __vidar.w_str(w, "Inner{")
 	n += __vidar.w_str(w, "a = ")
@@ -257,6 +260,7 @@ __print_main_Inner :: proc(w: __vidar.Writer, x: Inner) -> (n: int) {
 	return
 }
 
+@(private="file")
 __print_arr3_int :: proc(w: __vidar.Writer, x: [3]int) -> (n: int) {
 	n += __vidar.w_str(w, "[")
 	for e, i in x {
@@ -267,6 +271,7 @@ __print_arr3_int :: proc(w: __vidar.Writer, x: [3]int) -> (n: int) {
 	return
 }
 
+@(private="file")
 __print_sl_string :: proc(w: __vidar.Writer, x: []string) -> (n: int) {
 	if raw_data(x) == nil && len(x) > 0 {
 		__vidar.w_str(w, "nil")
@@ -281,6 +286,7 @@ __print_sl_string :: proc(w: __vidar.Writer, x: []string) -> (n: int) {
 	return
 }
 
+@(private="file")
 __print_dyn_main_Inner :: proc(w: __vidar.Writer, x: [dynamic]Inner) -> (n: int) {
 	if raw_data(x) == nil && len(x) > 0 {
 		__vidar.w_str(w, "nil")
@@ -295,12 +301,14 @@ __print_dyn_main_Inner :: proc(w: __vidar.Writer, x: [dynamic]Inner) -> (n: int)
 	return
 }
 
+@(private="file")
 __print_main_Empty :: proc(w: __vidar.Writer, x: Empty) -> (n: int) {
 	n += __vidar.w_str(w, "Empty{")
 	n += __vidar.w_str(w, "}")
 	return
 }
 
+@(private="file")
 __print_arr2_main_Color :: proc(w: __vidar.Writer, x: [2]Color) -> (n: int) {
 	n += __vidar.w_str(w, "[")
 	for e, i in x {
@@ -311,6 +319,7 @@ __print_arr2_main_Color :: proc(w: __vidar.Writer, x: [2]Color) -> (n: int) {
 	return
 }
 
+@(private="file")
 __print_arr0_int :: proc(w: __vidar.Writer, x: [0]int) -> (n: int) {
 	n += __vidar.w_str(w, "[")
 	for e, i in x {
@@ -321,6 +330,7 @@ __print_arr0_int :: proc(w: __vidar.Writer, x: [0]int) -> (n: int) {
 	return
 }
 
+@(private="file")
 __printh_main_Outer :: proc(w: __vidar.Writer, x: Outer, indent: int) -> (n: int) {
 	n += __vidar.w_str(w, "Outer{")
 	n += __vidar.w_str(w, "\n")
@@ -404,6 +414,7 @@ __printh_main_Outer :: proc(w: __vidar.Writer, x: Outer, indent: int) -> (n: int
 	return
 }
 
+@(private="file")
 __printh_main_Inner :: proc(w: __vidar.Writer, x: Inner, indent: int) -> (n: int) {
 	n += __vidar.w_str(w, "Inner{")
 	n += __vidar.w_str(w, "\n")
@@ -420,6 +431,7 @@ __printh_main_Inner :: proc(w: __vidar.Writer, x: Inner, indent: int) -> (n: int
 	return
 }
 
+@(private="file")
 __printh_arr3_int :: proc(w: __vidar.Writer, x: [3]int, indent: int) -> (n: int) {
 	n += __vidar.w_str(w, "[")
 	if len(x) > 0 {
@@ -435,6 +447,7 @@ __printh_arr3_int :: proc(w: __vidar.Writer, x: [3]int, indent: int) -> (n: int)
 	return
 }
 
+@(private="file")
 __printh_sl_string :: proc(w: __vidar.Writer, x: []string, indent: int) -> (n: int) {
 	if raw_data(x) == nil && len(x) > 0 {
 		__vidar.w_str(w, "nil")
@@ -454,6 +467,7 @@ __printh_sl_string :: proc(w: __vidar.Writer, x: []string, indent: int) -> (n: i
 	return
 }
 
+@(private="file")
 __printh_dyn_main_Inner :: proc(w: __vidar.Writer, x: [dynamic]Inner, indent: int) -> (n: int) {
 	if raw_data(x) == nil && len(x) > 0 {
 		__vidar.w_str(w, "nil")
@@ -473,12 +487,14 @@ __printh_dyn_main_Inner :: proc(w: __vidar.Writer, x: [dynamic]Inner, indent: in
 	return
 }
 
+@(private="file")
 __printh_main_Empty :: proc(w: __vidar.Writer, x: Empty, indent: int) -> (n: int) {
 	n += __vidar.w_str(w, "Empty{")
 	n += __vidar.w_str(w, "}")
 	return
 }
 
+@(private="file")
 __printh_arr2_main_Color :: proc(w: __vidar.Writer, x: [2]Color, indent: int) -> (n: int) {
 	n += __vidar.w_str(w, "[")
 	if len(x) > 0 {
@@ -494,6 +510,7 @@ __printh_arr2_main_Color :: proc(w: __vidar.Writer, x: [2]Color, indent: int) ->
 	return
 }
 
+@(private="file")
 __printh_arr0_int :: proc(w: __vidar.Writer, x: [0]int, indent: int) -> (n: int) {
 	n += __vidar.w_str(w, "[")
 	if len(x) > 0 {
@@ -509,6 +526,7 @@ __printh_arr0_int :: proc(w: __vidar.Writer, x: [0]int, indent: int) -> (n: int)
 	return
 }
 
+@(private="file")
 __print_main_Node :: proc(w: __vidar.Writer, x: Node) -> (n: int) {
 	n += __vidar.w_str(w, "Node{")
 	n += __vidar.w_str(w, "name = ")
@@ -520,6 +538,7 @@ __print_main_Node :: proc(w: __vidar.Writer, x: Node) -> (n: int) {
 	return
 }
 
+@(private="file")
 __print_sl_main_Node :: proc(w: __vidar.Writer, x: []Node) -> (n: int) {
 	if raw_data(x) == nil && len(x) > 0 {
 		__vidar.w_str(w, "nil")
@@ -534,6 +553,7 @@ __print_sl_main_Node :: proc(w: __vidar.Writer, x: []Node) -> (n: int) {
 	return
 }
 
+@(private="file")
 __printh_main_Node :: proc(w: __vidar.Writer, x: Node, indent: int) -> (n: int) {
 	n += __vidar.w_str(w, "Node{")
 	n += __vidar.w_str(w, "\n")
@@ -550,6 +570,7 @@ __printh_main_Node :: proc(w: __vidar.Writer, x: Node, indent: int) -> (n: int) 
 	return
 }
 
+@(private="file")
 __printh_sl_main_Node :: proc(w: __vidar.Writer, x: []Node, indent: int) -> (n: int) {
 	if raw_data(x) == nil && len(x) > 0 {
 		__vidar.w_str(w, "nil")
@@ -569,6 +590,7 @@ __printh_sl_main_Node :: proc(w: __vidar.Writer, x: []Node, indent: int) -> (n: 
 	return
 }
 
+@(private="file")
 __print_main_Color :: proc(w: __vidar.Writer, x: Color) -> (n: int) {
 	switch x {
 	case .Red: n += __vidar.w_str(w, "Red")
@@ -579,6 +601,7 @@ __print_main_Color :: proc(w: __vidar.Writer, x: Color) -> (n: int) {
 	return
 }
 
+@(private="file")
 __print_arr2_main_Inner :: proc(w: __vidar.Writer, x: [2]Inner) -> (n: int) {
 	n += __vidar.w_str(w, "[")
 	for e, i in x {
@@ -589,6 +612,7 @@ __print_arr2_main_Inner :: proc(w: __vidar.Writer, x: [2]Inner) -> (n: int) {
 	return
 }
 
+@(private="file")
 __printh_arr0_main_Inner :: proc(w: __vidar.Writer, x: [0]Inner, indent: int) -> (n: int) {
 	n += __vidar.w_str(w, "[")
 	if len(x) > 0 {

@@ -93,6 +93,7 @@ __fmt_2 :: proc(a0: $T0) -> (n: int) {
 }
 
 // fmt's %v for the types printed here, written out
+@(private="file")
 __print_main_Shown :: proc(w: __vidar.Writer, x: Shown) -> (n: int) {
 	n += __vidar.w_str(w, "Shown{")
 	n += __vidar.w_str(w, "a = ")

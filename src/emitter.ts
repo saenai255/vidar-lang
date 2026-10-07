@@ -418,9 +418,9 @@ export class Emitter {
     let out = f.toks[0].pre + this.generic(root, 0, f.toks.length, f.stmts);
     while (this.cloneJobs.length) this.helpers.push(this.cloneJobs.shift()!());
     const printers = this.printers as Printers | null | undefined;
-    if (printers?.procs.size) this.helpers.push(`// fmt's %v for the types printed here, written out\n` + [...printers.procs.values()].join("\n\n"));
+    if (printers?.procs.size) this.helpers.push(`// fmt's %v for the types printed here, written out\n` + [...printers.procs.values()].map((p) => `@(private="file")\n${p}`).join("\n\n"));
     const json = this.json as JsonWriters | null | undefined;
-    if (json?.procs.size) this.helpers.push([...json.procs.values()].join("\n\n"));
+    if (json?.procs.size) this.helpers.push([...json.procs.values()].map((p) => `@(private="file")\n${p}`).join("\n\n"));
     const jsonRead = this.jsonRead as JsonReaders | undefined;
     if (jsonRead?.procs.size) this.helpers.push([...jsonRead.procs.values()].join("\n\n"));
     const runtime = (this.fileUsesRuntime ? `; import ${RUNTIME_ALIAS} "${relImport(this.unit.outDir, "vidar_runtime")}"` : "") +

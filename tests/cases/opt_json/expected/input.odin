@@ -84,6 +84,7 @@ __fmt_0 :: proc(a0: $T0, a1: $T1) -> (n: int) {
 	return
 }
 
+@(private="file")
 // json.marshal of Item, written out: encoding/json's bytes
 __json_marshal_main_Item :: proc(x: $T, allocator := context.allocator) -> (data: []byte, err: json.Marshal_Error) {
 	when T == Item {
@@ -95,6 +96,7 @@ __json_marshal_main_Item :: proc(x: $T, allocator := context.allocator) -> (data
 	}
 }
 
+@(private="file")
 __jsonw_main_Item :: proc(w: __vidar.Writer, x: Item) {
 	__vidar.w_str(w, "{")
 	first := true
@@ -202,6 +204,7 @@ __jsonw_main_Item :: proc(w: __vidar.Writer, x: Item) {
 	__vidar.w_str(w, "}")
 }
 
+@(private="file")
 __jsonw_sl_string :: proc(w: __vidar.Writer, x: []string) {
 	__vidar.w_str(w, "[")
 	for e, i in x {
@@ -211,6 +214,7 @@ __jsonw_sl_string :: proc(w: __vidar.Writer, x: []string) {
 	__vidar.w_str(w, "]")
 }
 
+@(private="file")
 __jsonw_main_Point :: proc(w: __vidar.Writer, x: Point) {
 	__vidar.w_str(w, "{")
 	__vidar.w_str(w, "\"x\":")
@@ -220,6 +224,7 @@ __jsonw_main_Point :: proc(w: __vidar.Writer, x: Point) {
 	__vidar.w_str(w, "}")
 }
 
+@(private="file")
 __jsonw_dyn_main_Point :: proc(w: __vidar.Writer, x: [dynamic]Point) {
 	__vidar.w_str(w, "[")
 	for e, i in x {
@@ -229,6 +234,7 @@ __jsonw_dyn_main_Point :: proc(w: __vidar.Writer, x: [dynamic]Point) {
 	__vidar.w_str(w, "]")
 }
 
+@(private="file")
 __jsonw_arr2_arr2_i8 :: proc(w: __vidar.Writer, x: [2][2]i8) {
 	__vidar.w_str(w, "[")
 	for e, i in x {
@@ -238,6 +244,7 @@ __jsonw_arr2_arr2_i8 :: proc(w: __vidar.Writer, x: [2][2]i8) {
 	__vidar.w_str(w, "]")
 }
 
+@(private="file")
 __jsonw_arr2_i8 :: proc(w: __vidar.Writer, x: [2]i8) {
 	__vidar.w_str(w, "[")
 	for e, i in x {
@@ -247,6 +254,7 @@ __jsonw_arr2_i8 :: proc(w: __vidar.Writer, x: [2]i8) {
 	__vidar.w_str(w, "]")
 }
 
+@(private="file")
 // json.marshal of [2]Item, written out: encoding/json's bytes
 __json_marshal_arr2_main_Item :: proc(x: $T, allocator := context.allocator) -> (data: []byte, err: json.Marshal_Error) {
 	when T == [2]Item {
@@ -258,6 +266,7 @@ __json_marshal_arr2_main_Item :: proc(x: $T, allocator := context.allocator) -> 
 	}
 }
 
+@(private="file")
 __jsonw_arr2_main_Item :: proc(w: __vidar.Writer, x: [2]Item) {
 	__vidar.w_str(w, "[")
 	for e, i in x {

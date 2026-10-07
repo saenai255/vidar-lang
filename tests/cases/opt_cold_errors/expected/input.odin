@@ -265,6 +265,7 @@ __fmt_9 :: proc(a0: $T0, a1: $T1, a2: $T2, a3: $T3, a4: $T4, a5: $T5, a6: $T6, a
 }
 
 // fmt's %v for the types printed here, written out
+@(private="file")
 __print_main_Error :: proc(w: __vidar.Writer, x: Error) -> (n: int) {
 	switch x {
 	case .None: n += __vidar.w_str(w, "None")

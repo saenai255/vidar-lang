@@ -579,6 +579,7 @@ repeat__closure14 :: proc(n: int) -> int {
 }
 
 // fmt's %v for the types printed here, written out
+@(private="file")
 __print_dyn_int :: proc(w: __vidar.Writer, x: [dynamic]int) -> (n: int) {
 	if raw_data(x) == nil && len(x) > 0 {
 		__vidar.w_str(w, "nil")

@@ -229,6 +229,7 @@ __fmt_6 :: proc(a0: $T0, a1: $T1, a2: $T2, a3: $T3) -> (n: int) {
 }
 
 // fmt's %v for the types printed here, written out
+@(private="file")
 __print_main_Token :: proc(w: __vidar.Writer, x: Token) -> (n: int) {
 	switch x {
 	case .Ident: n += __vidar.w_str(w, "Ident")

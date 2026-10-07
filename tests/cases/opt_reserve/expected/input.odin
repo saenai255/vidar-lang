@@ -203,6 +203,7 @@ __fmt_4 :: proc(a0: $T0, a1: $T1, a2: $T2) -> (n: int) {
 }
 
 // fmt's %v for the types printed here, written out
+@(private="file")
 __print_dyn_int :: proc(w: __vidar.Writer, x: [dynamic]int) -> (n: int) {
 	if raw_data(x) == nil && len(x) > 0 {
 		__vidar.w_str(w, "nil")
@@ -217,6 +218,7 @@ __print_dyn_int :: proc(w: __vidar.Writer, x: [dynamic]int) -> (n: int) {
 	return
 }
 
+@(private="file")
 __print_dyn_i32 :: proc(w: __vidar.Writer, x: [dynamic]i32) -> (n: int) {
 	if raw_data(x) == nil && len(x) > 0 {
 		__vidar.w_str(w, "nil")

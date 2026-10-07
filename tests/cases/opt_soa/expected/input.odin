@@ -347,6 +347,7 @@ __fmt_14 :: proc(a0: $T0) -> (n: int) {
 }
 
 // fmt's %v for the types printed here, written out
+@(private="file")
 __print_main_Particle :: proc(w: __vidar.Writer, x: Particle) -> (n: int) {
 	n += __vidar.w_str(w, "Particle{")
 	n += __vidar.w_str(w, "x = ")
@@ -370,6 +371,7 @@ __print_main_Particle :: proc(w: __vidar.Writer, x: Particle) -> (n: int) {
 	return
 }
 
+@(private="file")
 __print_main_Pair :: proc(w: __vidar.Writer, x: Pair) -> (n: int) {
 	n += __vidar.w_str(w, "Pair{")
 	n += __vidar.w_str(w, "a = ")

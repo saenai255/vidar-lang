@@ -161,6 +161,7 @@ __fmt_3 :: proc(a0: $T0) -> (n: int) {
 }
 
 // fmt's %v for the types printed here, written out
+@(private="file")
 __print_sl_int :: proc(w: __vidar.Writer, x: []int) -> (n: int) {
 	if raw_data(x) == nil && len(x) > 0 {
 		__vidar.w_str(w, "nil")

@@ -447,6 +447,7 @@ __fmt_31 :: proc(a0: $T0) -> (n: int) {
 }
 
 // fmt's %v for the types printed here, written out
+@(private="file")
 __print_main_Point :: proc(w: __vidar.Writer, x: Point) -> (n: int) {
 	n += __vidar.w_str(w, "Point{")
 	n += __vidar.w_str(w, "x = ")

@@ -1,0 +1,13 @@
+package main
+
+import "core:fmt"
+import "core:encoding/json"
+
+P :: struct { x: int, name: string }
+
+main :: proc() {
+	b, _ := json.marshal(P{1, "a"})
+	fmt.println(string(b))
+	fmt.printfln("%v", P{1, "a"})
+	other()
+}
