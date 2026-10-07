@@ -1462,7 +1462,7 @@ export class Analyzer {
     if (!count) throw new CompileError("'or_return' needs a procedure that returns an error (or a bool)", posOf(e));
     if (s.k === "ValueDecl" && (s.type || s.isConst)) throw new CompileError("'or_return <value>' needs a plain 'x := f()' declaration (no type annotation)", posOf(e));
     A(e)._hosted = true;
-    A(s)._orReturn = { postfix: e, results: count, errVar: `__err${++this.errCounter}` };
+    A(s)._orReturn = { postfix: e, results: count, errVar: `__err${++this.errCounter}`, proc: top.proc };
     if (s.k === "ExprStmt") A(s)._discard = this.leadingResults(e.x, scope);
   }
 

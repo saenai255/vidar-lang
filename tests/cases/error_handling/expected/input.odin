@@ -40,7 +40,7 @@ fill :: proc(key: string) -> (__r0: Buffer, __err: Error) {
 		fmt.println("  errdefer: freeing buffer for", key)
 		delete(b.data)
 	} }
-	p, __err4 := port(key); if __vidar.failed(__err4) do return {}, .Not_Found
+	p, __err4 := port(key); if __vidar.failed(__err4) { __err = .Not_Found; return }
 	append(&b.data, p)
 	return b, .None
 }
@@ -48,7 +48,7 @@ fill :: proc(key: string) -> (__r0: Buffer, __err: Error) {
 // errdefer with named results
 fill_named :: proc(key: string) -> (b: Buffer, err: Error) {
 	defer if __vidar.failed(err) { fmt.println("  errdefer (named):", err) }
-	__err5_v0, __err5 := port(key); if __vidar.failed(__err5) do return {}, .Bad_Number; _ = __err5_v0
+	__err5_v0, __err5 := port(key); if __vidar.failed(__err5) { err = .Bad_Number; return }; _ = __err5_v0
 	return
 }
 
