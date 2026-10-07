@@ -11,7 +11,9 @@ The language is documented in [README.md](README.md) and [SYNTAX.md](SYNTAX.md).
   - `odin` on PATH, tested with `dev-2026-07-nightly` (installed through nix).
   - `nasm` on PATH on linux/amd64: `vidar:sched` (every program with goroutines) has a `.asm` file that Odin assembles with it.
   - `ols`, optionally. Without it, the LSP suite skips its forwarding checks.
-- **Platform:** only darwin/arm64 is tested. `vidar:sched` has stack-switching assembly for darwin/arm64, linux/arm64 and linux/amd64.
+- **Platform:** only darwin/arm64 is tested. `vidar:sched` has stack-switching assembly for darwin/arm64, linux/arm64, linux/amd64 and windows/amd64.
+  - windows/amd64 can't be run here. Odin can't link for Windows from another OS, so check it with `odin check <out> -target:windows_amd64` and `odin build <out> -target:windows_amd64 -build-mode:obj`, and assemble `vidar_sched/switch_windows_amd64.asm` with `nasm -f win64`.
+  - Windows paths (drive letters, `\`) go through `src/paths.ts`; test them with `path.win32` in `tests/unit/paths.test.js`.
 - **Build:** run `npm install`, then `npm run build`. The build runs `tsc` into `dist/` and copies `src/prelude.vidar` there.
 - **Every script and test runs the compiled `dist/`, not `src/`.**
   - `npm test` builds first.
