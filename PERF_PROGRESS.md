@@ -22,7 +22,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 9 | 5 | Intermittent Odin compiler hang | bug | blocked |
 | 10 | 6 | Value interfaces / closed unions | perf | merged (as an -opt rewrite) |
 | 11 | 7 | Generated per-type printers and JSON code | perf | merged (no unmarshal) |
-| 12 | 8 | Multithreaded (M:N) scheduler | perf | todo |
+| 12 | 8 | Multithreaded (M:N) scheduler | perf | blocked (on 2) |
 | 13 | 9 | Constant-size `make` on the stack | perf | merged |
 | 14 | 10 | Wider bounds-check elimination | perf | merged |
 | 15 | 11 | String `switch` through a perfect hash | perf | merged |
@@ -181,6 +181,7 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **8, multithreaded scheduler**: not started. The plan has it start after 2 is merged, since both change `src/sched.ts`, and 2 is blocked on reproducing the busy loop on macOS. Building thread-safe channels, a shared poller and work stealing on a single-threaded scheduler with an open hang would make that hang harder to find.
 - **15, struct field reordering** merged; hot/cold splitting is not done.
   - `src/reorder.ts`, run once per program from `autoOptimize`. Candidates: plain structs declared in the program (not in `vidar:sched`), at least two field groups, every field type's size and alignment known exactly (Odin's rules: basic types, pointers, slices 16, dynamic arrays 40, maps 32, fixed arrays, enums by base type, nested plain structs; closures are out, since `VIDAR_CLOSURE_ENV` sets their size). Field groups are sorted by alignment, largest first, stably; only when that saves bytes.
   - Refused, with the reason as a `not reordered` hint, when anything could see the layout: `size_of`/`align_of`/`offset_of`/`type_info_of`/`typeid_of`/`type_of`/`transmute` on it, a cast or conversion of something holding it, a map key holding it, a value holding it converted to `any` (a declaration or a vidar proc parameter of type `any`), a value holding it passed to anything but vidar procs, interface methods and closures (that is: core, foreign and proc values, and so fmt and encoding/json), a mention in a foreign block, or an exported proc taking it. Values whose type the analyzer can't tell are judged by the variables in them.
