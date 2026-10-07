@@ -18,6 +18,7 @@ import { writeOutput } from "../cli";
 import * as F from "./features";
 import { OdinBridge } from "./odin";
 import * as N from "./navigation";
+import * as Sem from "./semantic";
 
 // editors usually pass --stdio; default to it so `vidar-lsp` alone works too
 if (!process.argv.some((a) => /^--(stdio|node-ipc|socket|pipe)/.test(a))) process.argv.push("--stdio");
@@ -41,6 +42,7 @@ const timers = new Map<string, NodeJS.Timeout>();
 let settings = { odinCheckOnSave: true, odinPath: "odin", ols: true, olsPath: "ols", optHints: "on" as string | boolean };
 let ols: OdinBridge | undefined;
 let hintRefresh = false;
+let semanticRefresh = false;
 
 const toPath = (uri: string) => fileURLToPath(uri);
 const toUri = (path: string) => pathToFileURL(path === PRELUDE_PATH ? preludeSourcePath() : path).toString();
@@ -86,6 +88,7 @@ function analyzePackage(dir: string): PackageState {
   if (ols) syncOdin(dir, a);
   publish(dir, state);
   if (hintRefresh && settings.optHints !== "off" && settings.optHints !== false) connection.languages.inlayHint.refresh().catch(() => {});
+  if (semanticRefresh) connection.languages.semanticTokens.refresh();
   return state;
 }
 
@@ -180,6 +183,7 @@ connection.onInitialize((params): InitializeResult => {
   const opts = params.initializationOptions ?? {};
   settings = { ...settings, ...opts };
   hintRefresh = !!params.capabilities.workspace?.inlayHint?.refreshSupport;
+  semanticRefresh = !!params.capabilities.workspace?.semanticTokens?.refreshSupport;
   if (settings.ols) ols = new OdinBridge(settings.olsPath, (m) => connection.console.warn(m));
   return {
     capabilities: {
@@ -195,6 +199,7 @@ connection.onInitialize((params): InitializeResult => {
       workspaceSymbolProvider: true,
       implementationProvider: true,
       callHierarchyProvider: true,
+      semanticTokensProvider: { legend: Sem.LEGEND, full: true, range: true },
     },
     serverInfo: { name: "vidar-lsp", version: "0.1.0" },
   };
@@ -397,6 +402,17 @@ connection.languages.callHierarchy.onIncomingCalls(({ item }) =>
 connection.languages.callHierarchy.onOutgoingCalls(({ item }) =>
   N.outgoingCalls(analyses(callDir(item.uri)), callKey(item)).map((c) => ({ to: callItem(c.item), fromRanges: c.ranges })),
 );
+
+/** Semantic tokens: interfaces, closures, captures and macros, from the analyzer's symbols. */
+connection.languages.semanticTokens.on(({ textDocument }) => {
+  const { state, path } = stateFor(textDocument.uri);
+  return { data: Sem.semanticTokensData(state.current, state.index, path) };
+});
+
+connection.languages.semanticTokens.onRange(({ textDocument, range }) => {
+  const { state, path } = stateFor(textDocument.uri);
+  return { data: Sem.semanticTokensData(state.current, state.index, path, range) };
+});
 
 connection.onShutdown(() => ols?.shutdown());
 process.on("exit", () => ols?.shutdown());

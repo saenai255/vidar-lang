@@ -34,6 +34,34 @@
         "path": "./syntaxes/vidar.tmLanguage.json"
       }
     ],
+    "semanticTokenModifiers": [
+      {
+        "id": "captured",
+        "description": "A variable captured by a closure, used inside it"
+      },
+      {
+        "id": "byRef",
+        "description": "Captured by reference (`proc[&x]`): writes reach the variable"
+      },
+      {
+        "id": "closure",
+        "description": "A closure value or closure type, as opposed to a plain proc"
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "vidar",
+        "scopes": {
+          "function.closure": ["entity.name.function.closure.vidar"],
+          "type.closure": ["entity.name.type.closure.vidar"],
+          "variable.captured": ["variable.other.captured.vidar"],
+          "variable.captured.byRef": ["variable.other.captured.reference.vidar"],
+          "function.captured": ["entity.name.function.closure.captured.vidar"],
+          "function.async": ["entity.name.function.goroutine.vidar"],
+          "macro": ["entity.name.function.macro.vidar"]
+        }
+      }
+    ],
     "commands": [
       {
         "command": "vidar.showGeneratedOdin",

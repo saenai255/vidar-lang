@@ -547,13 +547,14 @@ Bounds checks rarely matter: LLVM already removes most of them in loops like the
 | Call hierarchy | Incoming and outgoing calls of procs, proc groups, interface methods and macros, across packages. A call to a proc group counts as a call to each of its members; a call to a closed interface's method (one no other package extends) counts as a call to every proc bound to it. Calls a macro expands to count at the macro call, and calls in closures at the proc that holds them. Calls through closure values and proc variables aren't followed. |
 | Plain Odin via ols | If [ols](https://github.com/DanielGavin/ols) is on your PATH, requests vidar can't answer go to it: hover, definition and signature help for core library procs and types, and `fmt.`-style completion (merged with vidar's own). See below. |
 | Inlay hints | What `-opt` would decide, without building with it: `table` / `specialized ×2` after a proc's name, `unchecked` after a statement whose indexes are proven in bounds, `grouped alloc`, `fmt inlined`, and `direct` / `devirtualized` / `vtable` after an interface method call. The tooltip gives the reason. The setting `optHints` (initialization option or `vidar.optHints` in `workspace/didChangeConfiguration`) is `"on"` (default), `"all"` (also what `-opt` decided against, e.g. `no table`) or `"off"`. They come from a second analysis with `-opt` on, made only when hints are requested; diagnostics and generated code are unaffected. |
+| Semantic tokens | `textDocument/semanticTokens/full` and `/range`, from the analyzer's symbols, so names are colored by what they are rather than by how they look. Types: `namespace`, `type`, `interface`, `struct`, `enum`, `enumMember`, `typeParameter`, `function`, `method` (interface methods, in the interface, its `impl`s and calls), `parameter`, `variable`, `property` (field declarations) and `macro` (comptime procs and every `name!` call, including procs run at compile time). Modifiers: `declaration`, `readonly` (constants, and by-value captures, which a closure can't write), `defaultLibrary` (the built-in macros and `vidar:sched`), `async` (`sched.go`), and three custom ones: `closure` (a closure value or type; closure-valued locals and parameters are `function`s), `captured` (a captured variable inside its closure) and `byRef` (captured by reference). Generated `__` names never get a token; a file with errors gets tokens for what was analyzed. |
 | `vidar/generatedOdin` | Custom request that returns the generated Odin for a file. |
 
 The server analyzes the program rooted at the open file's package: that package plus everything it imports, cycles included. Unsaved editor contents are used. Editing a file re-checks every open program that contains it.
 
 **How ols is used:** the server keeps a shadow copy of the generated Odin in a temp directory and runs ols on it. Lines vidar doesn't rewrite are unchanged, and the emitter's line map says where each one went, so a request on such a line is sent to ols at the matching position. Results that point into generated code are dropped; results in the shadow tree map back to the `.vidar` file. While a file has errors, the last good output is reused for unchanged lines and the edited lines are passed to ols as typed, so completion keeps working mid-edit. vidar answers first for its own constructs (closures, captures, interfaces, impls, macros, anonymous structs); ols is the fallback, and for hover also wins when vidar couldn't infer a local's type. Lines vidar rewrites (for example a line that uses a by-reference capture) are not forwarded yet.
 
-**VS Code:** see [editors/vscode](editors/vscode). It provides highlighting, the client, and an *Vidar: Show Generated Odin* command.
+**VS Code:** see [editors/vscode](editors/vscode). It provides highlighting, the client, and an *Vidar: Show Generated Odin* command. It declares the custom semantic token modifiers and maps them to TextMate scopes for themes without semantic colors: `entity.name.function.closure.vidar`, `variable.other.captured.vidar`, `variable.other.captured.reference.vidar`, `entity.name.function.goroutine.vidar`, `entity.name.function.macro.vidar`. To color them in any theme, use `editor.semanticTokenColorCustomizations`, e.g. `"rules": { "*.captured": { "italic": true }, "*.byRef": { "underline": true } }`.
 
 **Neovim** (0.11+):
 
@@ -613,6 +614,7 @@ npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many tim
   - the outline and the generated-Odin request
   - workspace symbols, go to implementation and the call hierarchy, across packages, proc groups, an extended interface and a macro (`tests/lsp/nav`)
   - `-opt` inlay hints (`tests/lsp/opt`), their setting, and that they follow edits
+  - semantic tokens (`tests/lsp/semantic`), decoded from the stream: interfaces and their methods, closures, by-value and by-reference captures, macro calls, `sched.go`, ranges, and a file with a syntax error
 
 ## Source layout
 
@@ -640,7 +642,7 @@ npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many tim
 | `src/cli.ts` | `build` / `run` / `check` / `emit` |
 | `src/watch.ts` | `--watch`: the files of a program, the watch loop (`fs.watch` on each package directory, polling as the fallback, debounced), and rerunning the command in a child process that is killed on change |
 | `src/bin.ts` | entry point of the standalone binary (`vidar`, `vidar-lsp`) |
-| `src/lsp/` | language server: `features.ts` (index, hover, definition, completion, …), `navigation.ts` (workspace symbols, implementations, call hierarchy) and `server.ts` (protocol, `odin check` on save) and `odin.ts` (shadow tree and forwarding to ols) |
+| `src/lsp/` | language server: `features.ts` (index, hover, definition, completion, …), `navigation.ts` (workspace symbols, implementations, call hierarchy), `semantic.ts` (semantic tokens), `server.ts` (protocol, `odin check` on save) and `odin.ts` (shadow tree and forwarding to ols) |
 | `editors/vscode/` | VS Code extension: grammar and client |
 
 ## Limits (MVP)

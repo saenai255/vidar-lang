@@ -85,7 +85,8 @@ function change(text) {
 }
 
 (async () => {
-  await request("initialize", { processId: null, rootUri: pathToFileURL(dir).toString(), capabilities: {} });
+  const init = await request("initialize", { processId: null, rootUri: pathToFileURL(dir).toString(), capabilities: {} });
+  const semLegend = init.result?.capabilities?.semanticTokensProvider?.legend ?? { tokenTypes: [], tokenModifiers: [] };
   notify("initialized", {});
   const firstDiags = nextDiagnostics();
   notify("textDocument/didOpen", { textDocument: { uri, languageId: "vidar", version, text: original } });
@@ -647,6 +648,70 @@ function change(text) {
   await shifted;
   oh = await optHints();
   check("inlay hints follow edits", hintsAt(oh, { ...oEnd("bits :: proc", "bits"), line: oEnd("bits :: proc").line + 1 }).includes("table"), JSON.stringify(oh.map((h) => [h.label, h.position.line])));
+
+  // ---- semantic tokens ----
+  const semDir = realpathSync(mkdtempSync(join(tmpdir(), "vidar-lsp-semantic-")));
+  cpSync("tests/lsp/semantic", semDir, { recursive: true });
+  const semUri = pathToFileURL(join(semDir, "main.vidar")).toString();
+  const semText = readFileSync(join(semDir, "main.vidar"), "utf8");
+  const semLines = semText.split("\n");
+  const semDiag = nextDiagnostics((d) => d.uri === semUri);
+  notify("textDocument/didOpen", { textDocument: { uri: semUri, languageId: "vidar", version: 1, text: semText } });
+  check("semantic tokens fixture has no errors", (await semDiag).diagnostics.length === 0, "");
+  /** Decodes LSP's relative token stream into { line, character, text, type, modifiers }. */
+  const decode = (data) => {
+    const out = [];
+    let line = 0;
+    let char = 0;
+    for (let i = 0; i + 4 < data.length; i += 5) {
+      line += data[i];
+      char = data[i] ? data[i + 1] : char + data[i + 1];
+      const mods = semLegend.tokenModifiers.filter((_, b) => data[i + 4] & (1 << b));
+      out.push({ line, character: char, text: semLines[line]?.substr(char, data[i + 2]), type: semLegend.tokenTypes[data[i + 3]], modifiers: mods });
+    }
+    return out;
+  };
+  const semFull = decode((await request("textDocument/semanticTokens/full", { textDocument: { uri: semUri } })).result?.data ?? []);
+  /** the token for the `nth` `needle` on the first line containing `lineHas` */
+  const tokAt = (toks, lineHas, needle, nth = 0) => {
+    const line = semLines.findIndex((l) => l.includes(lineHas));
+    let col = -1;
+    for (let i = 0; i <= nth; i++) col = semLines[line].indexOf(needle, col + 1);
+    return toks.find((t) => t.line === line && t.character === col);
+  };
+  const semIs = (name, t, type, mods = [], noMods = []) =>
+    check(`semantic token: ${name}`, t?.type === type && mods.every((m) => t.modifiers.includes(m)) && !noMods.some((m) => t.modifiers.includes(m)), JSON.stringify(t));
+  semIs("interface declaration", tokAt(semFull, "Shape :: interface", "Shape"), "interface", ["declaration"]);
+  semIs("interface used as a type", tokAt(semFull, "s: Shape = &sq", "Shape"), "interface");
+  semIs("interface method in the interface's list", tokAt(semFull, "Shape :: interface", "area"), "method");
+  semIs("interface method call", tokAt(semFull, "fmt.println(apply", "area"), "method");
+  semIs("closure variable", tokAt(semFull, "add := proc[step]", "add"), "function", ["declaration", "closure"]);
+  semIs("closure parameter of a named closure type", tokAt(semFull, "apply :: proc", "f"), "function", ["closure"]);
+  semIs("by-value capture is captured and read-only", tokAt(semFull, "add := proc[step]", "step"), "variable", ["captured", "readonly"], ["byRef"]);
+  semIs("by-value capture used in the body", tokAt(semFull, "add := proc[step]", "step", 1), "variable", ["captured", "readonly"]);
+  semIs("by-reference capture", tokAt(semFull, "bump := proc[&total]", "total"), "variable", ["captured", "byRef"], ["readonly"]);
+  semIs("by-reference capture written in the body", tokAt(semFull, "bump := proc[&total]", "total", 1), "variable", ["captured", "byRef"]);
+  semIs("captured variable outside the closure is a plain variable", tokAt(semFull, "fmt.println(apply", "total"), "variable", [], ["captured"]);
+  semIs("macro declaration", tokAt(semFull, "twice :: proc!", "twice"), "macro", ["declaration"]);
+  semIs("macro call", tokAt(semFull, "fmt.println(apply", "twice"), "macro");
+  semIs("closure parameter of a closure literal", tokAt(semFull, "add := proc[step]", "x"), "parameter", ["declaration"]);
+  semIs("local constant", tokAt(semFull, "fmt.println(apply", "LIMIT"), "variable", ["readonly"]);
+  semIs("enum member declaration", tokAt(semFull, "Color :: enum", "Red"), "enumMember", ["declaration"]);
+  semIs("package alias", tokAt(semFull, "fmt.println(apply", "fmt"), "namespace");
+  semIs("goroutine start", tokAt(semFull, "sched.go(", "go"), "function", ["async", "defaultLibrary"]);
+  semIs("bundled package", tokAt(semFull, "sched.go(", "sched"), "namespace", ["defaultLibrary"]);
+  check("semantic tokens never cover generated __ names", semFull.length > 30 && !semFull.some((t) => !t.text || t.text.startsWith("__")), JSON.stringify(semFull.filter((t) => !t.text || t.text.startsWith("__"))));
+  const bumpLine = semLines.findIndex((l) => l.includes("bump := proc"));
+  const semRange = decode((await request("textDocument/semanticTokens/range", { textDocument: { uri: semUri }, range: { start: { line: bumpLine, character: 0 }, end: { line: bumpLine + 1, character: 0 } } })).result?.data ?? []);
+  check("semantic tokens for a range stay in the range", semRange.length >= 3 && semRange.every((t) => t.line === bumpLine) && semRange.some((t) => t.modifiers.includes("byRef")), JSON.stringify(semRange));
+  // a file that doesn't parse still gets tokens for what was analyzed, and the request never fails
+  const semBroken = semText.replace("bump()", "bump( +");
+  const semBad = nextDiagnostics((d) => d.uri === semUri && d.diagnostics.length > 0);
+  notify("textDocument/didChange", { textDocument: { uri: semUri, version: 2 }, contentChanges: [{ text: semBroken }] });
+  await semBad;
+  const semB = await request("textDocument/semanticTokens/full", { textDocument: { uri: semUri } });
+  const semBToks = decode(semB.result?.data ?? []);
+  check("semantic tokens for a file with a syntax error", !semB.error && semBToks.some((t) => t.type === "interface") && semBToks.some((t) => t.type === "macro"), JSON.stringify(semB.error ?? semBToks.slice(0, 5)));
 
   writeFileSync(file, original);
   const restored = nextDiagnostics((d) => d.uri === uri && d.diagnostics.length === 0);

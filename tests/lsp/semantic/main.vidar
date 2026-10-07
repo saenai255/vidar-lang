@@ -1,0 +1,35 @@
+package main
+
+import "core:fmt"
+import "vidar:sched"
+
+Shape :: interface { area }
+
+area :: proc(s: Shape) -> f64 ---
+
+Sq :: struct { side: f64 }
+
+Color :: enum { Red, Green }
+
+sq_area :: proc(q: ^Sq) -> f64 { return q.side * q.side }
+
+impl Shape for Sq { area = sq_area }
+
+Op :: closure(x: int) -> int
+
+twice :: proc!(x: Expr(int)) -> Expr(int) { return quote($x * 2) }
+
+apply :: proc(f: Op, v: int) -> int { return f(v) }
+
+main :: proc() {
+	step := 10
+	total := 0
+	add := proc[step](x: int) -> int { return x + step }
+	bump := proc[&total]() { total += 1 }
+	bump()
+	sched.go(proc[step]() { fmt.println(step) })
+	sq := Sq{2}
+	s: Shape = &sq
+	LIMIT :: 3
+	fmt.println(apply(add, LIMIT), total, area(s), twice!(step), Color.Red)
+}
