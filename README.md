@@ -16,6 +16,8 @@ node dist/cli.js build examples/cyclic -o out/game  # write the generated Odin t
 node dist/cli.js run   examples/negative_cost -opt  # with the -opt rewrites
 node dist/cli.js run   examples/closures --watch    # rerun whenever a .vidar file of the program changes
 node dist/cli.js fmt   examples/closures --check    # list files vidar fmt would change
+node dist/cli.js test  examples/testing             # transpile + odin test: run the @(test) procs
+node dist/cli.js build examples/cyclic -debug       # also build it with debug info, for lldb or gdb
 npm test
 ```
 
@@ -41,6 +43,8 @@ npm run build:binaries
 This builds `bin/<os>-<arch>/vidar` and `vidar-lsp`, plus a `.tar.gz` of both, and needs no Node.js or `node_modules` at runtime. Each is a Node [single executable application](https://nodejs.org/api/single-executable-applications.html): the bundled compiler is injected into a copy of the Node binary, which is why a binary is about 85 MB. `vidar-lsp` is a hard link to the same file. Run under that name, or as `vidar lsp`, it starts the language server. `odin` still has to be on your PATH for `run`/`check`.
 
 To build for another OS or CPU, pass a Node binary for that target, e.g. from the official downloads at nodejs.org: `node scripts/build-binaries.js --node path/to/linux-x64/bin/node --target linux-x64`. On macOS, binaries are ad-hoc signed.
+
+`run` and `test` print panics, failed `assert`s, bounds-check failures and `testing` messages at `.vidar` locations; `vidar build` writes `<out>/vidar.map.json`, so `vidar map <out> < log` does the same for a saved log of a program you built. `-define:NAME=value` is passed on to `odin` by `run`, `check`, `test` and `build -debug`.
 
 A directory is a package: all its `.vidar` (and plain `.odin`) files are transpiled together, along with every package it imports by relative path. A single `.vidar` file can also be built on its own.
 
@@ -142,7 +146,7 @@ vidar loads the entry package and every package it imports by relative path (`co
 - **Packages in a cycle** are merged into one Odin package (`game_ui/` above). Each one's members get its name as a prefix: `ui.render` becomes `ui__render`, `game.World` becomes `game__World`. That prefixing is scope-aware, so locals and struct fields are untouched. Imports between members of the cycle disappear. Importers outside the cycle import the merged package under their original alias, so `game.run(...)` becomes `game.game__run(...)`.
 - If the entry package is part of a cycle, it keeps its own names, so `main` stays `main`.
 - `@(private)` still means private to the original package, and vidar enforces it even after merging.
-- `vidar run`/`check` map Odin's errors and panics back to the `.vidar` files and lines.
+- `vidar run`/`check`/`test` map Odin's errors and panics back to the `.vidar` files and lines.
 
 See [examples/cyclic](examples/cyclic) for a cycle that shares an interface, closures and a macro, with a separate `util` package outside the cycle. [tests/cases/import_cycles](tests/cases/import_cycles) covers a three-package cycle, a cycle that includes the entry package, and the same names declared in several packages.
 
@@ -542,6 +546,40 @@ len(shapes); clear(&shapes); delete(shapes)
 
 Bounds checks rarely matter: LLVM already removes most of them in loops like these. The table wins only when the body costs more than a memory load; a bit count, which LLVM turns into one instruction, gains nothing. On the slime_mud server simulation, `-opt` took a run from 980 ms to 760 ms; the hand-written Odin version takes 905 ms.
 
+## Testing
+
+`vidar test <dir|file.vidar> [-opt] [--run <name>[,<name>...]] [-- odin flags]` transpiles the program to a temp directory and runs `odin test` on it, so `@(test)` procs taking `t: ^testing.T` work as they do in Odin. [examples/testing](examples/testing) keeps its tests in a file of their own, `tests.vidar`, in the same package:
+
+```odin
+@(test)
+eval_errors :: proc(t: ^testing.T) {
+	_, err := eval("1 +")
+	testing.expect_value(t, err, Error.Unknown_Op)
+}
+```
+
+- `--run eval_errors` runs only that test; it is `-define:ODIN_TEST_NAMES=main.eval_errors` with the package filled in, and a name that already has a package (`main.eval_errors`) is used as is. Flags after `--`, such as `-define:ODIN_TEST_THREADS=1`, go to `odin test`.
+- Failed `testing.expect`s, failed `assert`s and panics are reported at their `.vidar` file and line, on both stdout and stderr: `[examples/testing/tests.vidar:19:eval_arithmetic()] expected got to be 15, got 14`.
+- The exit status is `odin test`'s: 0 when every test passed.
+
+**How locations are mapped:** Odin prints locations as `/path/out/main.odin(12:5)` (compile errors, panics, asserts, bounds checks) or `[main.odin:12:proc()]` (`core:log` and `core:testing`). `vidar run` and `vidar test` pass the program's stderr (and, for `test`, stdout) through a filter that rewrites both shapes with the emitter's line map, the same one used for compile errors. Only paths of files vidar generated are rewritten, and a line vidar added with no source line of its own (helper code) keeps its generated location; everything else passes through unchanged, line by line as it is printed. A partial line, such as a prompt, is written out once the program has been quiet for 50 ms. `vidar build` can't wrap the program it builds, so it writes the map to `<out>/vidar.map.json` instead, and `./out/game/game 2>&1 | vidar map out/game` (or `vidar map out/game < crash.log`) rewrites the output afterwards.
+
+## Debugging
+
+Odin has no `#line` directive, so a debugger steps through the generated Odin rather than the `.vidar` source. Vidar keeps that code close to the source: lines it doesn't rewrite stay the same, and a lowered construct takes as many lines as it did.
+
+- `vidar build <dir|file.vidar> -debug [-o <out>] [-- odin flags]` transpiles into `<out>` (default `out/<name>`), writes `vidar.map.json`, and runs `odin build <out> -debug -out:<out>/<name>`. The generated `.odin` files stay next to the binary, which is where the debug info points.
+- Debug it from the command line: `lldb out/game/game`, then `b main.odin:42`, or `gdb out/game/game`. To find the generated line for a `.vidar` line, look it up in `vidar.map.json`, or use *Show Generated Odin* below.
+- **VS Code:** the extension adds a `vidar` debug configuration. It runs `vidar build -debug` (the CLI bundled in the extension, or `vidar.cliPath`), then starts [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) on the binary, or gdb through the C/C++ extension with `"debugger": "gdb"`:
+
+  ```json
+  { "type": "vidar", "request": "launch", "name": "Debug game", "program": "${workspaceFolder}/examples/cyclic", "args": [] }
+  ```
+
+  Other attributes: `outDir` (default `out/<name>-debug`), `opt`, `odinFlags`, `cwd`, `env`, `stopOnEntry` and `debuggerPath`. Without a `launch.json`, F5 on a `.vidar` file debugs its package.
+- **Setting breakpoints in VS Code:** *Vidar: Show Generated Odin* opens at the line matching the cursor's `.vidar` line. After a debug build that is still current with the file (saved, and not changed since), it opens the real generated file from that build, where breakpoints bind; otherwise it shows the program's generated Odin in an unsaved editor, for reading.
+- Generated names start with `__`: a closure's captures are in `__env` (`__env.n`, or `__env.f^` for a by-reference capture), and closure bodies are procs named `__closure_N`. Interface values are `{data, __vtable}`.
+
 ## Language server
 
 `vidar-lsp` speaks standard LSP over stdio, so any editor can use it. Put the standalone binaries on your PATH, or run `npm link` in this repo.
@@ -564,14 +602,14 @@ Bounds checks rarely matter: LLVM already removes most of them in loops like the
 | Code lens | Over each proc with `-opt` decisions, "N optimizations, M not" (M counts the decisions against, those whose label starts with "no" or "not"). Its command, `vidar.showOptReport` with the file's URI, the proc's name and its line, opens the report on that proc in VS Code. None while `optHints` is `"off"`, or with the setting `optCodeLens` set to `false`. |
 | `vidar/optReport` | Custom request `{ uri? }` returning every `-opt` decision, grouped by file and enclosing proc: `{ files: [{ uri, procs: [{ name, range, selectionRange, optimizations, against, decisions: [{ range, label, tooltip, against }] }] }] }`. Without `uri`, it covers every program the server has analyzed. Decisions outside any proc (a reordered struct, say) are grouped under `(top level)`. |
 | Quick fixes | Code actions for common errors. **A plain value converted to an interface:** "Use a pointer to it (`&x`)" is the preferred fix, the one "fix all" and auto-fix apply. "Allocate a heap copy (new_clone, caller frees)" is a separate action and is never preferred, so an allocation is only added when you choose it. When `&x` would dangle, only `new_clone` is offered and the diagnostic says why. It dangles when the value is a local, or a literal, of the proc and the interface value leaves it: it is returned, stored through a pointer, in a slice or in a global, or appended to something the proc doesn't own (the same rules `src/escape.ts` applies to closures). `new_clone` is also the only fix for a parameter or a loop value, since Odin can't take their address. **A write to a by-value capture:** capture by reference (`proc[&n]`). **A core package used without its import** (`fmt.println` with no `import "core:fmt"`): an error, with "Add import" as the fix. **An `-opt` decision you want undone** (an automatic table, specialization or memo, a stack buffer, a perfect-hash switch): add its opt-out attribute (`@(no_table)`, `@(no_specialize)`, ...) to the proc. `source.fixAll` applies every preferred fix in the file. |
-| `vidar/generatedOdin` | Custom request that returns the generated Odin for a file. |
+| `vidar/generatedOdin` | Custom request that returns the generated Odin for a file. Given a `.vidar` `line` (0-based), it also returns the matching `line` of the file's generated Odin. |
 | `vidar/expandAt` | Custom request `{ uri, position, opt? }` -> `{ code, range }` (or `{ error }`): the generated Odin for the statement at the position, and that statement's source range. The emitter keeps line structure, so these are the output lines mapped to the statement's lines, including the comments and hoisted temporaries it writes before the statement, followed by the generated helpers they name (a closure literal's `__closure_N` proc, interface helpers, `-opt` fmt writers). A statement that comes out unchanged gives way to the innermost enclosing one that changed (inside a closure literal, a `catch` or a `do!`, the whole construct), short of a top-level declaration. `opt: true` shows the `-opt` output, from a separate `-opt` analysis. |
 
 The server analyzes the program rooted at the open file's package: that package plus everything it imports, cycles included. Unsaved editor contents are used. Editing a file re-checks every open program that contains it.
 
 **How ols is used:** the server keeps a shadow copy of the generated Odin in a temp directory and runs ols on it. Lines vidar doesn't rewrite are unchanged, and the emitter's line map says where each one went, so a request on such a line is sent to ols at the matching position. Results that point into generated code are dropped; results in the shadow tree map back to the `.vidar` file. While a file has errors, the last good output is reused for unchanged lines and the edited lines are passed to ols as typed, so completion keeps working mid-edit. vidar answers first for its own constructs (closures, captures, interfaces, impls, macros, anonymous structs); ols is the fallback, and for hover also wins when vidar couldn't infer a local's type. Lines vidar rewrites (for example a line that uses a by-reference capture) are not forwarded yet.
 
-**VS Code:** see [editors/vscode](editors/vscode). It provides highlighting, the client, a *Vidar: Show Generated Odin* command, and *Vidar: Expand at Cursor*: a read-only Odin view beside the editor showing the code generated for the statement at the cursor (a closure literal, `catch`, `do!`, `go` call, lowered `for`, interface call), which follows the cursor from statement to statement. *Vidar: Toggle -opt in Expand at Cursor* (also a button on the view's title bar) switches it between the plain and the `-opt` output. There is also a *Vidar: Optimization Report* view in the explorer: every `-opt` decision grouped by file and proc, decisions against marked, each entry jumping to its line. It refreshes on save, and the code lenses open it on their proc. It declares the custom semantic token modifiers and maps them to TextMate scopes for themes without semantic colors: `entity.name.function.closure.vidar`, `variable.other.captured.vidar`, `variable.other.captured.reference.vidar`, `entity.name.function.goroutine.vidar`, `entity.name.function.macro.vidar`. To color them in any theme, use `editor.semanticTokenColorCustomizations`, e.g. `"rules": { "*.captured": { "italic": true }, "*.byRef": { "underline": true } }`.
+**VS Code:** see [editors/vscode](editors/vscode). It provides highlighting, the client, a *Vidar: Show Generated Odin* command that opens at the cursor's line, a `vidar` debug configuration (see [Debugging](#debugging)), and *Vidar: Expand at Cursor*: a read-only Odin view beside the editor showing the code generated for the statement at the cursor (a closure literal, `catch`, `do!`, `go` call, lowered `for`, interface call), which follows the cursor from statement to statement. *Vidar: Toggle -opt in Expand at Cursor* (also a button on the view's title bar) switches it between the plain and the `-opt` output. There is also a *Vidar: Optimization Report* view in the explorer: every `-opt` decision grouped by file and proc, decisions against marked, each entry jumping to its line. It refreshes on save, and the code lenses open it on their proc. It declares the custom semantic token modifiers and maps them to TextMate scopes for themes without semantic colors: `entity.name.function.closure.vidar`, `variable.other.captured.vidar`, `variable.other.captured.reference.vidar`, `entity.name.function.goroutine.vidar`, `entity.name.function.macro.vidar`. To color them in any theme, use `editor.semanticTokenColorCustomizations`, e.g. `"rules": { "*.captured": { "italic": true }, "*.byRef": { "underline": true } }`.
 
 **Neovim** (0.11+):
 
@@ -609,7 +647,8 @@ npm run bench          # examples/negative_cost timed against HEAD; --against <r
 npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many times; saves a stack on a hang
 ```
 
-- **Unit tests** (`tests/unit/*.test.js`, `node:test`): lexer semicolon insertion and trivia, parser round-trips of tricky Odin syntax, parsing of the extension syntax and error recovery, compile-time evaluation, hygiene, spacing of generated code, the import-cycle grouping (Tarjan's algorithm, merged units, prefixes, output layout), and `--watch` (the file set, debouncing, reruns on change, polling, and killing a running child with what it started), and `vidar fmt`: over every `.vidar` file in the repository it must be idempotent and indent from the tokens alone, and every case and example (and the prelude), with its whitespace scrambled and then formatted, must transpile to the same tokens as before, with and without `-opt`.
+- **Unit tests** (`tests/unit/*.test.js`, `node:test`): lexer semicolon insertion and trivia, parser round-trips of tricky Odin syntax, parsing of the extension syntax and error recovery, compile-time evaluation, hygiene, spacing of generated code, the import-cycle grouping (Tarjan's algorithm, merged units, prefixes, output layout), the run-time location mapping (`runmap.test.js`: both location shapes, what passes through, the line filter, `vidar.map.json`), `--watch` (the file set, debouncing, reruns on change, polling, and killing a running child with what it started), and `vidar fmt`: over every `.vidar` file in the repository it must be idempotent and indent from the tokens alone, and every case and example (and the prelude), with its whitespace scrambled and then formatted, must transpile to the same tokens as before, with and without `-opt`.
+- **`vidar test`** (in `scripts/test.js`, named `testing: ...`): `vidar test examples/testing` must pass, and `vidar test tests/vidar_test/failing` must fail, reporting a failed `testing.expect`, a failed `assert` and a bounds-check panic at the `.vidar` lines marked `// fails here`.
 - **Sample programs with fixtures** (`tests/cases/<name>/`): one feature area each. The sample is `input.vidar`, or an `input/` directory for multi-package programs. `expected/` holds the transpiled Odin tree, and `stdout.txt` is the program's expected output, checked by running it with `odin run`. Cases named `plain_*` must come out byte-identical to their input. Cases named `opt_*` are transpiled with `-opt`. Every case is also transpiled the other way; if `-opt` changes its output, that version is run too and must print the same. They cover:
   - closures: capture modes, loops, every declaration form, multiple results, variadics, nesting, closure types
   - interfaces: dispatch, static calls across packages, decorators, multiple results, variadic methods
@@ -659,12 +698,13 @@ npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many tim
 | `src/checks.ts` | `@(no_alloc)` (what a proc can allocate through) and `@(hot)` (warnings from the `-opt` decisions inside it) |
 | `src/fmtspec.ts` | reads `fmt` format strings for `-opt` |
 | `src/project.ts` | loads a program by following imports, groups import cycles (Tarjan's algorithm), and emits the output tree; shared by the CLI and the language server |
-| `src/cli.ts` | `build` / `run` / `check` / `emit` / `fmt` |
+| `src/cli.ts` | `build` / `run` / `test` / `check` / `emit` / `fmt` / `map` |
+| `src/runmap.ts` | generated `.odin` locations mapped back to `.vidar` lines: compile errors, the line filter on `run` / `test` output, `vidar.map.json` and `vidar map`, and the reverse lookup for *Show Generated Odin* |
 | `src/watch.ts` | `--watch`: the files of a program, the watch loop (`fs.watch` on each package directory, polling as the fallback, debounced), and rerunning the command in a child process that is killed on change |
 | `src/format.ts` | `vidar fmt`: token-based formatter (indentation, spacing, trailing whitespace), its per-line edits for the language server, and the `fmt` command |
 | `src/bin.ts` | entry point of the standalone binary (`vidar`, `vidar-lsp`) |
 | `src/lsp/` | language server: `features.ts` (index, hover, definition, completion, …), `navigation.ts` (workspace symbols, implementations, call hierarchy), `semantic.ts` (semantic tokens), `actions.ts` (quick fixes), `expand.ts` (the code for the statement at the cursor), `optreport.ts` (`-opt` decisions by proc, for `vidar/optReport` and code lenses), `server.ts` (protocol, `odin check` on save) and `odin.ts` (shadow tree and forwarding to ols) |
-| `editors/vscode/` | VS Code extension: grammar, client, and the Optimization Report view (`optreport.js`) |
+| `editors/vscode/` | VS Code extension: grammar, client, the Optimization Report view (`optreport.js`) and the `vidar` debug configuration |
 
 ## Limits (MVP)
 

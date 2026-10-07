@@ -16,6 +16,7 @@ Each example is its own directory, and the directory is the program. Run one wit
 | [fanout/](fanout) | CPU-bound goroutines, for timing `-define:VIDAR_THREADS=N`; the checksum is the same at any thread count |
 | [goroutines/](goroutines) | `import "vidar:sched"`: goroutines from closures, channels, `select` with a timeout, `try_select`, wait groups, and a TCP echo server over `core:nbio` |
 | [sched_io/](sched_io) | I/O that parks only the goroutine: `blocking` on a worker thread, files, DNS, UDP, `sched.Mutex` held across a sleep, and `after` as a `select` timeout |
+| [testing/](testing) | `@(test)` procs in their own file, run with `vidar test examples/testing` (one with `--run eval_errors`); failures are reported at `.vidar` lines |
 | [cyclic/](cyclic) | packages that import each other (`game` and `ui`) plus one outside the cycle (`util`), sharing an interface, closures, a macro and error handling |
 
 See [SYNTAX.md](../SYNTAX.md) for a reference of all the syntax these use.

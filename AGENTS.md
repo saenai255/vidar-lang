@@ -84,9 +84,16 @@ odin run "$TMPDIR/case" -out:"$TMPDIR/case/prog" | diff tests/cases/<name>/stdou
 ```
 `node dist/cli.js emit <input> [-opt]` prints the generated Odin, for a quick look.
 
+**Other CLI commands that help when debugging a case:**
+- `node dist/cli.js test <input> [--run <name>]` runs its `@(test)` procs with `odin test`, with failures at `.vidar` lines; `examples/testing` has some.
+- `node dist/cli.js build <input> -debug -o <dir>` also builds `<dir>/<name>` with debug info, for `lldb` or `gdb` (both in `/usr/bin` on the Linux VM); breakpoints go on the generated `.odin` lines.
+- Every `vidar build` writes `<dir>/vidar.map.json`; `<dir>/<name> 2>&1 | node dist/cli.js map <dir>` rewrites a crash's `.odin` locations to `.vidar` ones. `run` and `test` do this themselves.
+- `src/runmap.ts` holds that mapping, for compile errors too (`mapLocations` in `src/cli.ts` calls it).
+
 **Adding tests:**
 - **A feature or fix:** add a case in `tests/cases/`, prefixed `opt_` if it is about `-opt`.
 - **A new compile error:** add a file in `tests/errors/`.
+- **`vidar test` and location mapping:** `scripts/test.js` runs `vidar test examples/testing` (must pass) and `vidar test tests/vidar_test/failing` (must fail, naming each line marked `// fails here`); both checks are named `testing: ...`, so `--only testing` runs them. `tests/unit/runmap.test.js` covers the filter.
 - Generate the fixtures with `npm run test:update`.
 - **LSP features:** add checks to `scripts/test-lsp.js`. Its workspaces are in `tests/lsp/` and are copied to a temp dir on each run.
 - **slime_mud:** `examples/slime_mud` has no top-level `main.vidar`, so `npm test` skips it. After a compiler change, also run these (each takes under a second):
@@ -137,7 +144,7 @@ So a hang fails one case (`odin build timed out`, or `timed out after 30s`) inst
 | `vidar-test-*` | `scripts/test.js` |
 | `vidar-lsp-*` | `scripts/test-lsp.js` |
 | `vidar-unit-*` | the unit tests |
-| `vidar-XXXXXX` | `vidar run` and `vidar check` (one per rerun with `--watch`) |
+| `vidar-XXXXXX` | `vidar run`, `vidar test` and `vidar check` (one per rerun with `--watch`) |
 | `slime-bench-*` | the slime_mud benchmark |
 | `vidar-bench-*` | `npm run bench` |
 | `vidar-stress-*` | `npm run stress` |
