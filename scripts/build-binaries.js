@@ -8,6 +8,7 @@
 //                                                     after --target <os-arch>
 //
 // Output: bin/<os-arch>/vidar and vidar-lsp (a hard link to the same file), plus a .tar.gz.
+// $VIDAR_VERSION overrides the version from package.json (CI sets it for releases).
 const { execFileSync } = require("node:child_process");
 const { copyFileSync, chmodSync, linkSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } = require("node:fs");
 const { join, resolve } = require("node:path");
@@ -21,7 +22,7 @@ const target = arg("--target") ?? `${process.platform}-${process.arch}`;
 const windows = target.startsWith("win32");
 const mac = target.startsWith("darwin");
 const exe = (name) => (windows ? `${name}.exe` : name);
-const { version } = JSON.parse(readFileSync("package.json", "utf8"));
+const version = process.env.VIDAR_VERSION || JSON.parse(readFileSync("package.json", "utf8")).version;
 
 const build = resolve("build");
 const out = resolve("bin", target);
