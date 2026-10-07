@@ -49,11 +49,11 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 36 | 40 | Closure bodies that use the enclosing proc's constants, types and `$T` | language | merged |
 | 37 | 41 | Anonymous struct literals everywhere | language | merged |
 | 38 | 42 | Generic impls, and proc groups or polymorphic procs as bound methods | language | merged |
-| 39 | 43 | Resolve field and enum-member uses in the analyzer | editor | todo |
-| 40 | 44 | Forward rewritten lines to ols | editor | todo |
-| 41 | 45 | Index the whole workspace at startup | editor | todo |
+| 39 | 43 | Resolve field and enum-member uses in the analyzer | editor | merged |
+| 40 | 44 | Forward rewritten lines to ols | editor | merged |
+| 41 | 45 | Index the whole workspace at startup | editor | merged |
 | 42 | 46 | Missing-import fix from `odin root` | editor | merged |
-| 43 | 47 | Generated `json.unmarshal` | perf | todo |
+| 43 | 47 | Generated `json.unmarshal` | perf | merged |
 | 44 | 48 | Hot/cold splitting across procs | perf | todo |
 | 45 | 49 | Loop fusion and pipeline macros | perf | todo |
 | 46 | 50 | `vidar new` | dev tooling | merged |
@@ -364,6 +364,11 @@ For a `[dynamic]T` whose hot loops (in any proc it is passed to) touch few field
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **47, generated `json.unmarshal`** merged. `src/jsonread.ts`: under `-opt`, `json.unmarshal(data, &x)` / `unmarshal_string` for named structs (tags), enums (integer or name), fixed arrays, slices, dynamic arrays, strings, bools, ints and floats call a generated reader behind the same `when T ==` guard. The input is first checked to be strict JSON (valid UTF-8, nothing trailing, depth 256); anything else, JSON5 included, goes to encoding/json untouched, so errors match. Values it doesn't read itself (a kind mismatch, a float into an int, a map field) go to encoding/json on their own bytes, with error offsets moved back. Keys aren't allocated (encoding/json clones and frees them), so a nearly exhausted allocator can fail later; in README. `negative_cost` "json.unmarshal of an array" (100 structs, ~10 KB, 500 times): 220 to 260 ms with encoding/json, 21 to 23 ms generated, on the linux VM. Case `opt_json_unmarshal` (85 checks against `unmarshal_any`); fuzzed with ~900k mutated documents, no mismatch.
+  - Found by 47 and fixed: the generated `%v` printers and json writers weren't file-private, so two files of one package printing or marshaling the same type redeclared them. Case `opt_helpers_two_files`.
+- **43, field and enum-member uses** merged. `src/members.ts` (an LSP-only pass after analysis) resolves `x.field` (pointers, `using`, `#soa`, parametric structs), literal field names, `Enum.Member`, and `.Member` wherever the expected type is known. Hover, definition, references, rename and semantic tokens use it. Rename is refused, naming the place, while any use of that name can't be resolved.
+- **45, workspace index** merged. `src/lsp/workspace.ts`: on `initialized`, analyzes every program under the workspace folders in the background (roots first, one per 20 ms slice after 400 ms idle, capped), without publishing diagnostics until a file is opened; `indexWorkspace: false` turns it off.
+- **44, forwarding rewritten lines to ols** merged, untested end to end (no ols here). `emitProgram(..., { columns: true })` returns a column map of the identifiers written out as is; a request on a rewritten line goes to that name's position in the shadow file. Off for the CLI. Needs a check with ols on the M3.
 - **51, Windows** merged, never run on Windows (no wine; Odin can't link for Windows from linux). `switch_windows_amd64.asm`: Win64 callee-saved registers, xmm6 to xmm15 and the TIB's StackBase, StackLimit and DeallocationStack switched with the stack; `vidar_entry` has shadow space and `.pdata`/`.xdata` unwind info that ends stack walks at a goroutine's base. `core:nbio` has an IOCP backend, so nothing is gated. `src/paths.ts` compares paths without case and with either slash on Windows (run map, `odin check` on save, the ols bridge); programs are named `.exe`. Checked: `odin check -target:windows_amd64` and `-build-mode:obj` on the sched examples (also at 4 threads), `nasm -f win64`, `lld-link /force:unresolved` leaving only system symbols, and the real routine run on linux against a fake TIB through the win64 calling convention (identical output, register round trips). A CI windows job is the next step.
 - **40, closures and the enclosing proc's declarations** merged. Local constants and types a closure body uses are lifted to file scope as `__Local_N` (the local becomes an alias, so both are one type); a body that needs `$T`, `$N` or `#procedure` gets its `__closure_N` declared inside the proc, before the statement holding it. Those aren't copied into specialized callees. Cases `closure_local_decls`, `closure_poly`; the `closure_local_const` error is gone.
 - **41, anonymous struct literals everywhere** merged: at file scope, in `if`/`for`/`switch` initializers, and as arguments to `$T`, `any` or fmt's print procs, written as one expression `struct { a: type_of(__anon_typed(v)) }{a = v}` (the `type_of` copy never runs, so each value is evaluated once). Not for other callees vidar can't see. Case `anon_structs_everywhere`.
