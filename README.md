@@ -14,8 +14,11 @@ node dist/cli.js run   examples/cyclic              # a program whose packages i
 node dist/cli.js emit  examples/cyclic              # print the generated Odin
 node dist/cli.js build examples/cyclic -o out/game  # write the generated Odin tree
 node dist/cli.js run   examples/negative_cost -opt  # with the -opt rewrites
+node dist/cli.js run   examples/closures --watch    # rerun whenever a .vidar file of the program changes
 npm test
 ```
+
+`--watch` works with `run` and `check`. It watches every package of the program in the project (the entry package and every package it imports by relative path, not `core:` or `vidar:sched`), recomputed before each run since imports change, and reruns about 100 ms after the last change. A program still running is killed, together with anything it started, before the rerun. Output is kept unless you add `--clear`, which clears the screen before each rerun. It uses `fs.watch` on each package directory and falls back to polling where that fails. Ctrl-C stops it.
 
 ## Standalone binaries
 
@@ -585,7 +588,7 @@ npm run bench          # examples/negative_cost timed against HEAD; --against <r
 npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many times; saves a stack on a hang
 ```
 
-- **Unit tests** (`tests/unit/*.test.js`, `node:test`): lexer semicolon insertion and trivia, parser round-trips of tricky Odin syntax, parsing of the extension syntax and error recovery, compile-time evaluation, hygiene, spacing of generated code, and the import-cycle grouping (Tarjan's algorithm, merged units, prefixes, output layout).
+- **Unit tests** (`tests/unit/*.test.js`, `node:test`): lexer semicolon insertion and trivia, parser round-trips of tricky Odin syntax, parsing of the extension syntax and error recovery, compile-time evaluation, hygiene, spacing of generated code, the import-cycle grouping (Tarjan's algorithm, merged units, prefixes, output layout), and `--watch` (the file set, debouncing, reruns on change, polling, and killing a running child with what it started).
 - **Sample programs with fixtures** (`tests/cases/<name>/`): one feature area each. The sample is `input.vidar`, or an `input/` directory for multi-package programs. `expected/` holds the transpiled Odin tree, and `stdout.txt` is the program's expected output, checked by running it with `odin run`. Cases named `plain_*` must come out byte-identical to their input. Cases named `opt_*` are transpiled with `-opt`. Every case is also transpiled the other way; if `-opt` changes its output, that version is run too and must print the same. They cover:
   - closures: capture modes, loops, every declaration form, multiple results, variadics, nesting, closure types
   - interfaces: dispatch, static calls across packages, decorators, multiple results, variadic methods
@@ -631,6 +634,7 @@ npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many tim
 | `src/fmtspec.ts` | reads `fmt` format strings for `-opt` |
 | `src/project.ts` | loads a program by following imports, groups import cycles (Tarjan's algorithm), and emits the output tree; shared by the CLI and the language server |
 | `src/cli.ts` | `build` / `run` / `check` / `emit` |
+| `src/watch.ts` | `--watch`: the files of a program, the watch loop (`fs.watch` on each package directory, polling as the fallback, debounced), and rerunning the command in a child process that is killed on change |
 | `src/bin.ts` | entry point of the standalone binary (`vidar`, `vidar-lsp`) |
 | `src/lsp/` | language server: `features.ts` (index, hover, definition, completion, …) and `server.ts` (protocol, `odin check` on save) and `odin.ts` (shadow tree and forwarding to ols) |
 | `editors/vscode/` | VS Code extension: grammar and client |

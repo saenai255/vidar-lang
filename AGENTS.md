@@ -122,7 +122,7 @@ So a hang fails one case (`odin build timed out`, or `timed out after 30s`) inst
   - Treat a run timeout in any `vidar:sched` program (`sched_pending_io`, `examples/goroutines`, `examples/sched_io`) as a likely scheduler bug, not a flake.
   - Hunt it with `npm run stress -- tests/cases/sched_pending_io -n 2000`. On a hang it keeps the binary and writes the CPU use and a `sample` (macOS) or `gdb` (Linux) stack to `$TMPDIR/vidar-stress-*/hang-N.txt`. This is PERF_PROGRESS item 2.
   - Not reproduced on linux/amd64. On macOS, files go to worker threads; `-define:VIDAR_FILES_ON_WORKERS=true` sends them there on Linux too.
-- **Your own shell.** A command that waits on stdin hangs the tool call until it is killed. Examples: `cat > file` without a heredoc, a bare `node`, or a program that reads input.
+- **Your own shell.** A command that waits on stdin hangs the tool call until it is killed. Examples: `cat > file` without a heredoc, a bare `node`, or a program that reads input. `vidar run --watch` and `vidar check --watch` never exit on their own: start them in the background under `timeout`, and stop them with SIGINT to the watcher's PID, which also kills the run in progress (it runs in its own process group).
 
 **Finding stuck processes:**
 - Test programs run as `$TMPDIR/vidar-test-*/<case>/prog`; list them with `pgrep -fl vidar-test-`.
@@ -136,7 +136,7 @@ So a hang fails one case (`odin build timed out`, or `timed out after 30s`) inst
 | `vidar-test-*` | `scripts/test.js` |
 | `vidar-lsp-*` | `scripts/test-lsp.js` |
 | `vidar-unit-*` | the unit tests |
-| `vidar-XXXXXX` | `vidar run` and `vidar check` |
+| `vidar-XXXXXX` | `vidar run` and `vidar check` (one per rerun with `--watch`) |
 | `slime-bench-*` | the slime_mud benchmark |
 | `vidar-bench-*` | `npm run bench` |
 | `vidar-stress-*` | `npm run stress` |

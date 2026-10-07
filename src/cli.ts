@@ -7,6 +7,7 @@ import { Analyzer, posOf } from "./analyzer";
 import { hotWarnings } from "./checks";
 import { CompileError } from "./lexer";
 import { Output, Program, emitProgram, loadProgram, transpile } from "./project";
+import { wantsWatch, watchCommand } from "./watch";
 
 export { transpile };
 export const EXT = ".vidar";
@@ -26,6 +27,7 @@ function usage(): never {
   vidar check <dir|file${EXT}> [-opt]                   transpile and 'odin check'
   vidar emit  <dir|file${EXT}> [-opt]                   print the generated Odin to stdout
   -opt-report in place of -opt also prints what -opt decided, where, and why
+  --watch (run, check) reruns when a .vidar file of the program changes; --clear clears the screen first
   vidar lsp                                     run the language server on stdio (same as vidar-lsp)
   vidar --version
 
@@ -133,4 +135,8 @@ export function mapLocations(text: string, out: Output, root: string): string {
   return text;
 }
 
-if (require.main === module) process.exit(main(process.argv.slice(2)));
+if (require.main === module) {
+  const argv = process.argv.slice(2);
+  if (wantsWatch(argv)) watchCommand(argv, [process.execPath, __filename]);
+  else process.exit(main(argv));
+}

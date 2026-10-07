@@ -8,6 +8,8 @@ const args = process.argv.slice(2);
 if (self.startsWith("vidar-lsp") || args[0] === "lsp") {
   if (args[0] === "lsp") process.argv.splice(2, 1);
   require("./lsp/server");
+} else if (require("./watch").wantsWatch(args)) {
+  require("./watch").watchCommand(args, [process.execPath]);
 } else {
   process.exitCode = require("./cli").main(args);
 }
