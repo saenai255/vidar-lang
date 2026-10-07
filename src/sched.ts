@@ -26,6 +26,8 @@ when ODIN_OS == .Darwin && ODIN_ARCH == .arm64 {
 	foreign import switcher "switch_linux_arm64.asm"
 } else when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
 	foreign import switcher "switch_linux_amd64.asm"
+} else when ODIN_OS == .Windows && ODIN_ARCH == .amd64 {
+	foreign import switcher "switch_windows_amd64.asm"
 } else {
 	#panic("vidar:sched: goroutines are not supported on this target yet")
 }
@@ -280,6 +282,17 @@ go :: proc(task: closure()) {
 		mem.zero(frame, 160)
 		frame[0] = uintptr(g)
 		frame[11] = uintptr(rawptr(vidar_entry))
+	} else when ODIN_OS == .Windows {
+		// vidar_switch's frame: xmm6..xmm15, the TIB's StackBase, StackLimit and DeallocationStack,
+		// r15, r14, r13, r12, rsi, rdi, rbx, rbp, return address; above it a zero return address,
+		// which ends stack walks (unwinding, debuggers) at vidar_entry
+		frame := ([^]uintptr)(rawptr(top - 272))
+		mem.zero(frame, 272)
+		frame[20] = uintptr(raw_data(g.stack)) + uintptr(len(g.stack))
+		frame[21] = uintptr(raw_data(g.stack)) + GUARD_SIZE
+		frame[22] = uintptr(raw_data(g.stack))
+		frame[26] = uintptr(g)
+		frame[31] = uintptr(rawptr(vidar_entry))
 	} else {
 		// r15, r14, r13, r12, rbx, rbp, return address
 		frame := ([^]uintptr)(rawptr(top - 72))
@@ -1134,9 +1147,96 @@ vidar_entry:
 	ud2
 `;
 
+// Win64: callee-saved rbx, rbp, rdi, rsi, r12..r15 and xmm6..xmm15. The TIB's stack fields
+// (StackBase gs:[0x08], StackLimit gs:[0x10], DeallocationStack gs:[0x1478]) move with the stack:
+// __chkstk probes down from StackLimit, and exception dispatch rejects frames outside
+// StackLimit..StackBase. vidar_entry has unwind info so a walk up a goroutine's stack ends there.
+const SWITCH_WINDOWS_AMD64 = String.raw`bits 64
+
+extern vidar_go_start
+global vidar_switch
+global vidar_entry
+
+section .text
+
+;; vidar_switch(save, to), save in rcx and to in rdx: pushes callee-saved registers and the TIB's
+;; stack fields, stores rsp in *save, resumes the stack at to. The frame, from the saved rsp:
+;; xmm6..xmm15, StackBase, StackLimit, DeallocationStack, r15, r14, r13, r12, rsi, rdi, rbx, rbp,
+;; return address (256 bytes, so the saved rsp is 16-byte aligned)
+vidar_switch:
+	push rbp
+	push rbx
+	push rdi
+	push rsi
+	push r12
+	push r13
+	push r14
+	push r15
+	push qword [gs:0x1478]
+	push qword [gs:0x10]
+	push qword [gs:0x08]
+	sub rsp, 160
+	movaps [rsp], xmm6
+	movaps [rsp + 16], xmm7
+	movaps [rsp + 32], xmm8
+	movaps [rsp + 48], xmm9
+	movaps [rsp + 64], xmm10
+	movaps [rsp + 80], xmm11
+	movaps [rsp + 96], xmm12
+	movaps [rsp + 112], xmm13
+	movaps [rsp + 128], xmm14
+	movaps [rsp + 144], xmm15
+	mov [rcx], rsp
+	mov rsp, rdx
+	movaps xmm6, [rsp]
+	movaps xmm7, [rsp + 16]
+	movaps xmm8, [rsp + 32]
+	movaps xmm9, [rsp + 48]
+	movaps xmm10, [rsp + 64]
+	movaps xmm11, [rsp + 80]
+	movaps xmm12, [rsp + 96]
+	movaps xmm13, [rsp + 112]
+	movaps xmm14, [rsp + 128]
+	movaps xmm15, [rsp + 144]
+	add rsp, 160
+	pop qword [gs:0x08]
+	pop qword [gs:0x10]
+	pop qword [gs:0x1478]
+	pop r15
+	pop r14
+	pop r13
+	pop r12
+	pop rsi
+	pop rdi
+	pop rbx
+	pop rbp
+	ret
+
+;; a new goroutine's first resume lands here, with its G in r12 and rsp 16-byte aligned; 32 bytes
+;; of shadow space keep it aligned for the call, and the zero above them is its return address
+vidar_entry:
+	sub rsp, 32
+	mov rcx, r12
+	call vidar_go_start
+	ud2
+vidar_entry_end:
+
+section .xdata rdata align=8
+entry_unwind:
+	db 1, 4, 1, 0	; version 1, no flags; 4-byte prolog; one unwind code; no frame register
+	db 4, 0x32	; after 4 bytes: UWOP_ALLOC_SMALL of (3 + 1) * 8 = 32 bytes
+	dw 0	; pads the codes to an even count
+
+section .pdata rdata align=4
+	dd vidar_entry wrt ..imagebase
+	dd vidar_entry_end wrt ..imagebase
+	dd entry_unwind wrt ..imagebase
+`;
+
 /** Assembly files emitted next to the "vidar:sched" package. */
 export const SCHED_ASM: [string, string][] = [
   ["switch_darwin_arm64.asm", SWITCH_DARWIN_ARM64],
   ["switch_linux_arm64.asm", SWITCH_LINUX_ARM64],
   ["switch_linux_amd64.asm", SWITCH_LINUX_AMD64],
+  ["switch_windows_amd64.asm", SWITCH_WINDOWS_AMD64],
 ];
