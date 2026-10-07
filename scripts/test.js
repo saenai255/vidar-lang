@@ -193,8 +193,30 @@ function expectError(name, want, f) {
   }
 }
 
+/** `vidar test`: examples/testing passes, and a failing test, assert and panic are reported at their .vidar lines. */
+async function testCommand() {
+  const cli = join(__dirname, "../dist/cli.js");
+  const passing = "testing: vidar test examples/testing";
+  if (picked(passing)) {
+    const r = await run("node", [cli, "test", "examples/testing"], 120_000);
+    const ok = r.status === 0 && /All tests were successful/.test(r.stdout + r.stderr);
+    report(ok, passing, ok ? "" : `  exit ${r.status}\n${r.stdout}${r.stderr}`);
+  }
+  const failing = "testing: vidar test reports failures at .vidar lines";
+  if (picked(failing)) {
+    const file = "tests/vidar_test/failing/main.vidar";
+    const marked = readFileSync(file, "utf8").split("\n").flatMap((l, i) => (l.trimEnd().endsWith("// fails here") ? [i + 1] : []));
+    const r = await run("node", [cli, "test", "tests/vidar_test/failing"], 120_000);
+    const output = r.stdout + r.stderr;
+    const missing = marked.filter((n) => !output.includes(`main.vidar:${n}:`) && !output.includes(`main.vidar(${n}:`));
+    const ok = r.status !== 0 && marked.length === 3 && !missing.length && !/main\.odin[:(]/.test(output);
+    report(ok, failing, ok ? "" : `  exit ${r.status}, lines not reported: ${missing.join(", ")}\n${output}`);
+  }
+}
+
 (async () => {
   await runCases();
+  await testCommand();
 
   for (const f of readdirSync("tests/errors").filter((f) => f.endsWith(".vidar") && picked(join("tests/errors", f)))) {
     const path = join("tests/errors", f);

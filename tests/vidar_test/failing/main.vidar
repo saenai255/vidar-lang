@@ -1,0 +1,52 @@
+package main
+
+import "core:fmt"
+import "core:testing"
+
+// `vidar test` on this package must fail, and report each failure at the line marked
+// `// fails here` (scripts/test.js checks that). Each `catch unreachable` becomes several
+// lines of Odin, so the generated line numbers drift further from these with every test.
+
+Error :: enum { None, Bad }
+
+setup :: proc(n: int) -> Error { return .None if n >= 0 else .Bad }
+
+adder :: proc(n: int) -> closure(int) -> int {
+	return proc[n](x: int) -> int { return x + n }
+}
+
+twice :: proc(f: closure(int) -> int, x: int) -> int {
+	return f(f(x))
+}
+
+main :: proc() {
+	fmt.println(twice(adder(1), 0))
+}
+
+@(test)
+expect_fails :: proc(t: ^testing.T) {
+	setup(1) catch unreachable
+	add2 := adder(2)
+	scale := proc[&add2](x: int) -> int { return add2(x) * 10 }
+	testing.expect_value(t, scale(1), 31) // fails here
+}
+
+@(test)
+assert_fails :: proc(t: ^testing.T) {
+	setup(2) catch unreachable
+	f := adder(1)
+	assert(twice(f, 0) == 3, "twice is not three") // fails here
+}
+
+@(test)
+index_fails :: proc(t: ^testing.T) {
+	setup(3) catch unreachable
+	xs := []int{1, 2, 3}
+	i := twice(adder(1), 1)
+	_ = xs[i] // fails here
+}
+
+@(test)
+passes :: proc(t: ^testing.T) {
+	testing.expect_value(t, twice(adder(3), 1), 7)
+}

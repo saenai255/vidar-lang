@@ -1,14 +1,15 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { constants, tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { Analyzer, posOf } from "./analyzer";
 import { hotWarnings } from "./checks";
 import { fmtMain } from "./format";
 import { CompileError } from "./lexer";
 import { Output, Program, emitProgram, loadProgram, transpile } from "./project";
 import { wantsWatch, watchCommand } from "./watch";
+import { LineFilter, MAP_FILE, locationMapper, mapText, readRunMap, runMapOf } from "./runmap";
 
 export { transpile };
 export const EXT = ".vidar";
@@ -23,13 +24,20 @@ function formatError(err: CompileError, program: Program | undefined, kind = "er
 
 function usage(): never {
   console.error(`usage:
-  vidar build <dir|file${EXT}> [-opt] [-o <out-dir>]    transpile the program (default out dir: ./out/<name>)
+  vidar build <dir|file${EXT}> [-opt] [-o <out-dir>] [-debug] [-- odin flags]
+                     transpile the program (default out dir: ./out/<name>) and write <out-dir>/vidar.map.json;
+                     -debug also builds it with 'odin build -debug', next to the generated .odin
   vidar run   <dir|file${EXT}> [-opt] [-- args...]      transpile and 'odin run'
+  vidar test  <dir|file${EXT}> [-opt] [--run <name>[,<name>...]] [-- odin flags]
+                     transpile and 'odin test' the @(test) procs; --run runs only those tests
   vidar check <dir|file${EXT}> [-opt]                   transpile and 'odin check'
   vidar emit  <dir|file${EXT}> [-opt]                   print the generated Odin to stdout
+  vidar map   <out-dir> < log                     rewrite generated .odin locations in a saved log to .vidar ones
   -opt-report in place of -opt also prints what -opt decided, where, and why
-  --watch (run, check) reruns when a .vidar file of the program changes; --clear clears the screen first
+  --watch (run, check, test) reruns when a .vidar file of the program changes; --clear clears the screen first
   vidar fmt   <files|dirs> [--check|--write]        format .vidar files (default: print to stdout)
+  -define:NAME=value is passed on to odin; run and test print panics, failed asserts and test
+  messages at .vidar locations
   vidar lsp                                     run the language server on stdio (same as vidar-lsp)
   vidar --version
 
@@ -67,19 +75,24 @@ export function version(): string {
   }
 }
 
-export function main(argv: string[]): number {
+export function main(argv: string[]): number | Promise<number> {
   if (argv[0] === "--version" || argv[0] === "-v") {
     console.log(`vidar ${version()}`);
     return 0;
   }
   if (argv[0] === "fmt") return fmtMain(argv.slice(1));
   const [cmd, input, ...args] = argv;
+  if (cmd === "map" && input) return mapCommand(input);
   const end = args.indexOf("--");
-  const flags = args.slice(0, end < 0 ? args.length : end);
+  const flags = end < 0 ? args : args.slice(0, end);
+  const tail = end < 0 ? [] : args.slice(end + 1);
   const report = flags.includes("-opt-report");
   const optimize = report || flags.includes("-opt");
-  const rest = args.filter((a, i) => (a !== "-opt" && a !== "-opt-report") || (end >= 0 && i > end));
-  if (!cmd || !input || !["build", "run", "check", "emit"].includes(cmd)) usage();
+  const debug = flags.includes("-debug");
+  const valueOf = (flag: string) => (flags.includes(flag) ? flags[flags.indexOf(flag) + 1] : undefined);
+  // -define:NAME=value goes to odin, for every command that runs it
+  const defines = flags.filter((f) => f.startsWith("-define:"));
+  if (!cmd || !input || !["build", "run", "check", "emit", "test"].includes(cmd)) usage();
   if (!existsSync(input)) {
     console.error(`error: ${input} does not exist`);
     return 1;
@@ -103,22 +116,83 @@ export function main(argv: string[]): number {
     return 0;
   }
   const name = basename(resolve(input)).replace(/\.vidar$/, "");
-  const oi = rest.indexOf("-o");
-  const outDir = cmd === "build" ? resolve(oi >= 0 ? rest[oi + 1] : join("out", name)) : mkdtempSync(join(tmpdir(), "vidar-"));
+  const o = valueOf("-o");
+  const outDir = cmd === "build" ? resolve(o ?? join("out", name)) : mkdtempSync(join(tmpdir(), "vidar-"));
   mkdirSync(outDir, { recursive: true });
   writeOutput(out, outDir);
+  writeFileSync(join(outDir, MAP_FILE), JSON.stringify(runMapOf(out)) + "\n");
+  const mapper = locationMapper(runMapOf(out), [outDir]);
   if (cmd === "build") {
     console.error(`wrote ${out.files.size} file(s) to ${outDir}`);
-    return 0;
+    if (!debug) return 0;
+    // the generated .odin stays next to the binary, so the debugger can show it
+    const binary = join(outDir, name);
+    const r = spawnSync("odin", ["build", outDir, "-debug", `-out:${binary}`, ...defines, ...tail], { encoding: "utf8", stdio: ["inherit", "inherit", "pipe"] });
+    if (r.stderr) process.stderr.write(mapper(r.stderr));
+    if (r.status === 0) console.error(`built ${binary} with debug info`);
+    return r.status ?? 1;
   }
-  const dd = rest.indexOf("--");
-  const progArgs = dd >= 0 ? rest.slice(dd + 1) : [];
-  const odinArgs = cmd === "run" ? ["run", outDir, `-out:${join(outDir, name)}`, ...(progArgs.length ? ["--", ...progArgs] : [])] : ["check", outDir];
-  const r = spawnSync("odin", odinArgs, { encoding: "utf8", stdio: ["inherit", "inherit", "pipe"] });
-  if (r.stderr) {
-    process.stderr.write(mapLocations(r.stderr, out, realpathSync(outDir)));
+  if (cmd === "check") {
+    const r = spawnSync("odin", ["check", outDir, ...defines], { encoding: "utf8", stdio: ["inherit", "inherit", "pipe"] });
+    if (r.stderr) process.stderr.write(mapper(r.stderr));
+    return r.status ?? 1;
   }
-  return r.status ?? 1;
+  if (cmd === "run") {
+    const odinArgs = ["run", outDir, `-out:${join(outDir, name)}`, ...defines, ...(tail.length ? ["--", ...tail] : [])];
+    return runMapped(odinArgs, mapper, false);
+  }
+  // test: `--run a,b` is ODIN_TEST_NAMES with the package filled in
+  const names = valueOf("--run");
+  const pkg = [...out.files].find(([f]) => !f.includes("/"))?.[1].match(/^\s*package\s+(\w+)/m)?.[1] ?? "main";
+  const select = names ? [`-define:ODIN_TEST_NAMES=${names.split(",").map((n) => (n.includes(".") ? n : `${pkg}.${n}`)).join(",")}`] : [];
+  return runMapped(["test", outDir, `-out:${join(outDir, name)}`, ...defines, ...select, ...tail], mapper, true);
+}
+
+/** Runs odin with its stderr (and stdout, for `odin test`) rewritten line by line to .vidar locations. */
+function runMapped(odinArgs: string[], mapper: (line: string) => string, mapStdout: boolean): Promise<number> {
+  return new Promise((done) => {
+    const child = spawn("odin", odinArgs, { stdio: ["inherit", mapStdout ? "pipe" : "inherit", "pipe"] });
+    const filters: LineFilter[] = [];
+    const pipe = (stream: NodeJS.ReadableStream | null, to: NodeJS.WriteStream) => {
+      if (!stream) return;
+      const f = new LineFilter(mapper, (text) => to.write(text));
+      filters.push(f);
+      stream.setEncoding("utf8");
+      stream.on("data", (d: string) => f.push(d));
+    };
+    pipe(child.stdout, process.stdout);
+    pipe(child.stderr, process.stderr);
+    // Ctrl-C reaches the program too; wait for it to exit and report its status
+    const ignore = () => {};
+    process.on("SIGINT", ignore);
+    child.on("error", (err) => {
+      process.off("SIGINT", ignore);
+      console.error(`error: could not run odin: ${err.message}`);
+      done(1);
+    });
+    child.on("close", (code, signal) => {
+      process.off("SIGINT", ignore);
+      for (const f of filters) f.end();
+      done(code ?? (signal ? 128 + (constants.signals[signal] ?? 0) : 1));
+    });
+  });
+}
+
+/** `vidar map <out>`: rewrites a saved log on stdin to .vidar locations, using `<out>/vidar.map.json`. */
+function mapCommand(dir: string): Promise<number> {
+  let mapper: (line: string) => string;
+  try {
+    mapper = locationMapper(readRunMap(dir), [dir]);
+  } catch (err) {
+    console.error(`error: ${(err as Error).message}`);
+    return Promise.resolve(1);
+  }
+  const f = new LineFilter(mapper, (text) => process.stdout.write(text));
+  return new Promise((done) => {
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (d: string) => f.push(d));
+    process.stdin.on("end", () => (f.end(), done(0)));
+  });
 }
 
 function printReport(hints: Analyzer["hints"]): void {
@@ -130,16 +204,16 @@ function printReport(hints: Analyzer["hints"]): void {
 
 /** Points `file.odin(line:col)` locations in Odin's output at the .vidar files and lines they came from. */
 export function mapLocations(text: string, out: Output, root: string): string {
-  for (const [gen, src] of out.sourceOf) {
-    const path = join(root, gen);
-    const lines = out.lineMap.get(gen) ?? [];
-    text = text.split(path).map((part, i) => (i ? part.replace(/^\((\d+):(\d+)\)/, (m, l, c) => (lines[l - 1] ? `(${Math.abs(lines[l - 1])}:${c})` : m)) : part)).join(src);
-  }
-  return text;
+  return mapText(text, runMapOf(out), [root]);
 }
 
 if (require.main === module) {
   const argv = process.argv.slice(2);
   if (wantsWatch(argv)) watchCommand(argv, [process.execPath, __filename]);
-  else process.exit(main(argv));
+  else {
+    const code = main(argv);
+    // a pipe may still be writing out the program's output: let it drain instead of exiting at once
+    if (typeof code === "number") process.exit(code);
+    else code.then((c) => (process.exitCode = c));
+  }
 }

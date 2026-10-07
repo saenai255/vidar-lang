@@ -1,0 +1,63 @@
+package main
+
+import "core:fmt"
+import "core:strconv"
+import "core:strings"
+
+// `vidar test examples/testing` runs the @(test) procs in tests.vidar with `odin test`.
+// A failing `testing.expect`, a failed `assert` or a panic is reported at its .vidar line.
+
+Error :: enum { None, Empty, Bad_Number, Unknown_Op }
+
+Token :: union { int, rune }
+
+// Splits "1 2 +" into tokens, calling `emit` for each one.
+tokenize :: proc(text: string, emit: closure(Token)) -> Error {
+	for word in strings.fields(text, context.temp_allocator) {
+		if strings.contains_any(word[:1], "0123456789") {
+			n := strconv.parse_int(word) or_return .Bad_Number
+			emit(n)
+		} else {
+			emit(rune(word[0]))
+		}
+	}
+	return .None
+}
+
+// Evaluates a reverse Polish expression such as "2 3 4 * +".
+eval :: proc(text: string) -> (result: int, err: Error) {
+	stack: [dynamic]int
+	defer delete(stack)
+	bad := false
+	tokenize(text, proc[&stack, &bad](t: Token) {
+		switch v in t {
+		case int:
+			append(&stack, v)
+		case rune:
+			if len(stack) < 2 {
+				bad = true
+				return
+			}
+			b, a := pop(&stack), pop(&stack)
+			switch v {
+			case '+': append(&stack, a + b)
+			case '-': append(&stack, a - b)
+			case '*': append(&stack, a * b)
+			case: bad = true
+			}
+		}
+	}) or_return
+	if bad do return 0, .Unknown_Op
+	if len(stack) != 1 do return 0, .Empty
+	return stack[0], .None
+}
+
+main :: proc() {
+	for text in ([]string{"2 3 4 * +", "10 4 -", "1 +", "7 x"}) {
+		n := eval(text) catch err {
+			fmt.printf("%q: %v\n", text, err)
+			continue
+		}
+		fmt.printf("%q = %d\n", text, n)
+	}
+}

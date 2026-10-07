@@ -1,0 +1,47 @@
+package main
+
+import "core:testing"
+
+// Run with `vidar test examples/testing`, or one test with `--run eval_errors`.
+
+@(test)
+eval_arithmetic :: proc(t: ^testing.T) {
+	cases := []struct { text: string, want: int }{
+		{"2 3 4 * +", 14},
+		{"10 4 -", 6},
+		{"5", 5},
+	}
+	for c in cases {
+		got := eval(c.text) catch err {
+			testing.expectf(t, false, "%q failed: %v", c.text, err)
+			continue
+		}
+		testing.expect_value(t, got, c.want)
+	}
+}
+
+@(test)
+eval_errors :: proc(t: ^testing.T) {
+	_, err := eval("1 +")
+	testing.expect_value(t, err, Error.Unknown_Op)
+	_, err = eval("7 x")
+	testing.expect_value(t, err, Error.Unknown_Op)
+	_, err = eval("1 2")
+	testing.expect_value(t, err, Error.Empty)
+	_, err = eval("1 2x +")
+	testing.expect_value(t, err, Error.Bad_Number)
+}
+
+@(test)
+tokenize_counts :: proc(t: ^testing.T) {
+	ints, ops := 0, 0
+	err := tokenize("1 2 + 3 *", proc[&ints, &ops](tok: Token) {
+		switch _ in tok {
+		case int:  ints += 1
+		case rune: ops += 1
+		}
+	})
+	testing.expect_value(t, err, Error.None)
+	testing.expect_value(t, ints, 3)
+	testing.expect_value(t, ops, 2)
+}
