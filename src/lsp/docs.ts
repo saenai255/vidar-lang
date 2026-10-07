@@ -193,6 +193,7 @@ export const ATTRIBUTE_DOCS: Record<string, string> = {
   specialize: "Vidar: calls passing constants to basic or enum parameters call a copy where those parameters are compile-time (`$p`).",
   no_table: "Vidar: `-opt` won't turn this procedure into a lookup table on its own.",
   no_specialize: "Vidar: `-opt` won't make specialized copies of this procedure on its own.",
+  no_stack_buffer: "Vidar: `-opt` won't put this procedure's constant-size `make`s (freed by a `defer delete`) on the stack.",
   no_alloc: "Vidar: a compile error when this procedure, or anything it calls, can allocate: `make`, `new`, `append`, map inserts, allocating `core:` procs, or a call through a closure or interface whose targets aren't all known. Builds below `-o:size` also give it a panicking allocator.",
   hot: "Vidar: with `-opt`, every decision against something inside this procedure is a warning: a bounds check left in, an indirect call, an allocation in a loop, a closure not inlined.",
 };

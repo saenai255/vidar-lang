@@ -296,6 +296,7 @@ for s in shapes do total += area(s)        // a direct call per type
 - `fmt` print calls with a literal format write each piece directly, with no format parsing or `any` boxing
 - indexes proven in bounds by their loop (`for i in 0..<len(a)`, `for x, i in a`, `for i := 0; i < len(a); i += 1`) get `#no_bounds_check`
 - adjacent `make`/`new` freed only by `defer delete`/`defer free` in the same block become one allocation
+- `x := make([]T, N)` with a constant `N` and a `defer delete(x)` in the same block goes on the stack when `x` doesn't escape (4 KB in a proc a goroutine can reach, 64 KB elsewhere; `@(no_stack_buffer)` opts out)
 - procs over `bool`/`u8`/`i8` that are pure integer code and loop become tables; procs whose constant arguments bound a loop, or divide, shift or branch inside one, are specialized (at most 4 copies, not when every call passes the same constant); a call passing a closure literal (`proc[...]`) to a closure parameter the callee only calls gets a copy calling the literal's body directly, with its captures on the stack (at most 4 copies per proc, written in the caller's file; not when the callee uses a private name the caller can't see)
 
 `-opt-report` in place of `-opt` also prints what it decided per proc, and why not where it didn't.

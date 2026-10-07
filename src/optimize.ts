@@ -2,6 +2,7 @@ import { Block, Expr, File, Node, Stmt, children } from "./ast";
 import { A, Analyzer, INT_TYPES } from "./analyzer";
 import { fmtPlan } from "./fmtspec";
 import { sizeOf, soaLocals } from "./soa";
+import { stackBuffers } from "./stackbuf";
 import type { LocalSym, Sym, Ty } from "./scope";
 
 /**
@@ -9,12 +10,14 @@ import type { LocalSym, Sym, Ty } from "./scope";
  * it changes nothing but speed; the results are annotations the emitter reads:
  * - `_noBounds` on a statement: every index in it is proven in bounds, so it gets `#no_bounds_check`
  * - `_allocGroup` / `_allocGrouped` / `_groupFree`: slices and pointers freed together, allocated together
+ * - `_stackBuf` / `_stackFree`: a constant-size `make` freed by a defer, on the stack instead (stackbuf.ts)
  * - `_reserve` on a loop: dynamic arrays it appends to at most a known number of times, reserved before it
  * Each decision is also an `an.hint`, so -opt-report and the editor show it.
  */
 export function optimizeProc(body: Block, an: Analyzer, closureCopies = false): void {
   const facts = collectFacts(body);
   provenIndexes(body, facts, an);
+  stackBuffers(body, an, facts);
   allocGroups(body, facts, an);
   reserves(body, facts, an);
   soaLocals(body, an);
@@ -240,7 +243,7 @@ export interface AllocGroup {
 
 /** `x := make([]E, n[, allocator])` or `x := new(T[, allocator])`. */
 function allocation(s: Stmt): { name: string; sym: LocalSym; elem: Expr; count: Expr | null; allocator: Expr | null } | undefined {
-  if (s.k !== "ValueDecl" || s.isConst || s.type || s.names.length !== 1 || s.values.length !== 1 || A(s)._pre?.length) return undefined;
+  if (s.k !== "ValueDecl" || s.isConst || s.type || s.names.length !== 1 || s.values.length !== 1 || A(s)._pre?.length || A(s)._stackBuf) return undefined;
   const call = s.values[0];
   if (call.k !== "Call" || call.fn.k !== "Ident" || A(call.fn)._sym || call.args.some((a) => a.k === "FieldValue")) return undefined;
   const sym = (A(s)._syms as LocalSym[] | undefined)?.[0];

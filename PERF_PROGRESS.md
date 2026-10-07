@@ -19,11 +19,11 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 6 | 1 | Closure call regression (2.9x slower call through a closure) | bug | done |
 | 7 | 2 | `sched_pending_io` busy loop | bug | blocked |
 | 8 | 3 | Dangling by-reference captures in returned closures | bug | merged |
-| 9 | 5 | Intermittent Odin compiler hang | bug | todo |
+| 9 | 5 | Intermittent Odin compiler hang | bug | blocked |
 | 10 | 6 | Value interfaces / closed unions | perf | todo |
 | 11 | 7 | Generated per-type printers and JSON code | perf | todo |
 | 12 | 8 | Multithreaded (M:N) scheduler | perf | todo |
-| 13 | 9 | Constant-size `make` on the stack | perf | todo |
+| 13 | 9 | Constant-size `make` on the stack | perf | merged |
 | 14 | 10 | Wider bounds-check elimination | perf | todo |
 | 15 | 11 | String `switch` through a perfect hash | perf | todo |
 | 16 | 13 | Automatic `@(memo)` and two-parameter `@(table)` | perf | todo |
@@ -181,6 +181,11 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **9, constant-size `make` on the stack** merged (`src/stackbuf.ts`, run before alloc grouping). `x := make([]T, N)` with `N` made of literals and constants, freed once by a `defer delete(x)` later in the same block, never assigned, addressed or captured, becomes `__x_buf: [N]T; x := __x_buf[:]` and the defer becomes a comment. Every use of `x` must be indexing (not `&x[i]`), `len`/`cap`, a `for v in x`, or an argument to a proc that doesn't keep it: `core:fmt`, `core:math`, a list from `core:slice` and `core:mem`, or a proc with a body whose parameter passes the same check (4 calls deep). A `#soa` buffer becomes `#soa[N]T`. `@(no_stack_buffer)` opts out.
+  - Size cap: 4 KB in a proc reachable from a literal passed to `sched.go` (through calls and nested closures; every proc when a goroutine runs a closure value), 64 KB elsewhere. Sizes are `soa.sizeOf`'s estimate, which ignores padding.
+  - `negative_cost`: "scratch allocations" 63 → 46 ms (`weights` in `smooth` went on the stack). "append in a loop" read 40% slower with identical code; it runs right after, and with `allocs` removed from both builds the two match (57 ms each), so that is heap state left by the previous section, not this change.
+  - New case `opt_stack_buffers`.
+- **5, intermittent Odin compiler hang**: not reproduced, blocked on the M3. 800 builds (the `closure_types` and `macro_types_strings` outputs, each at both `-opt` settings, 200 times, 4 in parallel) with Odin dev-2026-10 on linux/amd64: no hang, none over 10 s. No generated code has blank `_` struct fields (checked every fixture, the runtime, `vidar:sched` and the prelude). Next: the same loop on the M3 with dev-2026-07; `/tmp`-style script: `for i in $(seq 200); do timeout 60 odin build <dir> -out:<dir>/p || echo HANG; done`, then `sample` the spinning `odin`.
 - **3, dangling by-reference captures** merged. `src/escape.ts` runs on each proc body after analysis. A closure literal capturing `&x` of one of the proc's locals or parameters (or of a by-value capture, which lives in the closure's copy of its environment) is an error when it is returned (directly, through locals, a named result, or inside a struct literal), stored through a pointer or a slice or in a global or an outer proc's variable, or appended to anything but a local the proc owns. Values are followed through locals and local structs and arrays until nothing changes; calls are not followed. The error is at the capture and suggests `new_clone(x)`.
   - It found one in `examples/cyclic`: `run` appended `proc[&ticks]` to `w.on_frame`, which outlives it. The counter is now `new(int)`.
   - Nine error cases (`tests/errors/closure_ref_*`), and `tests/cases/closure_ref_local` for `&x` closures that stay in the frame (passed to a call, held in a local, appended to a local array).

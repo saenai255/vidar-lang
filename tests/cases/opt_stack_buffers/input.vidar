@@ -1,0 +1,97 @@
+package main
+
+import "core:fmt"
+import "core:slice"
+import "vidar:sched"
+
+N :: 16
+
+sum :: proc(xs: []int) -> (total: int) {
+	for x in xs do total += x
+	return
+}
+
+// keeps what it is given: a caller's buffer can't go on the stack
+Keeper :: struct { kept: []int }
+keep :: proc(k: ^Keeper, xs: []int) { k.kept = xs }
+
+first :: proc(xs: []int) -> []int { return xs }
+
+// opted out
+@(no_stack_buffer)
+heap_only :: proc() -> int {
+	xs := make([]int, 8)
+	defer delete(xs)
+	xs[7] = 9
+	return xs[7]
+}
+
+// a goroutine runs this: 8 KB is over the 4 KB limit for goroutine stacks
+worker :: proc(done: sched.Chan(int)) {
+	buf := make([]int, 1024)
+	defer delete(buf)
+	buf[1023] = 5
+	small := make([]int, 64)
+	defer delete(small)
+	small[0] = 1
+	sched.send(done, buf[1023] + small[0])
+}
+
+main :: proc() {
+	// constant size, indexed, passed to procs that don't keep it: on the stack
+	a := make([]int, N)
+	defer delete(a)
+	for i in 0..<len(a) do a[i] = N - i
+	slice.sort(a)
+	fmt.println(sum(a), a[0], a[N - 1])
+
+	// a constant expression
+	b := make([]f64, N * 2 + 1)
+	defer delete(b)
+	b[3] = 1.5
+	fmt.println(len(b), b[3])
+
+	// not constant: stays on the heap
+	n := 8
+	c := make([]int, n)
+	defer delete(c)
+	fmt.println(len(c))
+
+	// kept by the callee
+	k: Keeper
+	d := make([]int, 4)
+	defer delete(d)
+	keep(&k, d)
+	fmt.println(len(k.kept))
+
+	// returned through a callee
+	e := make([]int, 4)
+	defer delete(e)
+	fmt.println(len(first(e)))
+
+	// sliced
+	f := make([]int, 4)
+	defer delete(f)
+	g := f[1:]
+	fmt.println(len(g))
+
+	// too big: 100 000 ints
+	h := make([]int, 100_000)
+	defer delete(h)
+	h[99_999] = 7
+	fmt.println(h[99_999])
+
+	fmt.println(heap_only())
+
+	done := sched.make_chan(int, 1)
+	sched.go(proc[done]() { worker(done) })
+	fmt.println(sched.recv(done))
+
+	// a stack buffer in a loop is a fresh, zeroed one each time
+	for round in 0..<3 {
+		r := make([]int, 4)
+		defer delete(r)
+		r[round] += round + 1
+		fmt.println(r)
+	}
+}

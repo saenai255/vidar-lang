@@ -39,8 +39,8 @@ converted :: proc() {
 	for i in 0..<len(grid) do #no_bounds_check grid[i].x += grid[i].vx
 	__fmt_1(grid[7].x, grid[3])
 
-	buf := make(#soa[]Particle, 5)
-	defer delete(buf)
+	__buf_buf: #soa[5]Particle; buf := __buf_buf[:]
+	/* delete(buf): buf is on the stack */
 	for i := 0; i < len(buf); i += 1 do #no_bounds_check buf[i].id = i * i
 	total := 0
 	for b in buf do total += b.id

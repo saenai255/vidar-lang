@@ -5,6 +5,7 @@ import { A, AnonField, AnonTemp, Analyzer, ClosureSpec, IfaceMethod, ImplInfo, M
 import { joinTokens, repeatable } from "./comptime";
 import { decodeString, encodeString, fmtPlan } from "./fmtspec";
 import { AllocGroup, Reserve, optimizeProc } from "./optimize";
+import type { StackBuf } from "./stackbuf";
 import type { CaptureSym, GlobalSym, LocalSym, PackageInfo, PkgSym, Sym, Ty, Unit } from "./scope";
 
 type ProcLit = Extract<Expr, { k: "ProcLit" }>;
@@ -463,6 +464,12 @@ export class Emitter {
         const temps: AnonTemp[] | undefined = A(n)._anonTemps;
         const hoisted = temps?.map((t, i) => `${t.pre.includes("\n") ? t.pre : i ? " " : ""}${t.name} := ${this.emit(t.value)};`).join("").concat(" ") ?? "";
         if (A(n)._allocGroup) return keepLines(n, this.allocGroup(A(n)._allocGroup));
+        const buf: StackBuf | undefined = A(n)._stackBuf;
+        if (buf) {
+          const name = n.names[0].name;
+          const soa = A((n.values[0] as Extract<Expr, { k: "Call" }>).args[0])._fix ? "#soa" : "";
+          return keepLines(n, `__${name}_buf: ${soa}[${this.emit(buf.count)}]${this.emit(buf.elem)}; ${name} := __${name}_buf[:]`);
+        }
         const declared: GlobalSym | undefined = A(n)._syms?.[0];
         const table = declared?.kind === "global" ? this.an.tables.get(declared) : undefined;
         if (table) return this.tableDecl(n, declared!, table);
@@ -480,6 +487,7 @@ export class Emitter {
       case "Catch":
         return this.catchStmt(n);
       case "Defer": {
+        if (A(n)._stackFree) return `/* ${joinTokens(n.toks.slice(n.stmt.start, n.stmt.end))}: ${A(n)._stackFree} is on the stack */` + this.skipLines(n);
         const free: { group: AllocGroup; keep: boolean } | undefined = A(n)._groupFree;
         if (!free) return this.generic(n);
         const first = free.group.members[0];

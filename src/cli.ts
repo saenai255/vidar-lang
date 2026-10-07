@@ -36,7 +36,8 @@ fmt calls with a literal format, bounds checks a loop already guarantees, and
 allocations freed together. It also turns pure integer procs over bool, u8 or i8
 that loop into lookup tables, and copies procs whose constant arguments bound a
 loop into versions where they are compile-time, and procs passed closure literals
-into copies that call them directly. @(no_table) and @(no_specialize) opt a proc out.
+into copies that call them directly, and puts constant-size makes freed by a defer
+on the stack. @(no_table), @(no_specialize) and @(no_stack_buffer) opt a proc out.
 @(no_alloc) makes it an error for a proc to allocate; with -opt, @(hot) warns about
 every -opt decision against something inside a proc.`);
   process.exit(2);

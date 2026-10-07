@@ -188,7 +188,11 @@ export class Analyzer {
     }
   }
 
+  /** every package being compiled, set by `run` */
+  packages: PackageInfo[] = [];
+
   run(packages: PackageInfo[]): void {
+    this.packages = packages;
     for (const pkg of packages) {
       for (const f of pkg.files) {
         const fileScope = new Scope(pkg.scope);
@@ -254,7 +258,7 @@ export class Analyzer {
         });
         A(s)._syms = syms;
         if (inWhen) for (const sym of syms) this.whenDeclared.add(sym);
-        const attrs = this.takeAttrs(s, ["specialize", "table", "no_specialize", "no_table", "no_alloc", "hot"]);
+        const attrs = this.takeAttrs(s, ["specialize", "table", "no_specialize", "no_table", "no_stack_buffer", "no_alloc", "hot"]);
         if (attrs.size) {
           const lit = s.values.length === 1 && s.isConst ? unwrapProc(s.values[0]) : undefined;
           const which = [...attrs].map((a) => `@(${a})`).join(" and ");
@@ -266,6 +270,7 @@ export class Analyzer {
           else if (attrs.has("table")) this.tables.set(syms[0], { lit } as TableInfo);
           if (attrs.has("no_alloc")) this.noAllocProcs.set(syms[0], lit), (A(lit.body)._noAlloc = true);
           if (attrs.has("hot")) this.hotProcs.set(syms[0], lit);
+          if (attrs.has("no_stack_buffer")) A(lit.body)._noStackBuffer = true;
           const out = [...attrs].filter((a) => a.startsWith("no_") && a !== "no_alloc").map((a) => a.slice(3));
           if (out.length) this.optOut.set(syms[0], new Set(out));
         }
