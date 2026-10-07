@@ -1,0 +1,5 @@
+If Else For In Return Proc Struct Enum Switch Case Defer Ident Ident Ident Ident Ident 
+aa+ab | ab | short "ba" | short "bb" | short "ca" | short "cb" | short "a" | short "" | short "aaa" | short "é" | other | other | 
+2 0
+7
+1 8 7 0

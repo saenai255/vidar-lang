@@ -12,7 +12,7 @@ const TABLE_OPS = 24;
 /** compile-time steps one input of an automatic table may take */
 const TABLE_STEPS = 20_000;
 
-const KEEPS = new Set(["private", "require_results", "specialize", "table", "no_specialize", "no_table", "no_stack_buffer", "no_alloc", "hot"]);
+const KEEPS = new Set(["private", "require_results", "specialize", "table", "no_specialize", "no_table", "no_stack_buffer", "no_perfect_hash", "no_alloc", "hot"]);
 const DIVIDES = new Set(["/", "%", "%%", "<<", ">>"]);
 const ASSIGNS = new Set(["=", "+=", "-=", "*=", "/=", "%=", "%%=", "&=", "|=", "~=", "<<=", ">>=", "&~="]);
 

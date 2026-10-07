@@ -1,0 +1,102 @@
+package main
+
+import "core:fmt"
+
+Token :: enum { Ident, If, Else, For, In, Return, Proc, Struct, Enum, Switch, Case, Defer }
+
+// 11 keywords: a perfect hash, then one compare
+keyword :: proc(word: string) -> Token {
+	switch word {
+	case "if":
+		return .If
+	case "else":
+		return .Else
+	case "for", "in":
+		// two strings, one case
+		return .For if word == "for" else .In
+	case "return":
+		return .Return
+	case "proc":
+		return .Proc
+	case "struct":
+		return .Struct
+	case "enum":
+		return .Enum
+	case "switch":
+		return .Switch
+	case "case":
+		return .Case
+	case "defer":
+		return .Defer
+	}
+	return .Ident
+}
+
+// fallthrough, a default case in the middle, an init statement, and strings that share a length and bytes
+kind :: proc(s: string) -> string {
+	out := "?"
+	switch t := s; t {
+	case "aa":
+		out = "aa"
+		fallthrough
+	case "ab":
+		out = out == "aa" ? "aa+ab" : "ab"
+	case:
+		out = "other"
+	case "ba", "bb", "ca", "cb", "a", "", "aaa", "é":
+		out = fmt.tprintf("short %q", t)
+	}
+	return out
+}
+
+// same length, first, middle and last bytes: the cheap hash can't tell them apart, so FNV-1a it is
+twins :: proc(s: string) -> int {
+	switch s {
+	case "axbxa": return 1
+	case "aybya": return 2
+	case "azbza": return 3
+	case "awbwa": return 4
+	case "avbva": return 5
+	case "aubua": return 6
+	case "atbta": return 7
+	case "asbsa": return 8
+	}
+	return 0
+}
+
+// opted out
+@(no_perfect_hash)
+plain_twins :: proc(s: string) -> int {
+	switch s {
+	case "a1": return 1
+	case "a2": return 2
+	case "a3": return 3
+	case "a4": return 4
+	case "a5": return 5
+	case "a6": return 6
+	case "a7": return 7
+	case "a8": return 8
+	}
+	return 0
+}
+
+// fewer than 8 strings: compared one after another
+small :: proc(s: string) -> int {
+	switch s {
+	case "x": return 1
+	case "y": return 2
+	}
+	return 0
+}
+
+main :: proc() {
+	for w in ([]string{"if", "else", "for", "in", "return", "proc", "struct", "enum", "switch", "case", "defer", "iff", "", "x", "procs", "els"}) {
+		fmt.print(keyword(w), "")
+	}
+	fmt.println()
+	for s in ([]string{"aa", "ab", "ba", "bb", "ca", "cb", "a", "", "aaa", "é", "zz", "b"}) do fmt.print(kind(s), "| ")
+	fmt.println()
+	fmt.println(small("y"), small("z"))
+	fmt.println(plain_twins("a7"))
+	fmt.println(twins("axbxa"), twins("asbsa"), twins("atbta"), twins("arbra"))
+}

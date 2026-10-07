@@ -5,6 +5,7 @@ loop with indexes          350662169760
 bounds, hoisted            100
 bounds, lockstep           22114880
 bounds, offsets            61
+string switch              487500
 scratch allocations        108319
 append in a loop           1030000
 blur, radius at run time   28708

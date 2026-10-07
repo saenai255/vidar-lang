@@ -25,7 +25,7 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 12 | 8 | Multithreaded (M:N) scheduler | perf | todo |
 | 13 | 9 | Constant-size `make` on the stack | perf | merged |
 | 14 | 10 | Wider bounds-check elimination | perf | merged |
-| 15 | 11 | String `switch` through a perfect hash | perf | todo |
+| 15 | 11 | String `switch` through a perfect hash | perf | merged |
 | 16 | 13 | Automatic `@(memo)` and two-parameter `@(table)` | perf | todo |
 | 17 | 15 | Struct field reordering, then hot/cold splitting | perf | todo |
 
@@ -181,6 +181,9 @@ The transpiler applies both on its own under `-opt`, as it already does for one-
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **11, string `switch` through a perfect hash** merged (`src/strswitch.ts`). A `switch` with a string tag whose cases are all string literals, 8 or more, distinct and without `\x`/octal escapes, gets its tag rewritten to `__strswitch_N(tag)` and each literal to its index. The generated proc hashes, looks the slot up in an `@(rodata)` table and confirms with one compare, returning -1 (the default case) otherwise. The hash is found at compile time: first the length and the first, middle and last bytes mixed by an odd multiplier, then seeded FNV-1a, each with tables of 2^⌈log2 n⌉ to 4× that and 20,000 seeds per size; the TypeScript search computes exactly the Odin u32 arithmetic. Everything is rewritten in place, so lines and `fallthrough` stay. `@(no_perfect_hash)` opts out.
+  - `negative_cost` "string switch" (12 keywords, 16 words looked up 5 million times), plain vs `-opt`, linux/amd64: 63 → 15.8 ms.
+  - New case `opt_string_switch`: keywords, two strings in one case, `fallthrough`, a default case in the middle, an init statement, `""` and a multi-byte string, strings only FNV tells apart, an opt-out, and a 2-case switch left alone.
 - **10, wider bounds-check elimination** merged (`provenIndexes` in `src/optimize.ts`).
   - Constant offsets: `a[i + k]` / `a[i - k]` are proven when the range is `lo..<len(a) - m` with `k <= m` and `lo >= k` (also `for i := lo; i < len(a) - m; i += c`).
   - Hoisting and lockstep, one mechanism: for `for i in lo..<n` (n made of stable locals, literals, `len`, ...) or `for x, i in a` over a slice or array, with no break/return/`or_*` in the body, an array indexed by plain `i` in the body's own statements (not under an if, a loop, `&&`, `||` or `?:`) and declared before the loop gets `__vidar.bounds_upto(n, lo, len(b)...)` before the loop. The runtime helper panics with `max(lo, min len)` and that length, the panic the loop would have hit, just earlier. Statements whose every index is then proven get `#no_bounds_check`; a call statement gets `#no_bounds_check { ... }`, since Odin takes the directive only on some statements. A loop that is a `do` body is put in braces.

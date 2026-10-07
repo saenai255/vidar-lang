@@ -3,6 +3,7 @@ import { A, Analyzer, INT_TYPES } from "./analyzer";
 import { fmtPlan } from "./fmtspec";
 import { sizeOf, soaLocals } from "./soa";
 import { stackBuffers } from "./stackbuf";
+import { stringSwitches } from "./strswitch";
 import type { LocalSym, Sym, Ty } from "./scope";
 
 /**
@@ -21,6 +22,7 @@ export function optimizeProc(body: Block, an: Analyzer, closureCopies = false): 
   allocGroups(body, facts, an);
   reserves(body, facts, an);
   soaLocals(body, an);
+  stringSwitches(body, an);
   if (!an.hints) return;
   walk(body, (n) => {
     if (n.k !== "Call") return;

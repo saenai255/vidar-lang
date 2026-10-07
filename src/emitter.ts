@@ -6,6 +6,7 @@ import { joinTokens, repeatable } from "./comptime";
 import { decodeString, encodeString, fmtPlan } from "./fmtspec";
 import { AllocGroup, BoundsGuard, Reserve, optimizeProc } from "./optimize";
 import type { StackBuf } from "./stackbuf";
+import { StrHash, strHashProc } from "./strswitch";
 import type { CaptureSym, GlobalSym, LocalSym, PackageInfo, PkgSym, Sym, Ty, Unit } from "./scope";
 
 type ProcLit = Extract<Expr, { k: "ProcLit" }>;
@@ -298,6 +299,8 @@ export class Emitter {
   private hoistedText = new Map<Node, string[]>();
   private fileUsesRuntime = false;
   private helpers: string[] = [];
+  /** -opt: string switches through a perfect hash, and their helper procs */
+  private strSwitches = new Map<Node, string>();
   private callHelpers = new Map<string, string>();
   private closureCount = 0;
   private callHelperCount = 0;
@@ -407,7 +410,7 @@ export class Emitter {
 
   emit(n: Node): string {
     const iface: GlobalSym | undefined = A(n)._wrapIface;
-    let text = this.emitNode(n);
+    let text: string = A(n)._emitAs ?? this.emitNode(n);
     if (iface) text = `${this.qualify(iface, fromName(iface))}(${text})`;
     const up: { from: GlobalSym; to: GlobalSym } | undefined = A(n)._upcast;
     if (up) text = `${this.qualify(up.from, upcastName(up.from, up.to), `convert '${up.from.name}' to '${up.to.name}'`)}(${text})`;
@@ -475,8 +478,19 @@ export class Emitter {
         }
         // Odin rejects `do { ... }`, which a statement macro that expands to several statements gives
         return this.block(n).replace(/^do\s+(?=\{)/, "");
-      case "Switch":
+      case "Switch": {
+        const sh: StrHash | undefined = A(n)._strHash;
+        if (sh) {
+          let name = this.strSwitches.get(n);
+          if (!name) {
+            this.strSwitches.set(n, (name = `__strswitch_${this.strSwitches.size}`));
+            this.helpers.push(strHashProc(name, sh, encodeString));
+          }
+          A(n.tag!)._fix = { prefix: `${name}(`, suffix: ")" };
+          for (const [lit, i] of sh.lits) A(lit)._emitAs = String(i);
+        }
         return this.pretty ? this.prettySwitch(n) : this.generic(n);
+      }
       case "ValueDecl": {
         const temps: AnonTemp[] | undefined = A(n)._anonTemps;
         const hoisted = temps?.map((t, i) => `${t.pre.includes("\n") ? t.pre : i ? " " : ""}${t.name} := ${this.emit(t.value)};`).join("").concat(" ") ?? "";

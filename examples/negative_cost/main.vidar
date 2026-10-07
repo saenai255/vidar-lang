@@ -160,6 +160,34 @@ wide_bounds :: #force_no_inline proc(n, reps: int) {
 	section("bounds, offsets", start, total)
 }
 
+// ---- -opt: a switch on 8 or more strings goes through a perfect hash ----
+
+keyword :: #force_no_inline proc(word: string) -> int {
+	switch word {
+	case "if": return 1
+	case "else": return 2
+	case "for": return 3
+	case "in": return 4
+	case "return": return 5
+	case "proc": return 6
+	case "struct": return 7
+	case "enum": return 8
+	case "switch": return 9
+	case "case": return 10
+	case "defer": return 11
+	case "import": return 12
+	}
+	return 0
+}
+
+keywords :: #force_no_inline proc(n: int) {
+	words := []string{"if", "count", "else", "for", "total", "in", "return", "proc", "struct", "x", "enum", "switch", "case", "defer", "import", "value"}
+	start := time.tick_now()
+	total := 0
+	for i in 0..<n do total += keyword(words[noise(i) % len(words)])
+	section("string switch", start, total)
+}
+
 // ---- -opt: allocations freed together are made together ----
 
 smooth :: proc(src: []f32) -> f32 {
@@ -384,6 +412,7 @@ main :: proc() {
 	status(20_000 * scale)
 	bounds(100_000, 10 * scale)
 	wide_bounds(100_000, 10 * scale)
+	keywords(100_000 * scale)
 	allocs(20_000 * scale)
 	appends(1_000, 1_000 * scale)
 	blur(100_000, 2 * scale)

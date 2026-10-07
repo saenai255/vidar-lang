@@ -258,7 +258,7 @@ export class Analyzer {
         });
         A(s)._syms = syms;
         if (inWhen) for (const sym of syms) this.whenDeclared.add(sym);
-        const attrs = this.takeAttrs(s, ["specialize", "table", "no_specialize", "no_table", "no_stack_buffer", "no_alloc", "hot"]);
+        const attrs = this.takeAttrs(s, ["specialize", "table", "no_specialize", "no_table", "no_stack_buffer", "no_perfect_hash", "no_alloc", "hot"]);
         if (attrs.size) {
           const lit = s.values.length === 1 && s.isConst ? unwrapProc(s.values[0]) : undefined;
           const which = [...attrs].map((a) => `@(${a})`).join(" and ");
@@ -271,6 +271,7 @@ export class Analyzer {
           if (attrs.has("no_alloc")) this.noAllocProcs.set(syms[0], lit), (A(lit.body)._noAlloc = true);
           if (attrs.has("hot")) this.hotProcs.set(syms[0], lit);
           if (attrs.has("no_stack_buffer")) A(lit.body)._noStackBuffer = true;
+          if (attrs.has("no_perfect_hash")) A(lit.body)._noPerfectHash = true;
           const out = [...attrs].filter((a) => a.startsWith("no_") && a !== "no_alloc").map((a) => a.slice(3));
           if (out.length) this.optOut.set(syms[0], new Set(out));
         }
