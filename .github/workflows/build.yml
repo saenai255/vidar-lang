@@ -9,6 +9,8 @@ on:
 
 env:
   EPOCH: "0"
+  # the Odin release the tests build with (its `odin version` is dev-2026-07-nightly)
+  ODIN_VERSION: dev-2026-07
 
 jobs:
   version:
@@ -26,8 +28,63 @@ jobs:
           # an extension version must be semver, and a hex hash isn't a number: the commit's time of day stands in
           echo "extension=$EPOCH.$day.$((10#$time))" >> "$GITHUB_OUTPUT"
 
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # every test tool leaves its temp dirs in $TMPDIR, where the failure upload finds them
+      - name: Use the runner's temp dir
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Odin
+        run: |
+          case "$RUNNER_OS-$RUNNER_ARCH" in
+            Linux-X64) platform=linux-amd64 ;;
+            Linux-ARM64) platform=linux-arm64 ;;
+            macOS-ARM64) platform=macos-arm64 ;;
+            macOS-X64) platform=macos-amd64 ;;
+            *) echo "no Odin release for $RUNNER_OS-$RUNNER_ARCH"; exit 1 ;;
+          esac
+          mkdir -p "$RUNNER_TEMP/odin"
+          curl -fsSL --retry 3 "https://github.com/odin-lang/Odin/releases/download/$ODIN_VERSION/odin-$platform-$ODIN_VERSION.tar.gz" \
+            | tar xz -C "$RUNNER_TEMP/odin" --strip-components=1
+          echo "$RUNNER_TEMP/odin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/odin/odin" version
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ols isn't installed: the LSP suite skips its forwarding checks
+      - name: Test
+        run: npm test
+
+      - name: Test with goroutines on 4 threads
+        env:
+          VIDAR_ODIN_FLAGS: -define:VIDAR_THREADS=4
+        run: node scripts/test.js
+
+      - name: Stress the scheduler
+        run: npm run stress -- tests/cases/sched_pending_io -n 500
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hangs-${{ matrix.os }}
+          path: ${{ runner.temp }}/vidar-stress-*/hang-*.txt
+          if-no-files-found: ignore
+
   build:
-    needs: version
+    needs: [version, test]
     strategy:
       fail-fast: false
       matrix:
@@ -81,7 +138,7 @@ jobs:
 
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [version, build]
+    needs: [version, test, build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

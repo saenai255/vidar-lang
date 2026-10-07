@@ -249,7 +249,7 @@ git worktree remove --force "$TMPDIR/vidar-base"
 - Commit only when asked.
 - **Always use [Conventional Commits](https://www.conventionalcommits.org/)**: `type(scope): summary`, with a short imperative summary, e.g. `feat(opt): reserve for appends under an if` or `fix(sched): run blocking closures inline when idle`.
   - Types: `feat`, `fix`, `perf`, `refactor`, `test`, `docs`, `build`, `ci`, `chore`. A breaking change gets `!` after the type (`feat!: ...`).
-  - Every push to `main` is released (`.github/workflows/build.yml`), and the release notes are generated from these messages, grouped by type. A message that doesn't follow the format lands under "Other".
+  - Every push to `main` is tested and then released (`.github/workflows/build.yml`: the `test` job runs `npm test`, the suite with `VIDAR_THREADS=4` and a stress run on ubuntu-24.04 and macos-14, and the binaries are built only if it passes), and the release notes are generated from these messages, grouped by type. A message that doesn't follow the format lands under "Other".
   - Older commits in the log predate this ("Add ...; fix ...").
 - The working tree often holds the user's own uncommitted edits, for example in `examples/slime_mud`. Check `git status`, and ask before committing files you didn't change.
 
