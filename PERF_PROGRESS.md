@@ -28,16 +28,16 @@ Status values: `todo`, `in progress`, `done (worktree)`, `merged`, `blocked`.
 | 15 | 11 | String `switch` through a perfect hash | perf | merged |
 | 16 | 13 | Automatic `@(memo)` and two-parameter `@(table)` | perf | merged |
 | 17 | 15 | Struct field reordering, then hot/cold splitting | perf | merged (reordering only) |
-| 18 | 22 | `vidar test` | dev tooling | todo |
-| 19 | 23 | Run-time crash locations mapped to `.vidar` | dev tooling | todo |
+| 18 | 22 | `vidar test` | dev tooling | merged |
+| 19 | 23 | Run-time crash locations mapped to `.vidar` | dev tooling | merged |
 | 20 | 24 | `--watch` for `run`, `check` and `test` | dev tooling | merged |
-| 21 | 25 | Expand-at-cursor view of generated Odin | dev tooling | todo |
-| 22 | 26 | Code actions (quick fixes) | dev tooling | todo |
-| 23 | 27 | Semantic tokens | dev tooling | todo |
+| 21 | 25 | Expand-at-cursor view of generated Odin | dev tooling | merged |
+| 22 | 26 | Code actions (quick fixes) | dev tooling | merged |
+| 23 | 27 | Semantic tokens | dev tooling | merged |
 | 24 | 28 | Workspace symbols, call hierarchy, find implementations | dev tooling | merged |
-| 25 | 29 | `-opt` decisions panel and code lens | dev tooling | todo |
-| 26 | 30 | `vidar fmt` | dev tooling | todo |
-| 27 | 31 | Debugger support: `vidar build -debug` and a launch config | dev tooling | todo |
+| 25 | 29 | `-opt` decisions panel and code lens | dev tooling | merged |
+| 26 | 30 | `vidar fmt` | dev tooling | merged |
+| 27 | 31 | Debugger support: `vidar build -debug` and a launch config | dev tooling | merged |
 
 ## Tooling
 
@@ -252,6 +252,16 @@ Odin has no `#line` directive, so stepping happens in the generated Odin.
 - Loop fusion and pipeline macros, PGO for dispatch order, and the smaller scheduler items (single-sender/single-receiver channels, stack-size inference, preemption).
 
 ## Log
+- **Wave 4 (developer tooling) merged.** All of 22 to 31 are in; `npm test` passes (70 unit, 337 case, 198 LSP checks). Not tried in a real VS Code yet: run `npm run vsix` on the M3.
+  - **22, `vidar test`** (with 23 and 31, one worktree). `vidar test <in> [-opt] [--run a,b] [-- odin flags]` transpiles to a temp dir and runs `odin test`, exiting with its status; `--run` becomes `-define:ODIN_TEST_NAMES=<pkg>.<name>`; `test --watch` works. New `examples/testing`, and `tests/vidar_test/failing` (a failed expect, a failed assert and a bounds-check panic, at lines a `catch` shifts), checked by two `testing: ...` steps in `scripts/test.js`.
+  - **23, run-time locations.** `src/runmap.ts`: both shapes Odin prints, `path.odin(L:C)` and `[file.odin:L:proc()]` (the second only when the base name is unique). `vidar run` streams stderr through the filter, `vidar test` both streams; a partial line is written after 50 ms of quiet. Every build writes `<out>/vidar.map.json`, and `vidar map <out> < log` rewrites a saved log. `mapLocations` uses it; a compile error on a helper line vidar added now keeps its generated path instead of a `.vidar` path with the wrong line.
+  - **31, debugging.** `vidar build -debug` keeps the `.odin` next to a `-debug` binary. The extension has a `vidar` debug type that builds and then starts CodeLLDB (`lldb`) or gdb (`cppdbg`); `vidar.cliPath`; the bundled binary runs the CLI with `VIDAR_CLI=1`. *Show Generated Odin* opens at the cursor's line (`vidar/generatedOdin` takes a `line`), in the debug build's real file when it is current, so breakpoints bind. Checked with lldb by hand on linux.
+  - **25, Expand at Cursor.** `src/lsp/expand.ts`, `vidar/expandAt { uri, position, opt? }`: the output lines whose line map falls in the statement's lines, plus the helper declarations they name (`__closure_N`, `__fmt_N`, two levels, at most 12). An unchanged statement shows the innermost enclosing one that changed, never a whole top-level declaration. The extension's view follows the cursor and has a `-opt` toggle.
+  - **26, quick fixes.** `src/lsp/actions.ts`. Interface conversion: "Use a pointer to it (&x)" is preferred; "Allocate a heap copy (new_clone, caller frees)" is a separate action, never preferred, and `source.fixAll` applies only preferred fixes, so an allocation is never added without being chosen. When `&x` would dangle (the shared walker in `src/escape.ts` now also follows interface values) or isn't possible (parameters, loop values), only `new_clone` is offered, and the diagnostic says why. Also: capture by reference for a write to a by-value capture, a missing import for about 40 known packages (an LSP-only diagnostic), and the opt-out attribute for an automatic table, specialization, memo, stack buffer or perfect hash. `CompileError` carries an optional `fix`; in tolerant (editor) analysis an interface-value error no longer stops the rest of the proc. Error messages are unchanged.
+  - **27, semantic tokens.** `src/lsp/semantic.ts`, full and range. Standard types, plus modifiers `captured`, `byRef`, `closure`; `readonly` on by-value captures, `defaultLibrary` on prelude macros and `vidar:sched`, `async` on `sched.go`. Not done: enum members and fields at their uses (the analyzer doesn't resolve those names).
+  - **29, optimization report.** `src/lsp/optreport.ts`: `vidar/optReport` groups `an.hint` decisions by file and enclosing proc; a code lens over each proc ("N optimizations, M not", off with `optHints: off` or `vidar.optCodeLens: false`); the extension's *Vidar: Optimization Report* explorer view.
+  - **30, `vidar fmt`.** `src/format.ts`, token-based: only the whitespace between tokens changes, never a token's line, so blank-line runs stay (line numbers reach the program through `call_site()`, `dbg!`, `#assert`). Indents by bracket depth, spaces binary operators, commas and declaration colons; leaves alone what it can't be sure of (unary operators, ranges, `@(...)`, alignment runs). Re-lexes its output and refuses on any token change. `--check`, `--write`, LSP formatting. `tests/unit/fmt.test.js` checks idempotence over every `.vidar` file and that scrambled-then-formatted cases emit the same tokens, with and without `-opt`. Doesn't use odinfmt.
+  - **Merging:** the agents' three copies of the ols-crash fix were dropped for 4337b74; conflicts in `server.ts`, `cli.ts`, the extension and README were unions of both sides.
 - **28, workspace symbols, call hierarchy, find implementations** merged. `src/lsp/navigation.ts`, reusing `features.ts`' index. `workspace/symbol` over every analysis the server holds (substring, then in-order letters; no `__` names). `textDocument/implementation` on an interface (its `variants`, extending interfaces' implementations included) or an interface method (the bound procs). Call hierarchy on procs, proc groups (a group call counts for each member), interface methods (a closed interface's call counts for every bound proc) and macros (calls in an expansion sit at the macro call); items are keyed by declaration position, so incoming calls are found across packages. Not followed: calls through closure values or proc variables. New workspace `tests/lsp/nav/`, 17 checks.
   - Also fixed: with no `ols` on PATH on Node 22 the server crashed on the first opened file (the handshake was written before the process spawned, and the rejected write killed the server). Two LSP checks made stale by items 9 and 10 are updated (`make([]int, 16)` is now a stack buffer, not a grouped alloc; `@(hot)` uses an index that can't be proven).
 - **24, `--watch`** merged. `src/watch.ts`: `vidar run --watch` / `check --watch` rerun the whole `vidar` command as a child (own process group, SIGTERM then SIGKILL on a change, so what `odin run` started dies too). Watches each project package directory with `fs.watch` (rename-saves work, no recursive watch needed), falls back to `fs.watchFile` polling; the file set is reloaded in tolerant mode before each run, so new imports and broken programs are handled. 100 ms debounce, `--clear`. `.odin` files in project packages count too. `test --watch` is one line (`WATCH_COMMANDS`) once `vidar test` exists. 8 unit tests in `tests/unit/watch.test.js`.
