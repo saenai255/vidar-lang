@@ -115,7 +115,7 @@ function analyzePackage(dir: string, quiet = false): PackageState {
 function syncOdin(dir: string, a: Analysis): void {
   if (!a.errors.length) {
     try {
-      ols!.recordEmit(dir, a, emitProgram(a));
+      ols!.recordEmit(dir, a, emitProgram(a, undefined, { columns: true }));
     } catch {}
   }
   ols!.sync(dir, a, overrides()).catch((err) => connection.console.error(`vidar: ols sync failed: ${err}`));

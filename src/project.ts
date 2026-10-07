@@ -5,7 +5,7 @@ import { basename, dirname, join, posix, resolve } from "node:path";
 import { CompileError, lex } from "./lexer";
 import { Parser } from "./parser";
 import { A, Analyzer } from "./analyzer";
-import { Emitter, CLOSURE_RUNTIME } from "./emitter";
+import { ColumnEntry, Emitter, CLOSURE_RUNTIME } from "./emitter";
 import { resetGensym } from "./comptime";
 import type { File, Node } from "./ast";
 import { PackageInfo, Scope, Unit } from "./scope";
@@ -249,6 +249,8 @@ export interface Output {
   sourceOf: Map<string, string>;
   /** output path -> the source line of each output line (see `EmittedFile.lines`) */
   lineMap: Map<string, number[]>;
+  /** with `columns`: output path -> where the source's tokens went (see `EmittedFile.columns`) */
+  columns?: Map<string, ColumnEntry[]>;
 }
 
 export function outputName(pkg: PackageInfo, f: File): string {
@@ -256,21 +258,27 @@ export function outputName(pkg: PackageInfo, f: File): string {
   return posix.join(pkg.unit.outDir, pkg.unit.merged && pkg.prefix ? `${pkg.prefix}${base}` : base);
 }
 
-/** Generated Odin for an error-free program; `expansions` collects the code written for each macro call. */
-export function emitProgram(p: Program, expansions?: Map<Node, string[]>): Output {
+/**
+ * Generated Odin for an error-free program; `expansions` collects the code written for each macro call, and
+ * `columns` (for the language server) records a column map per file.
+ */
+export function emitProgram(p: Program, expansions?: Map<Node, string[]>, opts: { columns?: boolean } = {}): Output {
   const files = new Map<string, string>();
   const sourceOf = new Map<string, string>();
   const lineMap = new Map<string, number[]>();
+  const columns = opts.columns ? new Map<string, ColumnEntry[]>() : undefined;
   let closures = false;
   for (const unit of p.units) {
     const em = new Emitter(p.analyzer, unit);
     em.expansions = expansions ?? null;
+    em.columns = !!columns;
     for (const pkg of unit.packages) {
       if (pkg.dir === dirname(schedSourcePath())) for (const [name, text] of SCHED_ASM) files.set(posix.join(unit.outDir, name), text);
       for (const f of pkg.files) {
         const name = outputName(pkg, f);
-        const { text, lines } = em.emitFile(f, pkg);
+        const { text, lines, columns: cols } = em.emitFile(f, pkg);
         files.set(name, text);
+        if (columns && cols) columns.set(name, cols);
         sourceOf.set(name, f.path);
         lineMap.set(name, lines);
       }
@@ -278,7 +286,7 @@ export function emitProgram(p: Program, expansions?: Map<Node, string[]>): Outpu
     closures ||= em.usesRuntime;
   }
   if (closures) files.set(`${RUNTIME_DIR}/runtime.odin`, CLOSURE_RUNTIME);
-  return { files, sourceOf, lineMap };
+  return { files, sourceOf, lineMap, ...(columns ? { columns } : {}) };
 }
 
 /** Transpiles in-memory sources forming one package (imports are not followed). */

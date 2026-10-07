@@ -9,6 +9,7 @@ import {
   StreamMessageReader, StreamMessageWriter, createMessageConnection,
 } from "vscode-languageserver/node";
 import { Program as Analysis, Output, outputName } from "../project";
+import type { ColumnEntry } from "../emitter";
 
 /**
  * Forwards requests on plain Odin code to ols, run over a shadow copy of the generated Odin.
@@ -30,17 +31,70 @@ interface Shadow {
   bySource: Map<string, string>;
   /** per output file, the source line of each shadow line (see `EmittedFile.lines`) */
   lines: Map<string, number[]>;
+  /** per output file, the emit it was patched from, for the column map */
+  patched: Map<string, { good: GoodEmit; out: Patched }>;
 }
 
 interface GoodEmit {
   sourceText: string;
   output: string;
   lines: number[];
+  /** where each source name went (see `EmittedFile.columns`) */
+  columns?: ColumnEntry[];
+}
+
+/** A request's place in the shadow tree: `shift` (source minus shadow column) applies inside `span`, the token's shadow columns. */
+interface Target {
+  textDocument: { uri: string };
+  position: Position;
+  lines: number[];
+  shift: number;
+  span?: [number, number];
 }
 
 export interface Patched {
   text: string;
   lines: number[];
+  /** how the old output and source carry over: see `oldSourceLine` and `newOutputLine` */
+  keep?: { pre: number; suf: number; cut: number; tail: number; middle: number; shift: number; lines: number };
+}
+
+/** The line (1-based) of the old source that current source line `line` still is, or 0 for an edited line. */
+export function oldSourceLine(p: Patched, line: number): number {
+  const k = p.keep;
+  if (!k) return 0;
+  if (line <= k.pre) return line;
+  if (line > k.lines - k.suf && line <= k.lines) return line - k.shift;
+  return 0;
+}
+
+/** The line (0-based) of the patched output that old output line `line` became, or -1 when it was cut. */
+export function newOutputLine(p: Patched, line: number): number {
+  const k = p.keep;
+  if (!k) return -1;
+  if (line < k.cut) return line;
+  if (line >= k.tail) return line - k.tail + k.cut + k.middle;
+  return -1;
+}
+
+/** The column map's entry for the token at `character` (0-based, also just after it) of source line `line` (1-based). */
+export function columnAt(columns: ColumnEntry[], line: number, character: number): ColumnEntry | undefined {
+  let lo = 0;
+  let hi = columns.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (columns[mid].line < line) lo = mid + 1;
+    else hi = mid;
+  }
+  let best: ColumnEntry | undefined;
+  for (let i = lo; i < columns.length && columns[i].line === line; i++) {
+    const e = columns[i];
+    const from = e.col - 1;
+    // inside the token wins over just after it (`a.b` at the `.`: `a`, at `b`: `b`)
+    if (character >= from && character < from + e.len) return e;
+    if (character === from + e.len) best = e;
+  }
+  return best;
 }
 
 const TIMEOUT_MS = 2000;
@@ -71,10 +125,27 @@ export function patch(oldSource: string, oldOutput: string, current: string, old
   return {
     text: [...o0.slice(0, cut), ...middle, ...o0.slice(tail)].join("\n"),
     lines: [...map.slice(0, cut), ...middle.map((_, i) => pre + i + 1), ...map.slice(tail).map((l) => (l === 0 ? 0 : l + Math.sign(l) * shift))],
+    keep: { pre, suf, cut, tail, middle: middle.length, shift, lines: s1.length },
   };
 }
 
 const params = (t: { textDocument: { uri: string }; position: Position }) => ({ textDocument: t.textDocument, position: t.position });
+
+/**
+ * Where a request at `p` on a source line vidar rewrote goes in the shadow file: the column map of the emit the
+ * shadow was patched from gives the name's output column. Only for lines unchanged since that emit, and only
+ * when the shadow still has the name there.
+ */
+export function columnTarget(good: { sourceText: string; columns?: ColumnEntry[] }, out: Patched, p: Position, sourceLine: string, shadowLines: string[]): Pick<Target, "position" | "shift" | "span"> | undefined {
+  if (!good.columns) return undefined;
+  const old = oldSourceLine(out, p.line + 1);
+  if (!old || good.sourceText.split("\n")[old - 1] !== sourceLine) return undefined;
+  const e = columnAt(good.columns, old, p.character);
+  const line = e ? newOutputLine(out, e.outLine) : -1;
+  if (!e || line < 0 || shadowLines[line]?.substr(e.outCol, e.len) !== sourceLine.substr(e.col - 1, e.len)) return undefined;
+  const shift = e.col - 1 - e.outCol;
+  return { position: { line, character: p.character - shift }, shift, span: [e.outCol, e.outCol + e.len] };
+}
 
 const identity = (text: string): number[] => text.split("\n").map((_, i) => i + 1);
 
@@ -151,7 +222,7 @@ export class OdinBridge {
     for (const [name, text] of out.files) {
       const src = out.sourceOf.get(name);
       const sourceText = src && a.sources.find((s) => s.path === src)?.text;
-      if (sourceText !== undefined) this.lastGood.set(src!, { sourceText, output: text, lines: out.lineMap.get(name) ?? identity(text) });
+      if (sourceText !== undefined) this.lastGood.set(src!, { sourceText, output: text, lines: out.lineMap.get(name) ?? identity(text), columns: out.columns?.get(name) });
       else extra.set(name, text);
     }
     this.extraFiles.set(program, extra);
@@ -162,7 +233,7 @@ export class OdinBridge {
     if (this.disabled || !(await this.start())) return;
     let shadow = this.shadows.get(program);
     if (!shadow) {
-      shadow = { dir: join(this.root, String(this.shadows.size)), files: new Map(), bySource: new Map(), lines: new Map() };
+      shadow = { dir: join(this.root, String(this.shadows.size)), files: new Map(), bySource: new Map(), lines: new Map(), patched: new Map() };
       this.shadows.set(program, shadow);
     }
     for (const pkg of a.packages) {
@@ -190,6 +261,8 @@ export class OdinBridge {
     const out = good ? patch(good.sourceText, good.output, text, good.lines) : { text, lines: identity(text) };
     this.put(shadow, name, out.text, path);
     shadow.lines.set(name, out.lines);
+    if (good) shadow.patched.set(name, { good, out });
+    else shadow.patched.delete(name);
   }
 
   private put(shadow: Shadow, name: string, text: string, source?: string): void {
@@ -210,8 +283,11 @@ export class OdinBridge {
     }
   }
 
-  /** The shadow document and position for `p` in `path`, if that line is passed through unchanged. */
-  private target(program: string, path: string, text: string, p: Position) {
+  /**
+   * The shadow document and position for `p` in `path`: on a line passed through unchanged, the same column;
+   * on a line vidar rewrote, where the emitter's column map says the name under `p` went.
+   */
+  private target(program: string, path: string, text: string, p: Position): Target | undefined {
     const shadow = this.shadows.get(program);
     if (this.disabled || !shadow) return undefined;
     const name = this.refresh(shadow, path, text);
@@ -219,9 +295,13 @@ export class OdinBridge {
     const sourceLine = text.split("\n")[p.line];
     const shadowLines = shadow.files.get(name)!.text.split("\n");
     const lines = shadow.lines.get(name) ?? [];
+    if (sourceLine === undefined) return undefined;
+    const textDocument = { uri: pathToFileURL(join(shadow.dir, name)).toString() };
     const line = lines.findIndex((l, i) => l === p.line + 1 && shadowLines[i] === sourceLine);
-    if (sourceLine === undefined || line < 0) return undefined;
-    return { textDocument: { uri: pathToFileURL(join(shadow.dir, name)).toString() }, position: { line, character: p.character }, lines };
+    if (line >= 0) return { textDocument, position: { line, character: p.character }, lines, shift: 0 };
+    const mapped = shadow.patched.get(name);
+    const at = mapped && columnTarget(mapped.good, mapped.out, p, sourceLine, shadowLines);
+    return at && { textDocument, lines, ...at };
   }
 
   private async request<T>(method: string, params: unknown): Promise<T | undefined> {
@@ -253,9 +333,11 @@ export class OdinBridge {
   }
 
   /** A range on the shadow line of `t` as a range on the source line `p`; undefined for any other line. */
-  private onSourceLine<R extends { start: Position; end: Position }>(r: R | undefined, t: { position: Position }, p: Position): R | undefined {
+  private onSourceLine<R extends { start: Position; end: Position }>(r: R | undefined, t: Target, p: Position): R | undefined {
     if (!r || r.start.line !== t.position.line || r.end.line !== t.position.line) return undefined;
-    return { ...r, start: { ...r.start, line: p.line }, end: { ...r.end, line: p.line } };
+    // on a rewritten line, only a range inside the name the request was on maps back
+    if (t.span && (r.start.character < t.span[0] || r.end.character > t.span[1])) return undefined;
+    return { ...r, start: { line: p.line, character: r.start.character + t.shift }, end: { line: p.line, character: r.end.character + t.shift } };
   }
 
   async hover(program: string, path: string, text: string, p: Position): Promise<Hover | undefined> {
@@ -292,7 +374,7 @@ export class OdinBridge {
     return items.filter((i) => !GENERATED_NAME.test(i.label)).map((i) => this.completionOnSource(i, t, p));
   }
 
-  private completionOnSource(item: CompletionItem, t: { position: Position; lines: number[] }, p: Position): CompletionItem {
+  private completionOnSource(item: CompletionItem, t: Target, p: Position): CompletionItem {
     const edit = item.textEdit;
     let textEdit = edit;
     if (edit && "range" in edit) {
