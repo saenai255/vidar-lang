@@ -234,11 +234,11 @@ function change(text) {
   check("vidar errors reported (several at once)", d1.diagnostics.length === 2 && msgs.includes("not captured") && msgs.includes("private"), msgs);
 
   // @(hot): -opt decisions against code inside it are warnings
-  const hot = original + "\n@(hot)\nhot_sum :: proc(a, b: []int) -> (t: int) {\n\tfor i in 0..<len(a) do t += b[i]\n\treturn\n}\n";
+  const hot = original + "\n@(hot)\nhot_sum :: proc(a, b: []int) -> (t: int) {\n\tfor i in 0..<len(a) do t += b[a[i]]\n\treturn\n}\n";
   const warned = nextDiagnostics((d) => d.diagnostics.some((x) => x.severity === 2));
   change(hot);
   const w = (await warned).diagnostics.find((x) => x.severity === 2);
-  const hotLine = hot.split("\n").findIndex((l) => l.includes("t += b[i]"));
+  const hotLine = hot.split("\n").findIndex((l) => l.includes("t += b[a[i]]"));
   check("@(hot) warns about a bounds check left in", w.range.start.line === hotLine && w.message.includes("no bounds proof"), JSON.stringify(w));
 
   // diagnostics from `odin check` on save, mapped back to the .vidar line
@@ -627,7 +627,7 @@ function change(text) {
   check("inlay hint after an automatic table's name, with the reason as tooltip", hintsAt(oh, oEnd("bits :: proc", "bits")).includes("table") && oh.find((h) => h.label === "table")?.tooltip?.includes("256 results"), ohs);
   check("inlay hint after a specialized proc's name counts its copies", hintsAt(oh, oEnd("blur :: proc", "blur")).includes("specialized ×2"), ohs);
   check("inlay hint on a statement whose indexing is unchecked", hintsAt(oh, oEnd("total += a[i]")).includes("unchecked"), ohs);
-  check("inlay hints on allocations made together", hintsAt(oh, oEnd("tmp := make([]int, 16)")).includes("grouped alloc") && hintsAt(oh, oEnd("out := make([]int, 16)")).includes("grouped alloc"), ohs);
+  check("inlay hints on constant-size makes put on the stack", hintsAt(oh, oEnd("tmp := make([]int, 16)")).includes("stack buffer") && hintsAt(oh, oEnd("out := make([]int, 16)")).includes("stack buffer"), ohs);
   check("inlay hint on a compiled fmt call", hintsAt(oh, oEnd('fmt.printf("%d %d\\n", bits(7), double(3))')).includes("fmt inlined"), ohs);
   check("inlay hints tell devirtualized and direct interface calls apart", hintsAt(oh, oEnd("area(s)")).includes("devirtualized") && hintsAt(oh, oEnd("area(&sq)")).includes("direct"), ohs);
   check("inlay hints from a macro's expansion go at the macro call", oh.some((h) => h.label === "unchecked" && h.position.line === oEnd("sum_all!(out)").line && h.tooltip?.startsWith("in sum_all!:")), ohs);
