@@ -224,24 +224,31 @@
                 "type": "string",
                 "enum": [
                   "lldb",
-                  "gdb"
+                  "gdb",
+                  "dap"
                 ],
                 "enumDescriptions": [
-                  "CodeLLDB (vadimcn.vscode-lldb)",
-                  "gdb through the C/C++ extension (ms-vscode.cpptools)"
+                  "CodeLLDB (vadimcn.vscode-lldb): breakpoints go on the generated Odin",
+                  "gdb through the C/C++ extension (ms-vscode.cpptools): breakpoints go on the generated Odin",
+                  "vidar dap with lldb-dap: breakpoints, frames, variables and stepping on .vidar lines"
                 ],
                 "description": "Debugger that runs the binary.",
                 "default": "lldb"
               },
               "debuggerPath": {
                 "type": "string",
-                "description": "gdb executable, with \"debugger\": \"gdb\".",
+                "description": "gdb executable with \"debugger\": \"gdb\", or the lldb-dap executable with \"debugger\": \"dap\".",
                 "default": "gdb"
               },
               "stopOnEntry": {
                 "type": "boolean",
                 "description": "Stop at the program's entry.",
                 "default": false
+              },
+              "justMyCode": {
+                "type": "boolean",
+                "description": "With \"debugger\": \"dap\": stepping into Odin's own code (core, base) steps back out.",
+                "default": true
               }
             }
           }
