@@ -577,6 +577,14 @@ len(shapes); clear(&shapes); delete(shapes)
 | 3 of 10 fields over 100k structs (`#soa`) | 75 ms | 29 ms |
 | closure literal called per element (copy per closure) | 7.6 ms | 4.0 ms |
 
+Newer sections, measured so far only on a 4-core linux/amd64 VM (`-o:speed`; re-measure on the M3):
+
+| | plain | vidar |
+|---|---|---|
+| `json.unmarshal` of 100 structs (~10 KB), 500 times | 220 to 260 ms | 21 to 23 ms |
+| 1,000,000 structs, fields reordered (40 bytes to 24) | 112 ms | 53 ms |
+| `examples/fanout --uneven` at 4 threads, before and after work stealing | 101 ms | 40 ms |
+
 Bounds checks rarely matter: LLVM already removes most of them in loops like these. The table wins only when the body costs more than a memory load; a bit count, which LLVM turns into one instruction, gains nothing. On the slime_mud server simulation, `-opt` took a run from 980 ms to 760 ms; the hand-written Odin version takes 905 ms.
 
 ## Testing
@@ -670,7 +678,7 @@ comment-token = "//"
 language-servers = ["vidar"]
 ```
 
-Options (LSP `initializationOptions`): `odinCheckOnSave` (default `true`), `odinPath` (default `"odin"`), `ols` (default `true`), `olsPath` (default `"ols"`) and `indexWorkspace` (default `true`).
+Options (LSP `initializationOptions`): `odinCheckOnSave` (default `true`), `odinPath` (default `"odin"`), `ols` (default `true`), `olsPath` (default `"ols"`), `optHints` (`"on"`, `"all"` to also show decisions against, or `"off"`; default `"on"`), `optCodeLens` (default `true`) and `indexWorkspace` (default `true`).
 
 ## Tests
 
@@ -761,6 +769,8 @@ npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many tim
 - **Anonymous struct literals** as arguments need a callee vidar can see, with a parameter typed `$T`, `any` or `..any` (or one of `fmt`'s print procs); in `return`, assignments and other expressions, `{ ... }` keeps Odin's meaning.
 - **`@(no_alloc)` trusts lists.** Core procs are judged by name from a list of ones known not to allocate, and a custom `fmt` formatter or an allocator set on the context isn't followed. The run-time backstop only covers builds below `-o:size`.
 - **Extension keywords are contextual.** `closure`, `quote`, `interface`, `impl`, `catch` and `errdefer` remain usable as ordinary identifiers, and `take` is only a keyword inside `do!` and `comptime!` blocks.
+- **Run-time locations inside closure bodies aren't mapped.** A closure body with captures is lifted into generated lines that have no source line, so a panic, a goroutine dump or a race report from inside one shows a `.odin` location rather than the `.vidar` line.
+- **Servers at several threads:** an idle scheduler thread rechecks for work every 10 ms, which caps request rates for I/O-bound programs; slime_mud's server does about 5k to 9k commands/s at 4 threads against about 113k at 1. Prefer 1 thread for I/O-bound servers until that wait is replaced.
 - **Goroutines run on one thread by default.** With `-define:VIDAR_THREADS=N` they run on N threads, and an idle thread takes runnable goroutines from the others; `main` never moves, and `@(thread_local)` variables are not safe to use across a park in a goroutine. At 1 thread, `blocking` work and non-Linux file I/O are the only other threads. Goroutines aren't preempted: a long loop that never calls into `sched` holds up the others. `core:sync` locks park the whole thread, so use `sched.Mutex` between goroutines. Only darwin/arm64, linux/arm64, linux/amd64 and windows/amd64 are supported, and only darwin/arm64 is tested so far. windows/amd64 has only been cross-checked from Linux (`odin check` and `odin build -build-mode:obj` with `-target:windows_amd64`, and the switch routine run under a Linux harness with a fake TIB), never run on Windows.
 - **`-opt` and `@(table)`** trust the compile-time interpreter. Automatic tables use only integer code it runs exactly; a `@(table)` you write yourself must be pure, which vidar does not check.
 - **Renaming a field or enum member** is refused while any use of a member of that name has a type vidar can't infer or that sits in a comptime proc (see [Language server](#language-server)). Fields of anonymous structs and of Odin's own types aren't renamed.
