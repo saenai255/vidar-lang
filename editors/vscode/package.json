@@ -163,6 +163,11 @@
         }
       }
     },
+    "breakpoints": [
+      {
+        "language": "vidar"
+      }
+    ],
     "debuggers": [
       {
         "type": "vidar",
@@ -232,8 +237,8 @@
                   "gdb through the C/C++ extension (ms-vscode.cpptools): breakpoints go on the generated Odin",
                   "vidar dap with lldb-dap: breakpoints, frames, variables and stepping on .vidar lines"
                 ],
-                "description": "Debugger that runs the binary.",
-                "default": "lldb"
+                "description": "Debugger that runs the binary. dap (the default) runs `vidar dap`, which needs lldb-dap.",
+                "default": "dap"
               },
               "debuggerPath": {
                 "type": "string",
