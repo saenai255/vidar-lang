@@ -140,7 +140,7 @@ When a step fails, the stress run's `hang-*.txt` stacks are uploaded as an artif
 - workspace symbols, go to implementation and the call hierarchy, across packages, proc groups, an extended interface and a macro (`tests/lsp/nav`);
 - the workspace index (`tests/lsp/index`, added as a workspace folder): workspace symbols and `vidar/optReport` find programs never opened, skipped directories stay out, no diagnostics until a file is opened, and removing the folder drops them;
 - `-opt` inlay hints (`tests/lsp/opt`), their setting, and that they follow edits;
-- semantic tokens (`tests/lsp/semantic`), decoded from the stream: interfaces and their methods, closures, by-value and by-reference captures, macro calls, `sched.go`, ranges, and a file with a syntax error;
+- semantic tokens (`tests/lsp/semantic`), decoded from the stream: interfaces and their methods, closures, by-value and pointer captures, macro calls, `sched.go`, ranges, and a file with a syntax error;
 - field and enum-member uses (`tests/lsp/members`): hover, definition, references and semantic tokens through pointers, `using`, `#soa` and another package, implicit selectors in each kind of position, a field rename that recompiles to the same program, and a rename refused over a use it can't resolve;
 - the `vidar/optReport` request (decisions under their enclosing proc, decisions against marked) and the code lenses with their settings;
 - quick fixes (`tests/lsp/actions`): each fix's edit, missing imports of packages found under `odin root` (one preferred, or one action per package that shares the name), that `new_clone` is never preferred, that "fix all" never allocates, and that the fixed file has no errors left;

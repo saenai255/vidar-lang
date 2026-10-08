@@ -25,7 +25,7 @@ The server analyzes the program rooted at the open file's package: that package 
 
 | Feature | Details |
 |---|---|
-| **Hover** | Signature and kind for procs, types, interfaces (with their impls), interface methods (with their interface and the procs implementing them), macros, imports, locals, struct fields and enum members (also at their uses: `x.field`, `Enum.Member`, `.Member`). Also shows the generated Odin name (when a cycle prefixes it) and whether a variable is captured by reference. On a macro call's name: the code it expands to, as the emitter writes it, with statements it runs first (`do!`); cut after 40 lines. |
+| **Hover** | Signature and kind for procs, types, interfaces (with their impls), interface methods (with their interface and the procs implementing them), macros, imports, locals, struct fields and enum members (also at their uses: `x.field`, `Enum.Member`, `.Member`). Also shows the generated Odin name (when a cycle prefixes it) and whether a variable is captured through a pointer (`&x`). On a macro call's name: the code it expands to, as the emitter writes it, with statements it runs first (`do!`); cut after 40 lines. |
 | **Outline** | Procs, macros, structs (fields), interfaces (methods), impl blocks (bindings). |
 | **Inlay hints** | What `-opt` would decide, without building with it. See [Inlay hints](#inlay-hints-and-code-lens). |
 | **Semantic tokens** | Names colored by what they are rather than how they look. See [Semantic tokens](#semantic-tokens). |
@@ -84,7 +84,7 @@ Uses are resolved through the analyzer's types. Hover, definition, references, r
 - When `&x` would dangle, only `new_clone` is offered, and the diagnostic says why. It dangles when the value is a local, or a literal, of the proc and the interface value leaves it: it is returned, stored through a pointer, in a slice or in a global, appended to something the proc doesn't own, passed to a proc that does one of these with it, or passed to `sched.go`. These are the same rules `src/escape.ts` applies to closures.
 - `new_clone` is also the only fix for a parameter or a loop value, since Odin can't take their address.
 
-**A write to a by-value capture:** capture by reference (`proc[&n]`).
+**A write to a by-value capture:** capture a pointer (`proc[&n]`).
 
 **A package used without its import** (`fmt.println` with no `import "core:fmt"`): an error, with "Add import" as the fix.
 
@@ -139,7 +139,7 @@ They come from a second analysis with `-opt` on, made only when hints are reques
 | `async` | `sched.go` |
 | `closure` (custom) | a closure value or type |
 | `captured` (custom) | a captured variable inside its closure |
-| `byRef` (custom) | captured by reference |
+| `byRef` (custom) | captured through a pointer (`&x`) |
 
 Generated `__` names never get a token. A file with errors gets tokens for what was analyzed.
 
@@ -188,7 +188,7 @@ The server keeps a shadow copy of the generated Odin in a temp directory and run
 
 **Who answers first.** Vidar answers for its own constructs (closures, captures, interfaces, impls, macros, anonymous structs). ols is the fallback, and for hover it also wins when vidar couldn't infer a local's type.
 
-**Lines vidar rewrites** (a closure literal, a line that uses a by-reference capture, a `catch`): the emitter's column map says where each name kept in the output went (for a closure body, into the helper proc at the end of the file), and a request on such a name goes there. A range in the answer maps back only when it lies inside that name. The map is recorded only for the language server's shadow copy, and only for lines unchanged since the last error-free emit.
+**Lines vidar rewrites** (a closure literal, a line that uses a pointer capture, a `catch`): the emitter's column map says where each name kept in the output went (for a closure body, into the helper proc at the end of the file), and a request on such a name goes there. A range in the answer maps back only when it lies inside that name. The map is recorded only for the language server's shadow copy, and only for lines unchanged since the last error-free emit.
 
 ## Editor setup
 

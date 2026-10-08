@@ -9,7 +9,7 @@ All new keywords are contextual: `closure`, `quote`, `interface`, `impl`, `catch
 | Syntax | Meaning |
 |---|---|
 | `proc[x](...) -> R { ... }` | closure capturing `x` by value (a copy taken when the closure is created) |
-| `proc[&x](...) -> R { ... }` | closure capturing `x` by reference: a pointer to `x` where it lives, so the closure must not outlive it |
+| `proc[&x](...) -> R { ... }` | closure capturing a pointer to `x`, where it lives, so the closure must not outlive it |
 | `proc[x, &y, z](...) { ... }` | mixed capture list |
 | `proc[](...) { ... }` | closure with no captures |
 | `proc(...) { ... }` | (no brackets) an ordinary Odin proc, not a closure |

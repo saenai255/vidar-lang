@@ -51,6 +51,6 @@ Generated names start with `__`.
 
 | Name | What it is |
 |---|---|
-| `__env` | a closure's captures: `__env.n`, or `__env.f^` for a by-reference capture |
+| `__env` | a closure's captures: `__env.n`, or `__env.f^` for a pointer capture (`&f`) |
 | `__closure_N` | a closure body, as a proc |
 | `{data, __vtable}` | an interface value |

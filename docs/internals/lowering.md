@@ -46,7 +46,7 @@ __closure_0 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env, int) -> int)
 }
 ```
 
-## A closure that captures by reference
+## A closure that captures a pointer
 
 `[&total]` stores a pointer to `total` in the environment instead of a copy, so the closure writes the caller's variable.
 

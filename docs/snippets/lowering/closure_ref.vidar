@@ -6,5 +6,5 @@ main :: proc() {
 	add(2)
 }
 
-// title: A closure that captures by reference
+// title: A closure that captures a pointer
 // about: `[&total]` stores a pointer to `total` in the environment instead of a copy, so the closure writes the caller's variable.

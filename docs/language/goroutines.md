@@ -282,14 +282,14 @@ vidar:sched: race: goroutine 3 writes 0x56494b42fbd0 at main.odin(56:4)
 	and no channel operation, sched.Mutex, sched.Wait_Group or sched.go orders the two
 ```
 
-**Watched:** assignments (`=`, `+=`, ...) to a global variable, or to a local captured by reference (`&x`), and to fields and fixed-array elements of those held in place. Each watched address has a shadow entry with its last writer and that writer's clock.
+**Watched:** assignments (`=`, `+=`, ...) to a global variable, or to a local captured through a pointer (`&x`), and to fields and fixed-array elements of those held in place. Each watched address has a shadow entry with its last writer and that writer's clock.
 
 **Not watched:**
 
 - reads (a write racing with a read isn't reported);
 - memory reached through a pointer, a slice, a dynamic array or a map;
 - writes made by passing `&x` to a proc (`append(&xs, ...)`, `sched.recv` into `&x`);
-- parameters and loop variables captured by reference;
+- parameters and loop variables captured through a pointer (`&x`);
 - closures run by `blocking`;
 - `core:sync` or atomics as ordering.
 

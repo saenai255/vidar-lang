@@ -18,7 +18,7 @@ A closure is 136 bytes by default: 128 bytes of room for captures plus the proc.
 
 ### Can a closure capture another closure?
 
-By reference or through a pointer, yes. By value, no, because it would need more room than it has. Capture `&f`, or `new_clone(f)` if it outlives the frame.
+Through a pointer, yes: capture `&f`, or `new_clone(f)` if it outlives the frame. By value, no, because it would need more room than it has.
 
 ### Why do I get "nested procs cannot see it"?
 

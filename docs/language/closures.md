@@ -22,11 +22,14 @@ main :: proc() {
 | Written | Meaning |
 |---|---|
 | `proc[x](...)` | copies `x` into the closure |
-| `proc[&x](...)` | captures `x` by reference: the closure holds `&x` and nothing is moved |
+| `proc[&x](...)` | captures a pointer to `x`: the closure holds `&x` and nothing is moved |
 | `proc[]()` | a closure with no captures |
 | `proc(...)` | no brackets: an ordinary Odin proc |
 
 **A closure is a plain value.** Its captures are stored inside it, so copying, returning or appending a closure copies them. Nothing is ever allocated.
+
+> [!NOTE]
+> Odin has no references, so `[&x]` is a pointer capture: the closure stores the address of `x`. Vidar's error messages and editor hover call it "capture by reference".
 
 **For state that changes, or that outlives the frame, capture a pointer:** `count := new_clone(0)` with `proc[count]`, as in `make_counter` above.
 
@@ -42,7 +45,7 @@ Button :: struct {
 
 main :: proc() {
 	total := 0
-	add := proc[&total](n: int) { total += n }   // by reference: writes the caller's total
+	add := proc[&total](n: int) { total += n }   // captures &total, so it writes the caller's total
 	add(2); add(3)
 	fmt.println(total)                            // 5
 
