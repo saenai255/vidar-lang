@@ -40,12 +40,17 @@ function counting(opts) {
   return s;
 }
 
+// a killed process nobody has reaped yet (a zombie) still answers signal 0
 const alive = (pid) => {
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
+  }
+  try {
+    return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8"));
+  } catch {
+    return true;
   }
 };
 

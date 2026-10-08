@@ -9,7 +9,7 @@ Color :: enum { Red, Green, Blue }
 
 paint :: proc(id: int, scale: f64, c: Color, out: sched.Chan(string), wg: ^sched.Wait_Group) {
 	defer sched.done(wg)
-	sched.sleep(time.Duration(10 * (3 - id)) * time.Millisecond)
+	sched.sleep(time.Duration(100 * (3 - id)) * time.Millisecond)
 	sched.send(out, fmt.aprintf("worker %d: %v x%.1f", id, c, scale))
 }
 
@@ -66,7 +66,7 @@ main :: proc() {
 	// select with a timeout
 	slow := sched.make_chan(string)
 	timeout := sched.make_chan(bool, 1)
-	sched.go(proc[slow]() { sched.sleep(50 * time.Millisecond); sched.send(slow, "too late") })
+	sched.go(proc[slow]() { sched.sleep(500 * time.Millisecond); sched.send(slow, "too late") })
 	sched.go(proc[timeout]() { sched.sleep(10 * time.Millisecond); sched.send(timeout, true) })
 	msg: string
 	switch sched.select(sched.on_recv(slow, &msg), sched.on_recv(timeout)) {

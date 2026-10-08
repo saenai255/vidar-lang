@@ -1,34 +1,39 @@
 name: Build binaries and VS Code extension
 
-# Every push to main is released as <epoch>.<yyyymmdd>.<short hash>, dated by the commit (UTC).
+# Every PR merged into main is released as <year>.<month>.<n>, n counting the month's releases (UTC).
 on:
-  push:
-    branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, closed]
   workflow_dispatch:
 
 env:
-  EPOCH: "0"
   # the Odin release the tests build with (its `odin version` is dev-2026-07-nightly)
   ODIN_VERSION: dev-2026-07
 
+# merges queue, so each release sees the previous one's tag
+concurrency:
+  group: ${{ (github.event.pull_request.merged && 'release') || format('pr-{0}', github.event.pull_request.number || github.run_id) }}
+  cancel-in-progress: false
+
 jobs:
   version:
+    if: github.event.action != 'closed' || github.event.pull_request.merged
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.v.outputs.version }}
-      extension: ${{ steps.v.outputs.extension }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          fetch-depth: 0
       - id: v
         run: |
-          day=$(TZ=UTC git log -1 --date=format-local:%Y%m%d --format=%cd)
-          time=$(TZ=UTC git log -1 --date=format-local:%H%M%S --format=%cd)
-          echo "version=$EPOCH.$day.$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
-          # an extension version must be semver, and a hex hash isn't a number: the commit's time of day stands in
-          echo "extension=$EPOCH.$day.$((10#$time))" >> "$GITHUB_OUTPUT"
+          month=$(date -u +%Y.%-m)
+          n=$(git tag --list "$month.*" | wc -l)
+          echo "version=$month.$((n + 1))" >> "$GITHUB_OUTPUT"
 
   test:
+    if: github.event.action != 'closed' || github.event.pull_request.merged
     strategy:
       fail-fast: false
       matrix:
@@ -36,6 +41,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
 
       # every test tool leaves its temp dirs in $TMPDIR, where the failure upload finds them
       - name: Use the runner's temp dir
@@ -101,9 +108,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       VIDAR_VERSION: ${{ needs.version.outputs.version }}
-      EXTENSION_VERSION: ${{ needs.version.outputs.extension }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
 
       - uses: actions/setup-node@v4
         with:
@@ -129,7 +137,7 @@ jobs:
       - name: Package extension
         working-directory: editors/vscode
         run: |
-          npm pkg set version="$EXTENSION_VERSION"
+          npm pkg set version="$VIDAR_VERSION"
           npm run package
           mv ./*.vsix "vidar-vscode-$VIDAR_VERSION-${{ matrix.target }}.vsix"
 
@@ -142,17 +150,21 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      github.event.action == 'closed' && github.event.pull_request.merged
+      && github.event.pull_request.base.ref == 'main'
     needs: [version, test, build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     env:
       VERSION: ${{ needs.version.outputs.version }}
+      MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
           fetch-depth: 0
 
       - uses: actions/download-artifact@v4
@@ -164,7 +176,7 @@ jobs:
       - name: Write release notes
         run: |
           prev=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName // empty')
-          if [ -n "$prev" ] && git rev-parse -q --verify "refs/tags/$prev" > /dev/null; then range=("$prev..$GITHUB_SHA"); else range=(-1 "$GITHUB_SHA"); fi
+          if [ -n "$prev" ] && git rev-parse -q --verify "refs/tags/$prev" > /dev/null; then range=("$prev..$MERGE_SHA"); else range=(-1 "$MERGE_SHA"); fi
           git log --no-merges --format='%s (%h)' "${range[@]}" > commits.txt
           section() {
             lines=$( (grep -E "^$1(\([^)]*\))?!?: " commits.txt || true) | sed -E 's/^[a-z]+(\(([^)]*)\))?!?: /- **\2:** /; s/^- \*\*:\*\* /- /')
@@ -193,5 +205,5 @@ jobs:
             echo "release $VERSION already exists"
             exit 0
           fi
-          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$VERSION" --notes-file notes.md \
+          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --target "$MERGE_SHA" --title "$VERSION" --notes-file notes.md \
             dist/bin/*.tar.gz dist/editors/vscode/*.vsix
