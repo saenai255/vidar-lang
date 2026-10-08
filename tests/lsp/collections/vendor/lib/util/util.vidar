@@ -1,0 +1,5 @@
+package util
+
+twice :: proc(n: int) -> int {
+	return n * 2
+}

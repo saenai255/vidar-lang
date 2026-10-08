@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import {
-  CodeActionKind, CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, DocumentSymbol, InitializeResult, ProposedFeatures,
+  CodeActionKind, CompletionItem, DidChangeWatchedFilesNotification, CompletionItemKind, Diagnostic, DiagnosticSeverity, DocumentSymbol, InitializeResult, ProposedFeatures,
   SymbolKind as LspSymbolKind, TextDocumentSyncKind, TextDocuments, TextEdit, createConnection,
 } from "vscode-languageserver/node";
 import { TextDocument } from "vscode-languageserver-textdocument";
@@ -55,6 +55,7 @@ let folderEvents = false;
 let ols: OdinBridge | undefined;
 let hintRefresh = false;
 let semanticRefresh = false;
+let watchRegistration = false;
 let lensRefresh = false;
 
 const toPath = (uri: string) => fileURLToPath(uri);
@@ -229,6 +230,7 @@ connection.onInitialize((params): InitializeResult => {
   Actions.setOdinPath(settings.odinPath);
   hintRefresh = !!params.capabilities.workspace?.inlayHint?.refreshSupport;
   semanticRefresh = !!params.capabilities.workspace?.semanticTokens?.refreshSupport;
+  watchRegistration = !!params.capabilities.workspace?.didChangeWatchedFiles?.dynamicRegistration;
   lensRefresh = !!params.capabilities.workspace?.codeLens?.refreshSupport;
   if (settings.ols) ols = new OdinBridge(settings.olsPath, (m) => connection.console.warn(m));
   const roots = params.workspaceFolders?.map((f) => f.uri) ?? (params.rootUri ? [params.rootUri] : params.rootPath ? [pathToFileURL(params.rootPath).toString()] : []);
@@ -259,6 +261,7 @@ connection.onInitialize((params): InitializeResult => {
 });
 
 connection.onInitialized(() => {
+  if (watchRegistration) connection.client.register(DidChangeWatchedFilesNotification.type, { watchers: [{ globPattern: "**/vidar.toml" }] }).catch(() => {});
   if (!settings.indexWorkspace) return;
   Idx.addRoots(workspaceRoots);
   if (folderEvents) {
@@ -289,6 +292,12 @@ documents.onDidSave((e) => {
     analyzePackage(dir, !!pkg(dir).quiet && !isOpen(dir));
   }
   odinCheck(dirname(toPath(e.document.uri)));
+});
+
+// a changed vidar.toml moves imports of every analyzed program (the client sends these once it watches the file)
+connection.onDidChangeWatchedFiles((e) => {
+  if (!e.changes.some((c) => c.uri.endsWith("/vidar.toml"))) return;
+  for (const [dir, st] of packages) if (st.current) schedule(dir);
 });
 
 documents.onDidClose((e) => connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] }));

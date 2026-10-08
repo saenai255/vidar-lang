@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
+import { findManifest, resolveCollection } from "../manifest";
 
 /**
  * The workspace index: finds every package directory with `.vidar` files under the workspace folders and
@@ -147,7 +148,17 @@ export class WorkspaceIndex {
     } catch {
       return;
     }
-    for (const m of text.matchAll(IMPORT)) if (!m[1].includes(":")) this.imported.add(resolve(dir, m[1]));
+    for (const m of text.matchAll(IMPORT)) {
+      if (!m[1].includes(":")) this.imported.add(resolve(dir, m[1]));
+      else {
+        try {
+          const target = resolveCollection(findManifest(dir), m[1]);
+          if (target) this.imported.add(target);
+        } catch {
+          // a broken vidar.toml is reported when the program is analyzed
+        }
+      }
+    }
   }
 
   /** Program roots (packages nothing else found imports) first, then the rest, in case a cycle has no root. */
