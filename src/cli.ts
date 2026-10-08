@@ -25,9 +25,11 @@ function formatError(err: CompileError, program: Program | undefined, kind = "er
 
 function usage(): never {
   console.error(`usage:
-  vidar build <dir|file${EXT}> [-opt] [-o <out-dir>] [-debug] [-- odin flags]
+  vidar build <dir|file${EXT}> [-opt] [-o <out-dir>] [-bin|-lib|-dll] [-debug] [-- odin flags]
                      transpile the program (default out dir: ./out/<name>) and write <out-dir>/vidar.map.json;
-                     -debug also builds it with 'odin build -debug', next to the generated .odin
+                     -bin, -lib (static library) or -dll (shared library) also runs 'odin build' on it, putting
+                     the result next to the generated .odin; -debug implies -bin and adds debug info;
+                     odin flags after -- (e.g. -o:speed) are passed through
   vidar run   <dir|file${EXT}> [-opt] [-- args...]      transpile and 'odin run'
   vidar test  <dir|file${EXT}> [-opt] [--run <name>[,<name>...]] [-- odin flags]
                      transpile and 'odin test' the @(test) procs; --run runs only those tests
@@ -92,6 +94,7 @@ export function main(argv: string[]): number | Promise<number> {
   const report = flags.includes("-opt-report");
   const optimize = report || flags.includes("-opt");
   const debug = flags.includes("-debug");
+  const mode = flags.includes("-dll") ? "dll" : flags.includes("-lib") ? "lib" : flags.includes("-bin") || debug ? "exe" : undefined;
   const valueOf = (flag: string) => (flags.includes(flag) ? flags[flags.indexOf(flag) + 1] : undefined);
   // -define:NAME=value goes to odin, for every command that runs it
   const defines = flags.filter((f) => f.startsWith("-define:"));
@@ -127,12 +130,13 @@ export function main(argv: string[]): number | Promise<number> {
   const mapper = locationMapper(runMapOf(out), [outDir]);
   if (cmd === "build") {
     console.error(`wrote ${out.files.size} file(s) to ${outDir}`);
-    if (!debug) return 0;
+    if (!mode) return 0;
     // the generated .odin stays next to the binary, so the debugger can show it
-    const binary = join(outDir, binaryName(name));
-    const r = spawnSync("odin", ["build", outDir, "-debug", `-out:${binary}`, ...defines, ...tail], { encoding: "utf8", stdio: ["inherit", "inherit", "pipe"] });
+    const binary = join(outDir, artifactName(name, mode));
+    const odinArgs = ["build", outDir, `-out:${binary}`, ...(mode === "exe" ? [] : [`-build-mode:${mode}`]), ...(debug ? ["-debug"] : []), ...defines, ...tail];
+    const r = spawnSync("odin", odinArgs, { encoding: "utf8", stdio: ["inherit", "inherit", "pipe"] });
     if (r.stderr) process.stderr.write(mapper(r.stderr));
-    if (r.status === 0) console.error(`built ${binary} with debug info`);
+    if (r.status === 0) console.error(`built ${binary}${debug ? " with debug info" : ""}`);
     return r.status ?? 1;
   }
   if (cmd === "check") {
@@ -208,6 +212,13 @@ function printReport(hints: Analyzer["hints"]): void {
 /** The program's file name: Windows wants the `.exe`. */
 export function binaryName(name: string, platform: NodeJS.Platform = process.platform): string {
   return platform === "win32" ? `${name}.exe` : name;
+}
+
+/** The file `odin build -build-mode:<mode>` writes for `-out:<name>`. */
+export function artifactName(name: string, mode: "exe" | "lib" | "dll", platform: NodeJS.Platform = process.platform): string {
+  if (mode === "exe") return binaryName(name, platform);
+  if (mode === "lib") return platform === "win32" ? `${name}.lib` : `lib${name}.a`;
+  return platform === "win32" ? `${name}.dll` : platform === "darwin" ? `lib${name}.dylib` : `lib${name}.so`;
 }
 
 /** Points `file.odin(line:col)` locations in Odin's output at the .vidar files and lines they came from. */

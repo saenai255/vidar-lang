@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const path = require("node:path");
 const { pathKey, pathPattern, relativeInside } = require("../../dist/paths.js");
 const { locationMapper } = require("../../dist/runmap.js");
-const { binaryName } = require("../../dist/cli.js");
+const { binaryName, artifactName } = require("../../dist/cli.js");
 
 const win = path.win32;
 
@@ -60,4 +60,13 @@ test("binaryName: the program gets .exe on Windows only", () => {
   assert.equal(binaryName("app", "win32"), "app.exe");
   assert.equal(binaryName("app", "linux"), "app");
   assert.equal(binaryName("app", "darwin"), "app");
+});
+
+test("artifactName: library file names per platform", () => {
+  assert.equal(artifactName("app", "exe", "win32"), "app.exe");
+  assert.equal(artifactName("app", "lib", "linux"), "libapp.a");
+  assert.equal(artifactName("app", "lib", "win32"), "app.lib");
+  assert.equal(artifactName("app", "dll", "darwin"), "libapp.dylib");
+  assert.equal(artifactName("app", "dll", "linux"), "libapp.so");
+  assert.equal(artifactName("app", "dll", "win32"), "app.dll");
 });
