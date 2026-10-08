@@ -18,6 +18,7 @@ node dist/cli.js run   examples/closures --watch    # rerun whenever a .vidar fi
 node dist/cli.js fmt   examples/closures --check    # list files vidar fmt would change
 node dist/cli.js test  examples/testing             # transpile + odin test: run the @(test) procs
 node dist/cli.js build examples/cyclic -debug       # also build it with debug info, for lldb or gdb
+node dist/cli.js build examples/cyclic -bin -- -o:speed  # also build the binary; -lib: static library, -dll: shared library
 node dist/cli.js new   hello                        # start a program in a new directory (--lib: a library package)
 npm test
 ```
@@ -47,7 +48,7 @@ This builds `bin/<os>-<arch>/vidar` and `vidar-lsp`, plus a `.tar.gz` of both, a
 
 To build for another OS or CPU, pass a Node binary for that target, e.g. from the official downloads at nodejs.org: `node scripts/build-binaries.js --node path/to/linux-x64/bin/node --target linux-x64`. On macOS, binaries are ad-hoc signed.
 
-`run` and `test` print panics, failed `assert`s, bounds-check failures and `testing` messages at `.vidar` locations; `vidar build` writes `<out>/vidar.map.json`, so `vidar map <out> < log` does the same for a saved log of a program you built. `-define:NAME=value` is passed on to `odin` by `run`, `check`, `test` and `build -debug`.
+`run` and `test` print panics, failed `assert`s, bounds-check failures and `testing` messages at `.vidar` locations; `vidar build` writes `<out>/vidar.map.json`, so `vidar map <out> < log` does the same for a saved log of a program you built. `-define:NAME=value` is passed on to `odin` by `run`, `check`, `test` and `build -bin|-lib|-dll|-debug`. `vidar build <input> -bin|-lib|-dll [-- odin flags]` also runs `odin build` and leaves `<name>`, `lib<name>.a` or `lib<name>.dylib`/`.so` (`.exe`, `.lib`, `.dll` on Windows) next to the generated `.odin`; flags after `--` such as `-o:speed` go to `odin`.
 
 A directory is a package: all its `.vidar` (and plain `.odin`) files are transpiled together, along with every package it imports by relative path. A single `.vidar` file can also be built on its own.
 
@@ -633,7 +634,7 @@ eval_errors :: proc(t: ^testing.T) {
 
 Odin has no `#line` directive, so a debugger steps through the generated Odin rather than the `.vidar` source. Vidar keeps that code close to the source: lines it doesn't rewrite stay the same, and a lowered construct takes as many lines as it did.
 
-- `vidar build <dir|file.vidar> -debug [-o <out>] [-- odin flags]` transpiles into `<out>` (default `out/<name>`), writes `vidar.map.json`, and runs `odin build <out> -debug -out:<out>/<name>`. The generated `.odin` files stay next to the binary, which is where the debug info points.
+- `vidar build <dir|file.vidar> -debug [-o <out>] [-- odin flags]` transpiles into `<out>` (default `out/<name>`), writes `vidar.map.json`, and runs `odin build <out> -debug -out:<out>/<name>` (`-debug` implies `-bin`; see the `-bin`, `-lib` and `-dll` flags above for building without debug info). The generated `.odin` files stay next to the binary, which is where the debug info points.
 - Debug it from the command line: `lldb out/game/game`, then `b main.odin:42`, or `gdb out/game/game`. To find the generated line for a `.vidar` line, look it up in `vidar.map.json`, or use *Show Generated Odin* below.
 - **VS Code:** the extension adds a `vidar` debug configuration. It runs `vidar build -debug` (the CLI bundled in the extension, or `vidar.cliPath`), then starts [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) on the binary, or gdb through the C/C++ extension with `"debugger": "gdb"`:
 
