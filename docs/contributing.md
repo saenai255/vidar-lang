@@ -1,0 +1,46 @@
+# Contributing
+
+Setup, the full test table, worktree workflow, commit format and known hangs are in [AGENTS.md](../AGENTS.md). Start with [Architecture](internals/architecture.md) and [Source layout](internals/source-layout.md).
+
+## Tests
+
+```bash
+npm test               # unit tests, fixture tests, language server tests
+npm run test:update    # regenerate fixtures after an intended output change, then review the diff
+node scripts/test.js --only closure    # only the cases and error tests whose name contains "closure"
+VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js   # run the LSP suite against a built binary
+npm run bench          # examples/negative_cost timed against HEAD; --against <ref>, --section <name>, --runs N
+npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many times; saves a stack on a hang
+```
+
+- **Unit tests** (`tests/unit/*.test.js`, `node:test`): lexer semicolon insertion and trivia, parser round-trips of tricky Odin syntax, parsing of the extension syntax and error recovery, compile-time evaluation, hygiene, spacing of generated code, the import-cycle grouping (Tarjan's algorithm, merged units, prefixes, output layout), the run-time location mapping (`runmap.test.js`: both location shapes, what passes through, the line filter, `vidar.map.json`), Windows paths (`paths.test.js`, through `path.win32`: drive letters in either case, either slash, in the location mapping and in the paths the language server compares), `--watch` (the file set, debouncing, reruns on change, polling, and killing a running child with what it started), the missing-import fix's package index (`actions.test.js`: a fake `odin root`, shared names, the fallback table), `vidar new` (`scaffold.test.js`: the files, package names, refusing a non-empty directory, and that the program runs and the library's test passes, skipped without `odin`), and `vidar fmt`: over every `.vidar` file in the repository it must be idempotent and indent from the tokens alone, and every case and example (and the prelude), with its whitespace scrambled and then formatted, must transpile to the same tokens as before, with and without `-opt`.
+- **`vidar test`** (in `scripts/test.js`, named `testing: ...`): `vidar test examples/testing` must pass, and `vidar test tests/vidar_test/failing` must fail, reporting a failed `testing.expect`, a failed `assert` and a bounds-check panic at the `.vidar` lines marked `// fails here`.
+- **Sample programs with fixtures** (`tests/cases/<name>/`): one feature area each. The sample is `input.vidar`, or an `input/` directory for multi-package programs. `expected/` holds the transpiled Odin tree, and `stdout.txt` is the program's expected output, checked by running it with `odin run`. Cases named `plain_*` must come out byte-identical to their input. Cases named `opt_*` are transpiled with `-opt`. Every case is also transpiled the other way; if `-opt` changes its output, that version is run too and must print the same. They cover:
+  - closures: capture modes, loops, every declaration form, multiple results, variadics, nesting, closure types
+  - interfaces: dispatch, static calls across packages, decorators, multiple results, variadic methods, generic impls (`Box($T)`, `Pair(int, f64)`, converted in generic code), proc groups and polymorphic procs as bound methods
+  - macros: hygiene, code generation, reflection, the typecheck fallback
+  - anonymous struct literals: inferred field types, nesting, closure fields, evaluation order, structural compatibility; globals, initializers and arguments to inferred parameters
+  - import cycles: three packages, the entry package in a cycle, aliases, multiple files per package
+  - a diamond-shaped import graph
+  - plain Odin passthrough
+- **Examples** (`examples/<name>/`): the larger tour programs, one directory each, fixtured the same way (`expected/` and `stdout.txt` inside the example's directory).
+- **Scheduler debugging** (`tests/sched_debug/<name>/`, in `scripts/test.js`): a program and a `check.json` listing runs, each built with its own odin flags (`VIDAR_THREADS`, `-o:speed`, ...), that may have to fail, and whose stderr, mapped to `.vidar` lines, must hold given texts. `deadlock` checks the dump and the panic at 1 and 4 threads, and that `-o:speed` leaves the dump out; `trace` checks that the trace file is valid JSON holding each kind of event, at 1 and 4 threads and with a ring smaller than the run; `race` checks that the two racy writes are reported, at 1, 2 and 4 threads and with `-opt -o:speed`, and that the writes ordered by a `Mutex`, a channel, a `Wait_Group` and `go` are not.
+- **Errors** (`tests/errors/*.vidar`, and `tests/errors_pkg/<name>/` for multi-package programs): about 70 programs that must fail with a specific message. The first line of the file, or of the package's `main.vidar`, says `// error: <expected message>`.
+- **Passthrough:** a few real files from Odin's `core` library must transpile to themselves unchanged.
+- **Benchmark** (`scripts/bench.js`, not part of `npm test`): builds `examples/negative_cost` at the working tree and at a git ref in a temporary worktree, both with `-opt` and `-o:speed`, runs them alternately, and compares each section's median. It fails when a section over 0.5 ms is more than 15% slower, or when a checksum changes.
+- **Stress runs** (`scripts/stress.js`, not part of `npm test`): builds one case and runs it many times in parallel, each with a timeout, and checks its `stdout.txt`. On a hang it writes the process's CPU use (a busy loop or a wait) and a stack of every thread (`sample` on macOS, `gdb` on Linux) next to the kept binary.
+- **CI** (`.github/workflows/build.yml`): every push and pull request runs `npm test` on ubuntu-24.04 and macos-14 (arm64), with Node 20 and the Odin release pinned in `ODIN_VERSION` (no `ols`, so the forwarding checks are skipped), then `node scripts/test.js` again with goroutines on 4 threads (`VIDAR_ODIN_FLAGS="-define:VIDAR_THREADS=4"`) and a 500-run stress of `tests/cases/sched_pending_io`. When a step fails, the stress run's `hang-*.txt` stacks are uploaded as an artifact. The binaries are built and released only after it passes.
+- **Language server** (`scripts/test-lsp.js`): starts the server over stdio and drives it like an editor across two workspaces (`tests/lsp/workspace`, and `tests/lsp/cycle` where packages import each other). It checks:
+  - diagnostics, including errors in imported files and `odin check` on save
+  - hover, definition, references and rename across packages and cycles (the rename edits are applied and the program recompiled)
+  - completion, including privacy across packages
+  - hover, definition, signature help and completion forwarded to ols (skipped when `ols` is not on PATH)
+  - the outline and the generated-Odin request
+  - workspace symbols, go to implementation and the call hierarchy, across packages, proc groups, an extended interface and a macro (`tests/lsp/nav`)
+  - the workspace index (`tests/lsp/index`, added as a workspace folder): workspace symbols and `vidar/optReport` find programs never opened, skipped directories stay out, no diagnostics until a file is opened, and removing the folder drops them
+  - `-opt` inlay hints (`tests/lsp/opt`), their setting, and that they follow edits
+  - semantic tokens (`tests/lsp/semantic`), decoded from the stream: interfaces and their methods, closures, by-value and by-reference captures, macro calls, `sched.go`, ranges, and a file with a syntax error
+  - field and enum-member uses (`tests/lsp/members`): hover, definition, references and semantic tokens through pointers, `using`, `#soa` and another package, implicit selectors in each kind of position, a field rename that recompiles to the same program, and a rename refused over a use it can't resolve
+  - the `vidar/optReport` request (decisions under their enclosing proc, decisions against marked) and the code lenses with their settings
+  - quick fixes (`tests/lsp/actions`): each fix's edit, missing imports of packages found under `odin root` (one preferred, or one action per package that shares the name), that `new_clone` is never preferred, that "fix all" never allocates, and that the fixed file has no errors left
+  - formatting: per-line edits matching `vidar fmt`, and none for a file that doesn't lex
