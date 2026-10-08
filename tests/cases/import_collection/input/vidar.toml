@@ -1,0 +1,6 @@
+# collections a package manager would write
+[package]
+name = "app"
+
+[collections]
+gsw = "./vendor"

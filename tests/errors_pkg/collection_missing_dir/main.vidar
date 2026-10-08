@@ -1,0 +1,6 @@
+// error: cannot find a package at 'lib:thing'
+package main
+
+import "lib:thing"
+
+main :: proc() {}

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, posix, resolve } from "node:path";
 import { CompileError, lex } from "./lexer";
@@ -10,6 +10,7 @@ import { resetGensym } from "./comptime";
 import type { File, Node } from "./ast";
 import { PackageInfo, Scope, Unit } from "./scope";
 import { PRELUDE_PATH, PRELUDE_SOURCE } from "./prelude";
+import { findManifest, resolveCollection } from "./manifest";
 import { SCHED_ASM, SCHED_IMPORT, SCHED_SOURCE } from "./sched";
 import { markRaces } from "./race";
 
@@ -77,7 +78,7 @@ export function preludeSourcePath(): string {
   return bundledSourcePath("prelude", PRELUDE_SOURCE);
 }
 
-/** Collection imports (`core:fmt`) are plain Odin; everything else is a path relative to the importing package. */
+/** Collection imports (`core:fmt`) are plain Odin unless a vidar.toml declares the collection; everything else is a path relative to the importing package. */
 export function isRelativeImport(path: string): boolean {
   return !/^\w+:/.test(path);
 }
@@ -106,7 +107,23 @@ export function loadProgram(entry: string | Source[], opts: LoadOptions = {}): P
   analyzer.optimize = !!opts.optimize;
   if (opts.optimize) analyzer.hints = [];
   const byDir = new Map<string, PackageInfo>();
+  // A symlinked directory is the same package as its target, as in Odin.
+  const dirKey = (dir: string) => {
+    try {
+      return realpathSync(dir);
+    } catch {
+      return dir;
+    }
+  };
+  const packageAt = (dir: string) => byDir.get(dirKey(dir));
   const sources: Source[] = [];
+  const manifests = new Map<string, ReturnType<typeof findManifest>>();
+  // The directory an import names: relative, or a collection declared by the nearest vidar.toml.
+  const importDir = (fromDir: string, path: string): string | null => {
+    if (isRelativeImport(path)) return resolve(fromDir, path);
+    if (!manifests.has(fromDir)) manifests.set(fromDir, findManifest(fromDir));
+    return resolveCollection(manifests.get(fromDir) ?? null, path);
+  };
   const read = (path: string) => opts.overrides?.get(path) ?? readFileSync(path, "utf8");
 
   const fail = (err: unknown) => {
@@ -129,18 +146,19 @@ export function loadProgram(entry: string | Source[], opts: LoadOptions = {}): P
     for (const n of names) if (n?.k === "Package" && n.name !== name) fail(new CompileError(`package '${n.name}' does not match package '${name}' of the other files in ${dir}`, n.toks[n.start].pos));
     const pkg: PackageInfo = { dir, name, files, scope: undefined as unknown as Scope, fileScopes: new Map(), prefix: "", unit: undefined as unknown as Unit, deps: new Set() };
     pkg.scope = new Scope(analyzer.global, pkg);
-    byDir.set(dir, pkg);
+    byDir.set(dirKey(dir), pkg);
     if (opts.followImports === false) return pkg;
     for (const f of files) {
       for (const s of f.stmts) {
         if (s.k === "Import" && s.path === SCHED_IMPORT) {
           const path = schedSourcePath();
-          pkg.deps.add(byDir.get(dirname(path)) ?? loadPackage(dirname(path), [{ path, text: SCHED_SOURCE }]));
+          pkg.deps.add(packageAt(dirname(path)) ?? loadPackage(dirname(path), [{ path, text: SCHED_SOURCE }]));
           continue;
         }
-        if (s.k !== "Import" || !isRelativeImport(s.path)) continue;
-        const target = resolve(dir, s.path);
-        let dep = byDir.get(target);
+        if (s.k !== "Import") continue;
+        const target = importDir(dir, s.path);
+        if (!target) continue;
+        let dep = packageAt(target);
         if (!dep) {
           const paths = packageFiles(target, opts.overrides);
           if (!paths.length) {
@@ -168,7 +186,11 @@ export function loadProgram(entry: string | Source[], opts: LoadOptions = {}): P
 
   const packages = [...byDir.values()];
   const units = groupCycles(root, packages);
-  analyzer.resolveImport = (fromDir, path) => (path === SCHED_IMPORT ? byDir.get(dirname(schedSourcePath())) ?? null : isRelativeImport(path) ? byDir.get(resolve(fromDir, path)) ?? null : null);
+  analyzer.resolveImport = (fromDir, path) => {
+    if (path === SCHED_IMPORT) return packageAt(dirname(schedSourcePath())) ?? null;
+    const dir = importDir(fromDir, path);
+    return (dir && packageAt(dir)) || null;
+  };
   analyzer.run([preludePackage(analyzer), ...packages]);
   if (opts.race) markRaces(analyzer);
   return { entry: root, packages, units, analyzer, sources, errors };

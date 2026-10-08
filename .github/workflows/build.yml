@@ -1,6 +1,7 @@
 name: Build binaries and VS Code extension
 
 # Every PR merged into main is released as <year>.<month>.<n>, n counting the month's releases (UTC).
+# Tests run on the PR; the release after the merge does not run them again.
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
@@ -33,7 +34,7 @@ jobs:
           echo "version=$month.$((n + 1))" >> "$GITHUB_OUTPUT"
 
   test:
-    if: github.event.action != 'closed' || github.event.pull_request.merged
+    if: github.event.action != 'closed'
     strategy:
       fail-fast: false
       matrix:
@@ -96,7 +97,7 @@ jobs:
           if-no-files-found: ignore
 
   build:
-    needs: [version, test]
+    needs: [version]
     strategy:
       fail-fast: false
       matrix:
@@ -153,7 +154,7 @@ jobs:
     if: >-
       github.event.action == 'closed' && github.event.pull_request.merged
       && github.event.pull_request.base.ref == 'main'
-    needs: [version, test, build]
+    needs: [version, build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
