@@ -12,6 +12,65 @@ vidar run examples/negative_cost -opt          # same output, faster
 vidar emit examples/negative_cost -opt-report  # -opt, plus what it decided per proc and why
 ```
 
+## See what it did
+
+The same program, before and after `-opt`. Run `vidar emit <dir> -opt` to print the generated Odin for your own code.
+
+```odin
+squares :: proc(n: int) -> [dynamic]int {
+	xs: [dynamic]int
+	for i in 0..<n { append(&xs, i * i) }
+	return xs
+}
+
+dot :: proc(a, b: []int) -> (d: int) {
+	for x, i in a { d += x * b[i] }
+	return
+}
+
+sum :: proc(a: []int) -> (t: int) {
+	for i in 0..<len(a) do t += a[i]
+	return
+}
+
+scratch :: proc() -> int {
+	buf := make([]int, 64)
+	defer delete(buf)
+	for i in 0..<len(buf) do buf[i] = i
+	return buf[10]
+}
+```
+
+With `-opt`, the generated Odin is:
+
+```odin
+squares :: proc(n: int) -> [dynamic]int {
+	xs: [dynamic]int
+	reserve(&xs, len(xs) + n)                       // one growth before the loop
+	for i in 0..<n { append(&xs, i * i) }
+	return xs
+}
+
+dot :: proc(a, b: []int) -> (d: int) {
+	__vidar.bounds_upto(len(a), 0, len(b)); for x, i in a {   // one check for b
+		#no_bounds_check d += x * b[i]
+	}
+	return
+}
+
+sum :: proc(a: []int) -> (t: int) {
+	for i in 0..<len(a) do #no_bounds_check t += a[i]         // proven by the loop
+	return
+}
+
+scratch :: proc() -> int {
+	__buf_buf: [64]int; buf := __buf_buf[:]         // on the stack
+	/* delete(buf): buf is on the stack */
+	for i in 0..<len(buf) do #no_bounds_check buf[i] = i
+	return buf[10]
+}
+```
+
 ## Contents
 
 - [What `-opt` rewrites](#what-opt-rewrites): the full list at a glance.
@@ -137,6 +196,14 @@ for x, i in a { b[i] }           // arrays indexed in lockstep
 
 **Applies when** the loop runs over `lo..<n` (or `for x, i in a`), has no `break`, `return` or `or_*` in it, and indexes an array by plain `i` on every pass, outside any `if`.
 
+Generated:
+
+```odin
+__vidar.bounds_upto(len(a), 0, len(b)); for x, i in a {
+	#no_bounds_check d += x * b[i]
+}
+```
+
 **Details:**
 
 - The check fails with the same index the loop would have failed on.
@@ -158,6 +225,14 @@ A loop whose trip count is known before it starts, and that appends to an array,
 **Appends under an `if`** (or its `else if` / `else` branches) count as the branch that appends the most, so the reserve is an upper bound. A reserve can't be undone, so that is only done for elements of at most 16 bytes.
 
 **Skipped when** the body can `break`, `continue` or `return`; the loop can change the bounds; or it reassigns, clears, resizes or takes the address of the array.
+
+```odin
+xs: [dynamic]int
+reserve(&xs, len(xs) + n)           // added by -opt
+for i in 0..<n {
+	append(&xs, i * i)
+}
+```
 
 ### Memory
 
@@ -182,6 +257,13 @@ x := __x_buf[:]
 - passed to procs that don't keep it. Vidar follows calls into procs with bodies, 4 calls deep, and knows certain `core:fmt`, `core:slice`, `core:mem` and `core:math` procs.
 
 **Size limit:** up to 4 KB in a proc a goroutine can reach, 64 KB elsewhere.
+
+```odin
+buf := make([]int, 64)              // before
+defer delete(buf)
+
+__buf_buf: [64]int; buf := __buf_buf[:]   // after: no allocation, no free
+```
 
 Opt out with `@(no_stack_buffer)`. Hints: `stack buffer` / `no stack buffer`.
 
@@ -240,6 +322,19 @@ Hints: `value interface` / `no value interface`.
 
 #### String switches through a perfect hash
 
+```odin
+keyword :: proc(word: string) -> Token {
+	switch word {                    // 8 or more string-literal cases: -opt switches on a hash
+	case "if":           return .If
+	case "else":         return .Else
+	case "for", "in":    return .For if word == "for" else .In
+	case "return":       return .Return
+	// ...
+	}
+	return .Ident
+}
+```
+
 A `switch s` with **8 or more** string-literal cases switches on `__strswitch_N(s)` instead:
 
 1. A perfect hash of the string picks the one candidate. It uses the length and the first, middle and last bytes with a multiplier found at compile time, or seeded FNV-1a when those collide.
@@ -279,6 +374,21 @@ for_each(xs, proc[&total, k](x: int) { total += x * k })
 It becomes a call to `for_each__closure0(xs, &total, k)`: a copy of `for_each` in which `f(x)` is a direct call to the closure's body, lifted to a proc of its own, with the captures in an environment on the copy's stack. LLVM can then inline it, and nothing is allocated.
 
 **Applies when** the callee is a plain proc with a body, and its body only calls the parameter.
+
+Real output for the call above:
+
+```odin
+for_each :: proc(xs: []int, f: closure(int)) {          // the original, unchanged
+	for x in xs do f(x)
+}
+
+for_each__closure0([]int{1, 2, 3}, &total, k)           // the call site
+
+// for_each with the closure from line 38 called directly
+for_each__closure0 :: proc(xs: []int, __f_c0: $__f_T0, __f_c1: $__f_T1) { __f_env := ...
+	for x in xs do __for_each__closure0_f(&__f_env, x)  // a direct call LLVM can inline
+}
+```
 
 **Across files and packages:** the copy is written in the caller's file, so a callee in another file or package qualifies when its body uses nothing private the caller can't see (`@(private)` across packages, `@(private="file")` across files). Imports it needs that the caller's file lacks are added under a `__` name.
 

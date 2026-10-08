@@ -30,6 +30,34 @@ main :: proc() {
 
 **For state that changes, or that outlives the frame, capture a pointer:** `count := new_clone(0)` with `proc[count]`, as in `make_counter` above.
 
+## More examples
+
+A closure that writes the caller's variable, closures in a struct field, and closures in an array:
+
+```odin
+Button :: struct {
+	label:    string,
+	on_click: closure(int) -> string,
+}
+
+main :: proc() {
+	total := 0
+	add := proc[&total](n: int) { total += n }   // by reference: writes the caller's total
+	add(2); add(3)
+	fmt.println(total)                            // 5
+
+	prefix := "clicked"
+	b := Button{"ok", proc[prefix](n: int) -> string { return fmt.tprintf("%s %d", prefix, n) }}
+	fmt.println(b.on_click(7))                    // clicked 7
+
+	handlers: [dynamic]closure(int) -> int
+	for k in 1..=3 {
+		append(&handlers, proc[k](x: int) -> int { return x * k })   // each closure gets its own copy of k
+	}
+	for h in handlers do fmt.print(h(10), "")     // 10 20 30
+}
+```
+
 ## Rules
 
 - **Closure types** are written `closure(params) -> results`. They work anywhere a type does: struct fields, `[dynamic]closure(int) -> int`, parameters, return types, aliases.
@@ -39,6 +67,43 @@ main :: proc() {
 - **Captures must fit.** A closure has 128 bytes for them by default; change it with `-define:VIDAR_CLOSURE_ENV=<bytes>`. A closure that doesn't fit is a compile error that names it. A closure can't capture another closure by value (it would need more room than it has): capture `&f`, or `new_clone(f)` if it outlives the frame.
 - **Forgetting a capture is a compile error.** Using an outer local without capturing it fails, and the message suggests the fix.
 - **No capture needed** for the enclosing proc's constants and types, or its polymorphic parameters (`$T`, `$N`): they aren't values.
+
+## Mistakes the compiler catches
+
+**Returning a closure that holds `&n`:**
+
+```odin
+counter :: proc() -> closure() -> int {
+	n := 0
+	return proc[&n]() -> int { n += 1; return n }
+}
+```
+
+```
+main.vidar:7:15: error: this closure captures &n and is returned (line 7), but 'n' lives in this proc's frame and is gone once it returns. Capture a pointer from new_clone(n) instead
+```
+
+**Writing to a by-value capture:**
+
+```odin
+n := 0
+f := proc[n]() { n += 1 }
+```
+
+```
+main.vidar:5:19: error: 'n' is captured by value: each call gets a fresh copy, so a change would be lost. Capture &n, or a pointer, to change it
+```
+
+**Using an outer local without capturing it:**
+
+```odin
+n := 0
+f := proc() -> int { return n }
+```
+
+```
+main.vidar:5:30: error: 'n' is a local of the enclosing procedure; nested procs cannot see it. Use a closure: proc[n](...) or proc[&n](...)
+```
 
 ## Lifetime: what the compiler checks
 

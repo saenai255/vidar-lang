@@ -15,6 +15,18 @@ ui  = "~/.vidar/pkg/ui@1.2.0"   # `~/` and absolute paths work too
 import "gsw:greeter"            // -> ./vendor/gsw/greeter, a Vidar package like any relative import
 ```
 
+## Layout
+
+```
+app/
+├── vidar.toml           # [collections] gsw = "./vendor/gsw"
+├── main.vidar           # import "gsw:greeter"
+└── vendor/
+    └── gsw/
+        └── greeter/
+            └── greeter.vidar
+```
+
 ## Rules
 
 - **Which manifest applies.** The nearest `vidar.toml` at or above the importing package. A dependency's own imports resolve against its own manifest, not the root's.

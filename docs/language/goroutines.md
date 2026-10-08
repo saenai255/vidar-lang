@@ -89,6 +89,56 @@ See [examples/goroutines](../../examples/goroutines) for workers, a closed chann
 | `resolve("host:port")` | DNS lookup |
 | `blocking(proc[captures]() { ... })` | runs the closure on a worker thread and parks this goroutine until it returns, for anything that blocks the thread and has no `sched` version: C libraries, `os` calls, heavy computation |
 
+## More examples
+
+**Waiting for a group, with a lock around shared state:**
+
+```odin
+wg: sched.Wait_Group
+mu: sched.Mutex
+total := 0
+for i in 1..=4 {
+	sched.add(&wg)
+	sched.go(proc[i, &wg, &mu, &total]() {     // &total is shared; i is copied
+		defer sched.done(&wg)
+		sched.lock(&mu)
+		total += i
+		sched.unlock(&mu)
+	})
+}
+sched.wait(&wg)
+fmt.println(total)                              // 10
+```
+
+**A `select` that never waits:**
+
+```odin
+ch := sched.make_chan(int, 1)
+i: int
+switch sched.try_select(sched.on_recv(ch, &i)) {
+case 0:  fmt.println("got", i)
+case -1: fmt.println("nothing ready")          // printed first: the channel is empty
+}
+sched.send(ch, 7)
+switch sched.try_select(sched.on_recv(ch, &i)) {
+case 0:  fmt.println("got", i)                 // got 7
+case -1: fmt.println("nothing ready")
+}
+```
+
+**Running something that blocks the thread, and waiting on a timer:**
+
+```odin
+done := sched.make_chan(int)
+sched.go(proc[done]() {
+	sched.blocking(proc[done]() { fmt.println("on a worker thread") })
+	sched.send(done, 1)
+})
+sched.recv(done)
+sched.recv(sched.after(10 * time.Millisecond))    // after(d) is a channel that fires once
+fmt.println("timer fired")
+```
+
 ## How goroutines run
 
 - **Stackful coroutines on one OS thread**, as in Go with `GOMAXPROCS=1`. Each goroutine has its own stack, so `defer`, `scoped!`, `context` and everything else work unchanged inside it.
@@ -161,6 +211,22 @@ all goroutines are asleep - deadlock!
 ```
 
 With several threads, the last thread to go idle checks: every thread idle, with no I/O pending, and every run queue empty.
+
+**Example.** This program receives from a channel nobody sends to:
+
+```odin
+main :: proc() {
+	ch := sched.make_chan(int)
+	sched.recv(ch)
+}
+```
+
+```
+vidar:sched: all goroutines are asleep - deadlock!
+
+goroutine 1 [chan receive 0x104675958] (main):
+	parked at main.vidar(7:2)
+```
 
 ## Debugging tools
 

@@ -61,6 +61,60 @@ main.vidar(12:5) panic: check failed: len(xs) == 4 (need four)
 - **The result type** is inferred from the taken values. Write `do!(T) { ... }` to give it.
 - **Reaching the end** of the block without a `take` panics.
 
+## A runnable tour
+
+```odin
+xs := []int{1, 2, 3}
+n := dbg!(len(xs) * 2)              // stderr: [main.vidar:9] len(xs) * 2 = 6
+
+timed!("sum") {                      // stderr: [timed] sum: 2.28ms
+	s := 0
+	for i in 0..<1_000_000 do s += i
+	fmt.println(s)                   // 499999500000
+}
+
+m: sync.Mutex
+locked!(&m) {                        // unlocked again on every exit path
+	fmt.println("inside the lock")
+}
+
+v := do! {                           // a block that produces a value
+	if len(xs) > 2 do take xs[2]
+	take 0
+}
+fmt.println(v)                       // 3
+
+arena: mem.Arena
+buf: [1024]byte
+mem.arena_init(&arena, buf[:])
+with_allocator!(mem.arena_allocator(&arena)) {
+	ys := make([]int, 4)             // allocated from the arena
+	fmt.println(len(ys))             // 4
+}
+
+check!(len(xs) == 3)                 // passes
+check!(len(xs) == 4, "need four")    // panics
+```
+
+The last line stops the program:
+
+```
+main.vidar(38:4) panic: check failed: len(xs) == 4 (need four)
+	len(xs) = 3
+```
+
+And `todo!`:
+
+```odin
+feature :: proc() -> int {
+	todo!("not written yet")
+}
+```
+
+```
+main.vidar(4:2) panic: not yet implemented: not written yet
+```
+
 ## Writing your own
 
 See [Comptime procs](comptime.md) for how to define macros like these.

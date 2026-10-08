@@ -30,6 +30,55 @@ load_config :: proc(path: string) -> (Config, Error) {
 | `x := f() catch unreachable` | if `f` fails, panic with the error, reporting the source line |
 | `errdefer stmt` | a `defer` that only runs when the procedure returns a failure |
 
+## A runnable example
+
+```odin
+Error :: enum { None, Bad }
+
+step :: proc(i: int) -> (int, Error) {
+	if i > 2 do return 0, .Bad
+	return i * 10, nil
+}
+
+run :: proc(limit: int) -> (total: int, err: Error) {
+	buf := make([]u8, 8)
+	errdefer fmt.println("cleaning up after failure")
+	defer delete(buf)
+	for i in 0..<limit {
+		v := step(i) or_return .Bad       // on failure: return the zero total plus .Bad
+		total += v
+	}
+	return total, nil
+}
+
+main :: proc() {
+	t, e := run(2)
+	fmt.println(t, e)                     // 10 None
+	t, e = run(5)                         // prints "cleaning up after failure" first
+	fmt.println(t, e)                     // 30 Bad
+
+	v := step(1) catch err {              // the block must leave the scope
+		fmt.println("failed:", err)
+		return
+	}
+	fmt.println(v)                        // 10
+	n := strconv.parse_int("42") catch unreachable
+	fmt.println(n)                        // 42
+	step(9) catch err { fmt.println("bare call, falls through:", err) }
+}
+```
+
+Output:
+
+```
+10 None
+cleaning up after failure
+30 Bad
+10
+42
+bare call, falls through: Bad
+```
+
 ## What counts as a failure
 
 "Fails" follows `or_return`. The last result is a failure when it is:

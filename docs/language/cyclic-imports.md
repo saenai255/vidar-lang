@@ -37,6 +37,20 @@ render :: proc(w: ^game.World) -> string { ... }
 | not in a cycle | stays its own Odin package, in its own output directory |
 | in a cycle | merged with the others into one Odin package (`game_ui/` above) |
 
+## What the output looks like
+
+For [examples/cyclic](../../examples/cyclic), where `game` and `ui` import each other and `util` doesn't:
+
+```
+examples/cyclic/            out/ (from `vidar build examples/cyclic -o out`)
+├── main.vidar              ├── main.odin
+├── game/game.vidar         ├── game_ui/game__game.odin     ← game and ui merged
+├── ui/ui.vidar             ├── game_ui/ui__ui.odin
+└── util/util.vidar         ├── util/util.odin              ← not in a cycle: its own package
+                            ├── vidar_runtime/runtime.odin
+                            └── vidar.map.json
+```
+
 ## What merging does
 
 - **Prefixes.** Each merged package's members get its name as a prefix: `ui.render` becomes `ui__render`, and `game.World` becomes `game__World`. The prefixing is scope-aware, so locals and struct fields are untouched.

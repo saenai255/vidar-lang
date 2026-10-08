@@ -16,6 +16,22 @@ eval_errors :: proc(t: ^testing.T) {
 }
 ```
 
+## Example run
+
+`tests/vidar_test/failing` has three tests that are meant to fail. Running it prints (trimmed):
+
+```
+[FATAL] --- [tests/vidar_test/failing/main.vidar:38:assert_fails()] runtime assertion: twice is not three
+[ERROR] --- [tests/vidar_test/failing/main.vidar:31:expect_fails()] expected scale.call(scale.env, 1) to be 31, got 30
+...
+Finished 4 tests in 163µs. 3 tests failed.
+ - main.assert_fails 	runtime assertion: twice is not three
+ - main.expect_fails 	expected scale.call(scale.env, 1) to be 31, got 30
+ - main.index_fails  	Signal caught: Unhandled_Trap
+```
+
+Every location points into the `.vidar` file, not the generated Odin.
+
 ## Running some tests
 
 - **`--run eval_errors`** runs only that test. It is `-define:ODIN_TEST_NAMES=main.eval_errors` with the package filled in. A name that already has a package (`main.eval_errors`) is used as is.

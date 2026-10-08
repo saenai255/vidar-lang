@@ -78,6 +78,17 @@ An interface value holds a pointer: `struct { data: rawptr, __vtable: ^VTable }`
 - **Automatic conversion** happens wherever the expected type is known to be an interface: typed declarations, assignments, call arguments, `return`, named struct-literal fields, and `append` to a `[dynamic]Interface`.
 - **Converting a plain value is an error.** Write `&x`, or `new_clone(x)` for a heap copy you own.
 
+**The common mistake**, converting a plain value:
+
+```odin
+c := Circle{1}
+s: Shape = c
+```
+
+```
+main.vidar:11:13: error: 'c' is a value; 'Shape' needs a pointer: &c, or new_clone(c) for a heap copy you own
+```
+
 ## Generic impls
 
 `impl Shape for Box($T) { area = box_area, ... }` implements the interface for every instance of a parametric struct or union, with procs that take `^Box($T)` (or a more general pattern, such as `^$T`).
@@ -110,6 +121,46 @@ See [Cyclic imports](cyclic-imports.md).
 - Inherited methods work on it: `name(item)`.
 - `impl Item for T` binds the inherited methods too, and also implements every base declared in the same package (or import cycle), so `&t` converts to those as well.
 - Diamonds are fine. Two different methods with the same name are an error.
+
+## Example: extending and generic impls
+
+```odin
+Named :: interface { name }
+Sized :: interface { size }
+Item  :: interface { using Named, using Sized, describe }
+
+name     :: proc(n: Named) -> string ---
+size     :: proc(s: Sized) -> int ---
+describe :: proc(i: Item) -> string ---
+
+File :: struct { n: string, bytes: int }
+
+file_name     :: proc(f: ^File) -> string { return f.n }
+file_size     :: proc(f: ^File) -> int { return f.bytes }
+file_describe :: proc(f: ^File) -> string { return fmt.tprintf("%s (%d bytes)", f.n, f.bytes) }
+
+impl Item for File { name = file_name, size = file_size, describe = file_describe }
+
+Box :: struct($T: typeid) { value: T }
+Show :: interface { show }
+show :: proc(s: Show) -> string ---
+box_show :: proc(b: ^Box($T)) -> string { return fmt.tprintf("Box(%v)", b.value) }
+impl Show for Box($T) { show = box_show }      // one impl for every Box(T)
+
+main :: proc() {
+	f := File{"a.txt", 12}
+	item: Item = &f
+	fmt.println(describe(item))                // a.txt (12 bytes)
+	n: Named = item                            // an Item converts to a base without allocating
+	fmt.println(name(n), name(item))           // a.txt a.txt
+
+	b1 := Box(int){1}
+	b2 := Box(string){"hi"}
+	shows: [dynamic]Show
+	append(&shows, &b1, &b2)
+	for s in shows do fmt.println(show(s))     // Box(1), then Box(hi)
+}
+```
 
 ## Cleanup
 

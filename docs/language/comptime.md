@@ -61,6 +61,88 @@ main :: proc() {
 
 **Hygiene.** Names a quote declares are renamed, so they can't clash with the caller's. Spliced code is never renamed.
 
+## More macros
+
+These are from [examples/macros](../../examples/macros), which prints the output shown in the comments.
+
+**`stringify`** gives the source text of a code argument:
+
+```odin
+expect :: proc!(cond: Expr(bool)) -> Stmt {
+	msg := "expectation failed: " + stringify(cond)
+	return quote {
+		if !$cond { fmt.println($msg) }
+	}
+}
+
+expect!(total < 0)                   // expectation failed: total < 0
+```
+
+**`Type` parameters and reflection:** a printer for any struct.
+
+```odin
+show :: proc!(T: Type, value: Expr) -> Expr(string) {
+	layout := type_name(T) + "{{"
+	args: [dynamic]Expr
+	for f, i in type_fields(T) {
+		layout += fmt.tprintf("%s%s = %%v", "" if i == 0 else ", ", f)
+		append(&args, quote($value.$(ident(f))))
+	}
+	layout += "}}"
+	return quote(fmt.tprintf($layout, $args))
+}
+
+p := Point{3, -4}
+fmt.println(show!(Point, p))         // Point{x = 3, y = -4}
+```
+
+**`type_of_expr`** gives the type of an argument, so the caller doesn't have to spell it:
+
+```odin
+zero_like :: proc!(x: Expr) -> Expr {
+	T := type_of_expr(x)
+	return quote($T{})
+}
+
+fmt.println(zero_like!(p))           // Point{x = 0, y = 0}
+```
+
+**`Ident` parameters** splice unhygienically, so a macro can declare names on purpose:
+
+```odin
+define_twice :: proc!(name: Ident, value: int) -> Stmt {
+	return quote { $name := $value * 2 }
+}
+
+define_twice!(answer, 21)
+fmt.println(answer)                  // 42
+```
+
+**Defaults and a trailing block:**
+
+```odin
+repeat :: proc!(n: int = 2, body: Stmt) -> Stmt {
+	out: [dynamic]Stmt
+	for _ in 0..<n do append(&out, body)
+	return quote { $out }
+}
+
+repeat!(4) { total += 10 }           // the block follows the call
+repeat! { total += 1 }               // n defaults to 2
+```
+
+**Generating a closure, and rejecting bad input with `compile_error`:**
+
+```odin
+make_scaler :: proc!(T: Type, k: Expr) -> Expr {
+	if type_name(T) == "string" do compile_error("make_scaler: cannot scale a string")
+	return quote(proc[](x: $T) -> $T { return x * $k })
+}
+
+triple := make_scaler!(f64, 3)
+fmt.println(triple(1.5))             // 4.5
+```
+
 ## Calling macros
 
 - **From other packages:** `pkg.name!(...)`.

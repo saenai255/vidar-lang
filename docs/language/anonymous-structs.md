@@ -9,6 +9,21 @@ take :: proc(h: struct { name: string, hp: int, pos: struct { x: f64, y: int } }
 take(hero)
 ```
 
+A fuller example, with a closure field and inferred parameters:
+
+```odin
+describe :: proc(x: $T) { fmt.println(x) }
+
+main :: proc() {
+	cfg := { name = "slime", hp = 10, on_hit = proc(dmg: int) -> int { return dmg * 2 } }
+	fmt.println(cfg.on_hit(4))           // 8: closure fields can be called
+	fmt.println({ x = 1, y = 2 })        // {x = 1, y = 2}
+	describe({ name = "a", n = 3 })      // {name = "a", n = 3}
+	p: struct { x, y: int } = { x = 5, y = 6 }   // typed: Odin's own meaning of { ... }
+	fmt.println(p)                       // {x = 5, y = 6}
+}
+```
+
 ## Where it applies
 
 Only the places where Odin has no type for `{ ... }` are affected.
