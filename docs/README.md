@@ -11,6 +11,7 @@ For a one-page cheat sheet of every construct, see [SYNTAX.md](../SYNTAX.md). Ea
 | [Getting started](getting-started.md) | install, hello world, how a build works |
 | [Command line](cli.md) | `run`, `check`, `build`, `test`, `fmt`, `new`, `emit`, `map`; standalone binaries |
 | [Limits](limits.md) | what the compiler does not do yet |
+| [FAQ](faq.md) | short answers to common questions |
 
 ## The language
 
@@ -46,6 +47,10 @@ Generated from the compiler's own tables by `npm run docs:gen`, so they match th
 | [Comptime built-ins](reference/comptime.md) | helpers for `proc!` and `comptime!`, parameter kinds |
 | [Attributes](reference/attributes.md) | `@(table)`, `@(no_alloc)`, `@(private)`, ... |
 | [Command line](reference/cli.md) | the full usage text of `vidar` |
+| [Built-in macro definitions](reference/macros.md) | `scoped!`, `locked!`, `check!`, ... as written in the prelude |
+| [Build flags](reference/defines.md) | every `-define:VIDAR_*` flag with its default |
+| [`vidar:sched` API](reference/sched.md) | every public proc and type for goroutines and I/O |
+| [Compile errors](reference/errors.md) | every error the compiler tests for, with a program that triggers it |
 
 ## How the compiler works
 
@@ -53,4 +58,5 @@ Generated from the compiler's own tables by `npm run docs:gen`, so they match th
 |---|---|
 | [Architecture](internals/architecture.md) | the pipeline from `.vidar` to Odin and back |
 | [Source layout](internals/source-layout.md) | every file under `src/` |
+| [What Vidar generates](internals/lowering.md) | each construct next to the Odin it becomes |
 | [Contributing](contributing.md) | tests, fixtures, benchmarks; links to [AGENTS.md](../AGENTS.md) |

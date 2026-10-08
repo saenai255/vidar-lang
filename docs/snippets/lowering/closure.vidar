@@ -1,0 +1,12 @@
+package main
+
+import "core:fmt"
+
+main :: proc() {
+	step := 10
+	add := proc[step](x: int) -> int { return x + step }
+	fmt.println(add(1))
+}
+
+// title: Closures
+// about: A capture list becomes a call to a generated constructor. The captures are copied into the closure's `env`, and the body is lifted into a proc that reads them from `__env`.

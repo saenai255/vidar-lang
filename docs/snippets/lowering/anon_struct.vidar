@@ -1,0 +1,9 @@
+package main
+
+main :: proc() {
+	hero := { name = "slime", hp = 10 }
+	_ = hero
+}
+
+// title: Anonymous struct literals
+// about: Each value is evaluated once into a temporary, then the struct type is written with `type_of`, so Odin infers every field type itself.

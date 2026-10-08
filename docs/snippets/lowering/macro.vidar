@@ -1,0 +1,17 @@
+package main
+
+swap :: proc!(a, b: Expr) -> Stmt {
+	return quote {
+		tmp := $a
+		$a = $b
+		$b = tmp
+	}
+}
+
+main :: proc() {
+	a, b := 1, 2
+	swap!(a, b)
+}
+
+// title: A macro expansion
+// about: An expansion is written out as ordinary Odin, one statement per line, under a comment naming the call. The macro itself becomes a one-line comment. `tmp` is renamed so it can't clash with the caller's.

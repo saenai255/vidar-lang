@@ -3,10 +3,10 @@ name: Docs
 # Builds the site on every PR; publishes it to GitHub Pages when main changes.
 on:
   pull_request:
-    paths: ["docs/**", "scripts/gen-docs.js", "src/lsp/docs.ts", "src/cli.ts", "editors/vscode/syntaxes/**", "package.json", ".github/workflows/docs.yml"]
+    paths: ["docs/**", "scripts/gen-docs.js", "src/**", "tests/errors/**", "tests/errors_pkg/**", "editors/vscode/syntaxes/**", "package.json", ".github/workflows/docs.yml"]
   push:
     branches: [main]
-    paths: ["docs/**", "scripts/gen-docs.js", "src/lsp/docs.ts", "src/cli.ts", "editors/vscode/syntaxes/**", "package.json", ".github/workflows/docs.yml"]
+    paths: ["docs/**", "scripts/gen-docs.js", "src/**", "tests/errors/**", "tests/errors_pkg/**", "editors/vscode/syntaxes/**", "package.json", ".github/workflows/docs.yml"]
   workflow_dispatch:
 
 permissions:

@@ -251,7 +251,7 @@ git worktree remove --force "$TMPDIR/vidar-base"
 **Editor:** VS Code runs the `vidar-lsp` binary bundled in the installed `.vsix`, not `dist/`. To see an analyzer or LSP change there, run `npm run vsix`, then reload the VS Code window. It rebuilds the binaries, packages the `.vsix` and installs it with the CLI inside `/Applications/Visual Studio Code.app` (`code` is not on PATH; `VSCODE_CLI` overrides it). It takes about 15 s.
 
 **Docs:** when behavior changes, update:
-- docs/: the feature's page under `docs/language/`, plus `contributing.md` (tests), `internals/source-layout.md` and `limits.md` when they're affected. `docs/reference/` is generated: run `npm run docs:gen` after changing `src/lsp/docs.ts` or the usage text in `src/cli.ts`. Keep README.md short and update its index only when a page is added or renamed;
+- docs/: the feature's page under `docs/language/`, plus `contributing.md` (tests), `internals/source-layout.md` and `limits.md` when they're affected. `docs/reference/` and `docs/internals/lowering.md` are generated: run `npm run docs:gen` after changing `src/lsp/docs.ts`, `src/prelude.vidar`, `src/sched.ts` (public procs or `#config` flags), the usage text in `src/cli.ts`, `tests/errors/`, or the emitted code of a construct in `docs/snippets/lowering/`. Keep README.md short and update its index only when a page is added or renamed;
 - SYNTAX.md;
 - examples/README.md;
 - for perf work, the status table and log in PERF_PROGRESS.md.

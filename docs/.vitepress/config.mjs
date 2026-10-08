@@ -12,6 +12,7 @@ const sidebar = [
     { text: "Getting started", link: "/getting-started" },
     { text: "Command line", link: "/cli" },
     { text: "Limits", link: "/limits" },
+    { text: "FAQ", link: "/faq" },
   ] },
   { text: "The language", items: [
     { text: "Closures", link: "/language/closures" },
@@ -36,10 +37,15 @@ const sidebar = [
     { text: "Comptime built-ins", link: "/reference/comptime" },
     { text: "Attributes", link: "/reference/attributes" },
     { text: "Command line", link: "/reference/cli" },
+    { text: "Built-in macro definitions", link: "/reference/macros" },
+    { text: "Build flags", link: "/reference/defines" },
+    { text: "vidar:sched API", link: "/reference/sched" },
+    { text: "Compile errors", link: "/reference/errors" },
   ] },
   { text: "How the compiler works", items: [
     { text: "Architecture", link: "/internals/architecture" },
     { text: "Source layout", link: "/internals/source-layout" },
+    { text: "What Vidar generates", link: "/internals/lowering" },
     { text: "Contributing", link: "/contributing" },
   ] },
 ];

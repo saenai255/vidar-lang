@@ -1,0 +1,10 @@
+package main
+
+main :: proc() {
+	total := 0
+	add := proc[&total](n: int) { total += n }
+	add(2)
+}
+
+// title: A closure that captures by reference
+// about: `[&total]` stores a pointer to `total` in the environment instead of a copy, so the closure writes the caller's variable.

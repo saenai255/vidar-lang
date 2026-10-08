@@ -31,6 +31,8 @@ flowchart TD
 - **`-opt` never changes behavior.** The test runner builds both settings and compares the output.
 - **Two runtime packages are strings in TypeScript.** `vidar_runtime` (in `emitter.ts`) and `vidar:sched` (in `sched.ts`). Changing either rewrites the expected output of every test case that uses it.
 
+To see what each construct becomes, read [What Vidar generates](lowering.md).
+
 ## Other consumers of the same pipeline
 
 - **Language server** ([src/lsp/](../../src/lsp)). Reuses `loadProgram` in tolerant mode (errors are collected, not thrown) and `emitProgram` with column maps. It keeps a shadow Odin tree and forwards plain-Odin requests to `ols`. See [Language server](../tools/language-server.md).

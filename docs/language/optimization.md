@@ -423,6 +423,32 @@ main.vidar:80: bs: #soa: a loop touches 3 of 10 fields of Body (x, y, z); 10 fie
 main.vidar:95: ps: not #soa: ps is passed to 'sum_x' (line 98)
 ```
 
+### Hint labels
+
+The label is the second field of each report line. Labels that start with "no" or "not" are decisions against.
+
+| Label | Meaning |
+|---|---|
+| `table`, `table 2D` / `no table`, `no table 2D` | a lookup table was made, or why not |
+| `specialized ×N` / `not specialized` | N copies for constant arguments, or why not |
+| `unchecked` | every index is proven in bounds by its loop |
+| `bounds hoisted` | one check before the loop |
+| `no bounds proof` | an index keeps its bounds check inside a loop |
+| `reserved` / `not reserved` | `reserve` added before an append loop, or why not |
+| `grouped alloc` | adjacent allocations became one |
+| `stack buffer` / `no stack buffer` | a constant-size `make` went on the stack, or why not |
+| `#soa` / `not #soa` | an array of structs became `#soa`, or why not |
+| `reordered` / `not reordered` | struct fields packed by alignment, or why not |
+| `value interface` / `no value interface` | an interface array holds its values inline, or why not |
+| `perfect hash` / `no perfect hash` | a string switch uses a perfect hash, or why not |
+| `memo` / `no memo` | a self-recursive proc is memoized, or why not |
+| `fmt inlined` | a `fmt` call with a literal format was written out |
+| `json unmarshal` / `no json unmarshal` | a generated JSON reader, or why not |
+| `closure inlined` / `closure not inlined` | a closure literal passed to a proc got a direct-call copy, or why not |
+| `direct`, `devirtualized`, `vtable` | how an interface method call is made |
+| `no direct call` | a call goes through a closure value |
+| `cold failure` | an error path was hinted unlikely |
+
 ## Opting out
 
 Each automatic choice has an attribute that keeps a proc out of it, for example when you want a baseline to benchmark against.

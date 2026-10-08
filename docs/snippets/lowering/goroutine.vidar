@@ -1,0 +1,12 @@
+package main
+
+import "core:fmt"
+import "vidar:sched"
+
+main :: proc() {
+	n := 5
+	sched.go(proc[n]() { fmt.println(n) })
+}
+
+// title: Starting a goroutine
+// about: `sched.go` takes a closure, so a goroutine's captures are lowered like any closure's. The capture list decides what the goroutine gets.

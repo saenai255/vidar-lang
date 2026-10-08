@@ -1,0 +1,19 @@
+package main
+
+import "core:fmt"
+
+Shape :: interface { area }
+area :: proc(s: Shape) -> f64 ---
+
+Circle :: struct { r: f64 }
+circle_area :: proc(c: ^Circle) -> f64 { return 3 * c.r * c.r }
+impl Shape for Circle { area = circle_area }
+
+main :: proc() {
+	c := Circle{1}
+	s: Shape = &c
+	fmt.println(area(&c), area(s))
+}
+
+// title: Interfaces
+// about: Each method becomes a proc group of the dispatcher and every impl. A call with `^Circle` picks `circle_area` statically. A call with a `Shape` value picks the dispatcher, which compares the vtable and calls the impl directly.

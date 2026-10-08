@@ -13,7 +13,7 @@ npm run docs:gen      # only the generated pages in docs/reference/
 - **The site** is [VitePress](https://vitepress.dev). Pages are plain Markdown in `docs/`. A new page needs an entry in the sidebar in `docs/.vitepress/config.mjs`.
 - **Code blocks** tagged `odin` or `vidar` are highlighted with the VS Code extension's grammar.
 - **Links** that leave `docs/` (to `src/`, `examples/`, `SYNTAX.md`) become GitHub links on the site.
-- **Generated pages.** `docs/reference/*.md` are written by `scripts/gen-docs.js` from `src/lsp/docs.ts` (the same text the language server shows on hover) and from the usage text in `src/cli.ts`. Don't edit them by hand: change the source and run `npm run docs:gen`. `tests/unit/docs.test.js` and the Docs workflow fail when they are stale.
+- **Generated pages.** `docs/reference/*.md` and `docs/internals/lowering.md` are written by `scripts/gen-docs.js` from the compiler's own sources: `src/lsp/docs.ts` (the text the language server shows on hover), the usage text in `src/cli.ts`, `src/prelude.vidar`, the `#config` flags and public procs in `src/sched.ts`, the error cases in `tests/errors/`, and the snippets in `docs/snippets/lowering/` (add one there to show another construct). Don't edit them by hand: change the source and run `npm run docs:gen`. `tests/unit/docs.test.js` and the Docs workflow fail when they are stale.
 - **CI** (`.github/workflows/docs.yml`) builds the site on every PR and publishes it to GitHub Pages when `main` changes. Pages must be set to "GitHub Actions" in the repository settings.
 
 ## Tests
