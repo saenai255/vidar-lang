@@ -156,6 +156,30 @@ vidar loads the entry package and every package it imports by relative path (`co
 
 See [examples/cyclic](examples/cyclic) for a cycle that shares an interface, closures and a macro, with a separate `util` package outside the cycle. [tests/cases/import_cycles](tests/cases/import_cycles) covers a three-package cycle, a cycle that includes the entry package, and the same names declared in several packages.
 
+## Collections (`vidar.toml`)
+
+No new syntax: a `vidar.toml` next to (or above) a package maps a collection name to a directory, so a package manager only has to write that file.
+
+```toml
+[package]                       # reserved, ignored for now
+name = "app"
+
+[collections]
+gsw = "./vendor/gsw"            # relative to this file
+ui  = "~/.vidar/pkg/ui@1.2.0"   # `~/` and absolute paths work too
+```
+
+```odin
+import "gsw:greeter"            // -> ./vendor/gsw/greeter, a Vidar package like any relative import
+```
+
+- The nearest `vidar.toml` at or above the importing package applies, so a dependency's own imports resolve against its own manifest, not the root's.
+- A collection that is not declared (`core:`, `vendor:`) stays an ordinary Odin import.
+- Declared collections are loaded, checked and emitted like relative imports (closures, interfaces and import cycles work across them). The emitted Odin uses relative paths, so no `-collection:` flag is needed.
+- Two names that reach one directory (also through a symlink) are one package.
+
+Example: [tests/cases/import_collection](tests/cases/import_collection).
+
 ## Error handling
 
 Odin's multiple results and `or_return` stay as they are. Three small additions cover the cases they don't:
@@ -748,6 +772,7 @@ npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many tim
 | `src/members.ts` | field and enum-member uses, resolved through the analyzer's types after analysis, for the language server (never run by the compiler) |
 | `src/checks.ts` | `@(no_alloc)` (what a proc can allocate through) and `@(hot)` (warnings from the `-opt` decisions inside it) |
 | `src/fmtspec.ts` | reads `fmt` format strings for `-opt` |
+| `src/manifest.ts` | reads `vidar.toml` and resolves declared collection imports to directories |
 | `src/project.ts` | loads a program by following imports, groups import cycles (Tarjan's algorithm), and emits the output tree; shared by the CLI and the language server |
 | `src/cli.ts` | `build` / `run` / `test` / `check` / `emit` / `fmt` / `map` / `new` |
 | `src/scaffold.ts` | `vidar new`: the files of a new program or library package |
