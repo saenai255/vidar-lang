@@ -8,10 +8,10 @@ Everything that is already Odin passes through **byte-for-byte** (unless you ask
 
 ```bash
 npm install && npm run build
-node dist/cli.js new   hello                        # start a program in a new directory
-node dist/cli.js run   hello                        # transpile + odin run
-node dist/cli.js run   examples/closures            # a bundled example
-node dist/cli.js run   examples/negative_cost -opt  # with the -opt rewrites
+vidar new   hello                        # start a program in a new directory
+vidar run   hello                        # transpile + odin run
+vidar run   examples/closures            # a bundled example
+vidar run   examples/negative_cost -opt  # with the -opt rewrites
 npm test
 ```
 

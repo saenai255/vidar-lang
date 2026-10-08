@@ -12,15 +12,17 @@ Only darwin/arm64 is tested.
 
 ```bash
 npm install && npm run build
+npm link          # puts `vidar` and `vidar-lsp` on your PATH
+vidar --version
 ```
 
-Or build [standalone binaries](cli.md#standalone-binaries) that need no Node at runtime.
+Or build [standalone binaries](cli.md#standalone-binaries) that need no Node at runtime. The rest of these docs write `vidar` for the command.
 
 ## Hello world
 
 ```bash
-node dist/cli.js new hello
-node dist/cli.js run hello
+vidar new hello
+vidar run hello
 ```
 
 `vidar new` writes `main.vidar`, a `.gitignore`, a VS Code debug configuration and a README stub. Add a closure to `main.vidar`:

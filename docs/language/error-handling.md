@@ -1,6 +1,6 @@
 # Error handling
 
-Odin's multiple results and `or_return` stay as they are. Three small additions cover the cases they don't:
+Odin's multiple results and `or_return` stay as they are. Three small additions cover the cases they don't.
 
 ```odin
 load_config :: proc(path: string) -> (Config, Error) {
@@ -21,6 +21,8 @@ load_config :: proc(path: string) -> (Config, Error) {
 }
 ```
 
+## The forms
+
 | Form | Meaning |
 |---|---|
 | `x := f() or_return <value>` | if `f` fails, return zero values plus `<value>` as the error |
@@ -28,10 +30,34 @@ load_config :: proc(path: string) -> (Config, Error) {
 | `x := f() catch unreachable` | if `f` fails, panic with the error, reporting the source line |
 | `errdefer stmt` | a `defer` that only runs when the procedure returns a failure |
 
-- **"Fails"** follows `or_return`: the last result is `false` (an ok-bool), or not nil/zero (an error enum, union or pointer). It works for your procs and for `core:` procs alike, through a small generic check in the runtime package.
-- **`or_return <value>` and `catch`** go after a call that is the whole right-hand side of `x := ...` or `x = ...`, or after a bare call statement. The declared names get the call's leading results.
-- **A value starting with `-` or `&`** is ambiguous after `or_return`, because in Odin `f() or_return - 1` subtracts from the result. vidar rejects it: write `or_return (-1)` for the error value, or `(f() or_return) - 1` for the arithmetic.
-- **A `catch` block after a declaration or assignment must leave the scope** (`return`, `break`, `continue`, `panic`); otherwise the values would be used unset. After a bare call it may fall through.
-- **`errdefer`** looks at the procedure's last result after `return` has set it. Unnamed results are given names in the generated code, which doesn't change how the procedure is called.
-- **`or_return <value>` with named results** works like Odin's `or_return`: it sets only the error result and returns, so `errdefer` sees the other results as they were when the call failed.
-- **Lowering:** everything becomes plain Odin on the same line: `x, e := f(); if failed(e) { ... }` and `defer if failed(err) { ... }`.
+## What counts as a failure
+
+"Fails" follows `or_return`. The last result is a failure when it is:
+
+- `false` (an ok-bool), or
+- not nil/zero (an error enum, union or pointer).
+
+It works for your procs and for `core:` procs alike, through a small generic check in the runtime package.
+
+## `or_return <value>` and `catch`
+
+- **Where they go.** After a call that is the whole right-hand side of `x := ...` or `x = ...`, or after a bare call statement. The declared names get the call's leading results.
+- **Named results.** `or_return <value>` works like Odin's `or_return`: it sets only the error result and returns, so `errdefer` sees the other results as they were when the call failed.
+- **A value starting with `-` or `&` is ambiguous** after `or_return`, because in Odin `f() or_return - 1` subtracts from the result. Vidar rejects it. Write `or_return (-1)` for the error value, or `(f() or_return) - 1` for the arithmetic.
+- **A `catch` block must leave the scope** (`return`, `break`, `continue`, `panic`) when it follows a declaration or assignment; otherwise the values would be used unset. After a bare call it may fall through.
+
+## `errdefer`
+
+- It looks at the procedure's last result *after* `return` has set it.
+- Unnamed results are given names in the generated code. This doesn't change how the procedure is called.
+
+## How it lowers
+
+Everything becomes plain Odin on the same line:
+
+```odin
+x, e := f(); if failed(e) { ... }
+defer if failed(err) { ... }
+```
+
+With [`-opt`](optimization.md#error-paths-are-cold), every failure path is also hinted cold.

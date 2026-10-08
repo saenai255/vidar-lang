@@ -1,38 +1,307 @@
 # Faster code: `-opt`, pools, tables and specialization
 
-Vidar can write some code more specifically than you would by hand, because it sees the whole program. Some of this is opt-in syntax (`Pool`, `@(table)`, `@(specialize)`); the rest happens under the `-opt` flag, which also rewrites plain Odin where the result is provably the same program, only faster. Without `-opt`, plain Odin still passes through byte-for-byte.
+Vidar sees the whole program, so it can write some code more specifically than you would by hand. There are two ways to get that:
+
+- **The `-opt` flag.** Vidar rewrites plain Odin wherever the result is provably the same program, only faster. Nothing changes in behavior: the test suite builds every case with and without `-opt` and compares the output.
+- **Opt-in syntax.** `Pool(I)`, `@(table)`, `@(memo)` and `@(specialize)` ask for a specific transformation, and `@(no_alloc)` and `@(hot)` make the compiler check a promise.
+
+Without `-opt`, plain Odin still passes through byte for byte.
 
 ```bash
-node dist/cli.js run examples/negative_cost -opt          # same output, faster
-node dist/cli.js emit examples/negative_cost -opt-report  # -opt, plus what it decided per proc and why
+vidar run examples/negative_cost -opt          # same output, faster
+vidar emit examples/negative_cost -opt-report  # -opt, plus what it decided per proc and why
 ```
 
-## `-opt` on plain Odin
+## Contents
 
-- **fmt calls with a literal format** (`fmt.printf`, `fmt.println`, `fmt.sbprintf`, `fmt.tprintf`, `fmt.wprintf`, the `e`/`a` variants, ...) compile to a proc that writes each piece directly: no format parsing at run time, no `any` boxing, no type switch. `%v %d %s %x %t %c` on basic types are written directly; other verbs and flags still go through `fmt`, one argument at a time. A format vidar can't read (`{}` arguments, `*` widths, explicit argument indexes) is left alone.
-- **Bounds checks a loop already guarantees** are dropped (`#no_bounds_check` on the statement) when the index comes from `for i in 0..<len(a)`, `for x, i in a` or `for i := 0; i < len(a); i += 1`, and nothing in the loop can change `a`'s length: `a` is a local or parameter that isn't reassigned, appended to, or reachable through a pointer. Constant offsets count too: `a[i + 1]` in `for i in 0..<len(a) - 1`, `a[i - 2]` in `for i in 2..<len(a)`.
-- **Bounds checks moved before the loop:** in a loop over `lo..<n` (or `for x, i in a`) with no `break`, `return` or `or_*` in it, an array indexed by plain `i` on every pass, outside any `if`, gets one check before the loop: `__vidar.bounds_upto(n, lo, len(b))` fails with the same index the loop would have failed on, and the indexes inside go unchecked. That covers a bound that isn't `len(b)` (`for i in 0..<n { b[i] }`) and arrays indexed in lockstep (`for x, i in a { b[i] }`). The check is a statement of its own, so LLVM still vectorizes the loop. A failing check panics before the loop's first iteration, not at the iteration that would have failed.
-- **`reserve` before append loops:** a loop whose trip count is known before it starts (`for i in a..<b`, `a..=b`, `for x in xs` over a slice, array, dynamic array or string, `for i := a; i < n; i += 1`) and that runs `append(&xs, v)` (or `append(p, v)` for a pointer `p`) as a statement of its body gets `reserve(&xs, len(xs) + count)` before it, counting every value an append takes. Appends under an `if` (or its `else if` / `else` branches) count as the branch that appends the most, so the reserve is an upper bound; since a reserve can't be undone, that is only done for elements of at most 16 bytes. Skipped when the body can `break`, `continue` or `return`, the loop can change the bounds, or it reassigns, clears, resizes or takes the address of the array.
-- **Allocations freed together:** adjacent `x := make([]E, n)` / `p := new(T)` that are only freed by a `defer delete(x)` / `defer free(p)` in the same block become one allocation, sliced up, and freed by the defer that runs last.
-- **Struct fields reordered:** a plain struct (no directives, `using`, tags or blank fields) whose fields would pack tighter sorted by alignment, largest first, is written that way, when nothing can see its layout: it is never measured (`size_of`, `offset_of`, `type_info_of`, ...), cast, transmuted, converted, used as a map key or converted to `any`, and no value of a type holding it reaches code vidar can't see (core and foreign procs, proc values; so fmt and encoding/json, whose output follows the field order, keep it as written). Positional literals of it are rewritten with field names. Hints: `reordered` / `not reordered`.
-- **Interface arrays held inline:** a local `[dynamic]I` (I closed, with no bases) whose elements all come from `new_clone(value)`, used only to append such clones, loop over and call I's methods on the elements, index for a method call, `len`, `clear` and `delete`, holds `union { T1, T2, ... }` instead: `append(&xs, new_clone(Circle{1}))` becomes `append(&xs, Circle{1})`, `for s in xs` becomes `for &s in xs`, and `grow(s, k)` calls `__I_v_grow(&s, k)`, a switch calling the impl directly. Each element was reachable only through the array, so nobody can tell. Not when an implementation is over 64 bytes, or an impl method uses its receiver other than through its fields (it could keep a pointer, which would dangle once the array grows). Hints: `value interface` / `no value interface`.
-- **Generated printers:** `%v` and `%#v` (and `print`/`println`) of a struct, enum, fixed array, slice or dynamic array whose type vidar can see all the way down (plain structs without tags, `using`, `any` or directives; enums without explicit values; strings, bools, runes, integers and floats at the leaves) are written by generated `__print_T` procs instead of fmt's walk over type info. The output is fmt's byte for byte, and so is the count fmt returns. A `when` on the argument's type keeps fmt for anything vidar guessed wrong, and a program that registers its own fmt formatters keeps fmt everywhere. `%v` of a float goes straight to fmt's float formatter.
-- **Generated JSON encoding:** `json.marshal(x)` with the default options, for such a type, calls a generated writer: encoding/json's exact bytes (its key quoting and JSON string escaping, `io.write_f*` floats, enums as integers, `json:"name"`, `json:"-"` and `omitempty` tags), without the walk over type info. Again under a `when` on the type, and not in a program that registers its own marshalers.
-- **Generated JSON decoding:** `json.unmarshal(data, &x)` and `json.unmarshal_string` with the default specification (an `allocator =` may be given), into such a type (here structs may also have tags, and fields of any type), call a generated reader with encoding/json's result and error for every input:
-  - The input is first checked to be strict JSON: RFC 8259 syntax, valid UTF-8 in strings, only whitespace after the value, at most 256 levels deep. Anything else goes to `json.unmarshal` untouched, so its errors (`Invalid_Data`) and its JSON5 (comments, unquoted keys, trailing commas, hex, `Infinity`, a value followed by more text) stay encoding/json's.
-  - Strict JSON is then read with encoding/json's rules: a key names the first field with that `json:` name (`json:"-"` included), else the first field without one named so; unknown keys are skipped; `null` zeroes; integers go through `i64` (`strconv.parse_i128` past 18 digits) and are truncated as encoding/json truncates; floats are one division for up to 15 digits over a power of ten up to 22 (the fast path `strconv.parse_f64` takes too), `strconv.parse_f64` otherwise; enums take their integer or their name; strings are unquoted (escapes, surrogate pairs) and allocated as `unquote_string` allocates them; arrays are counted first (from a table the check filled), a fixed array with too many elements is the error before anything is written, and slices and dynamic arrays get exactly that length.
-  - A value the reader doesn't read itself (the wrong kind of value for its field, a float or a string into an integer, a rune, a field of a type it can't see, such as a map) goes to `json.unmarshal` on its own bytes, and an `Unsupported_Type_Error`'s token is moved back to its offset, line and column in the whole input.
-  - The one difference: object keys aren't allocated (encoding/json clones each one and frees it), so an allocator that is nearly out of memory can fail later than it would. Not in a program that registers its own unmarshalers. Hints: `json unmarshal` / `no json unmarshal`.
-- **String switches through a perfect hash:** a `switch s` whose cases are 8 or more string literals switches on `__strswitch_N(s)` instead: a perfect hash of the string (its length and first, middle and last bytes with a multiplier found at compile time, or seeded FNV-1a when those collide) picks the one candidate, one compare confirms it, and each case's strings become their indexes. Case bodies, `fallthrough` and the default case stay as written. `@(no_perfect_hash)` opts a proc out; hints: `perfect hash` / `no perfect hash`.
-- **Constant-size buffers on the stack:** `x := make([]T, N)` with a constant `N` and a matching `defer delete(x)` in the same block becomes `__x_buf: [N]T; x := __x_buf[:]`, when `x` can't outlive the proc: it is only indexed, measured with `len`/`cap`, looped over, or passed to procs that don't keep it (followed into procs with bodies, 4 calls deep; known `core:fmt`, `core:slice`, `core:mem` and `core:math` procs). Up to 4 KB in a proc a goroutine can reach, 64 KB elsewhere. `@(no_stack_buffer)` opts a proc out; hints: `stack buffer` / `no stack buffer`.
-- **`#soa` layout:** a local `a: [dynamic]T`, `a: [N]T`, `a := make([dynamic]T, ...)` or `a := make([]T, n)` (with or without a declared type, `a: [dynamic]T = make([dynamic]T, ...)`) of a plain struct `T` (no `using`, tags, directives or parameters) becomes `#soa`, each field in an array of its own, when `T` has at least 3 fields or about 32 bytes and some loop touches only some of its fields. Every use of `a` must mean the same on an `#soa` container: `a[i].f` (read, write, `+=`, `a[i].f[j]`), `a[i]` as a whole value (copied, assigned, compared, passed), `len`, `cap`, `for x in a`, `for &x in a` using only `x.f`, `append(&a, ...)`, `clear`, `reserve`, `resize` and `delete`. Anything else keeps the layout: `&a[i]` or `&a[i].f`, slicing, passing `a` to a proc, returning, reassigning or capturing it.
-- **Lookup tables, chosen automatically:** a proc taking one `bool`, `u8` or `i8` and returning an integer or `bool` becomes a table when its body is pure integer code (locals, constants, arithmetic, `if`/`for`/`switch`, calls to procs that pass the same check), has a loop or at least 24 operations, and finishes at compile time for every input. Floats, strings, globals, pointers and macros rule a proc out, because the compile-time interpreter can't promise to compute them exactly as the compiled program does.
-- **Specialization, chosen automatically:** a proc gets a copy per constant argument when that parameter bounds a loop, or divides, shifts or branches inside one, and the calls pass constants to it. It is skipped when every call passes the same constant (LLVM already folds that) and when it would take more than 4 copies.
-- **Closures passed as literals**, like Rust monomorphizing closures: `for_each(xs, proc[&total, k](x: int) { total += x * k })` calls `for_each__closure0(xs, &total, k)`, a copy of `for_each` in which `f(x)` is a direct call to the closure's body, lifted to a proc of its own, with the captures in an environment on the copy's stack. LLVM can then inline it, and nothing is allocated. This applies when the callee is a plain proc with a body, and its body only calls the parameter. The copy is written in the caller's file, so a callee in another file or package qualifies when its body uses nothing private the caller can't see (`@(private)` across packages, `@(private="file")` across files); imports it needs that the caller's file lacks are added under a `__` name. Storing the parameter, passing it on, returning it, comparing it, or capturing it in another closure keeps the call as it was. Each call passing a literal gets its own copy, at most 4 per proc; the calls past that call the original. Closure values held in variables (`g := proc[k]...; for_each(xs, g)`) aren't specialized.
+- [What `-opt` rewrites](#what-opt-rewrites): the full list at a glance.
+- [Details of each rewrite](#details-of-each-rewrite), grouped by what they speed up.
+- [Reading `-opt-report`](#reading-opt-report) and [opting out](#opting-out).
+- [Opt-in syntax](#opt-in-syntax): `@(table)`, `@(memo)`, `@(specialize)`, `@(no_alloc)`, `@(hot)`, `Pool(I)`.
+- [What it buys](#what-it-buys): measurements.
 
-On Vidar's error handling, `-opt` hints every failure path cold: the checks behind `catch`, `or_return X` and `errdefer` are wrapped in `intrinsics.expect(..., false)`, which LLVM turns into branch weights, and the panic behind `catch unreachable` is `@(cold)` (with or without `-opt`). Plain Odin `or_return` that is a whole statement (`x := f() or_return`, `x = f() or_return`, `f() or_return`) is written out the same way under `-opt`, returning the error itself, so its failure path is cold too.
+## What `-opt` rewrites
 
-`@(no_table)` and `@(no_specialize)` keep a proc out of the automatic choices, e.g. a baseline you benchmark against. `-opt-report` lists each proc that was tabulated or specialized, and each one that nearly was, with the reason, plus every statement and call it rewrote (the language server shows the same as inlay hints). A decision inside a macro's expansion is shown at the macro call, prefixed with the macro's name:
+| Rewrite | In one sentence | Opt out |
+|---|---|---|
+| [`fmt` with a literal format](#fmt-calls-with-a-literal-format) | writes each piece directly, with no format parsing | none |
+| [Generated printers](#generated-printers) | `%v` of a plain type skips fmt's walk over type info | none |
+| [Generated JSON encoding](#generated-json-encoding) | `json.marshal` of a plain type calls a generated writer | none |
+| [Generated JSON decoding](#generated-json-decoding) | `json.unmarshal` of strict JSON calls a generated reader | none |
+| [Proven bounds checks](#bounds-checks-a-loop-already-guarantees) | drops checks the loop already guarantees | none |
+| [Hoisted bounds checks](#bounds-checks-moved-before-the-loop) | one check before the loop instead of one per pass | none |
+| [`reserve` before append loops](#reserve-before-append-loops) | grows the array once before the loop | none |
+| [Allocations freed together](#allocations-freed-together) | adjacent `make`/`new` become one allocation | none |
+| [Stack buffers](#constant-size-buffers-on-the-stack) | constant-size `make` goes on the stack | `@(no_stack_buffer)` |
+| [`#soa` layout](#soa-layout) | splits an array of structs into one array per field | none |
+| [Struct field reordering](#struct-fields-reordered) | packs fields by alignment | none |
+| [Inline interface arrays](#interface-arrays-held-inline) | stores values instead of pointers to clones | none |
+| [String switches](#string-switches-through-a-perfect-hash) | perfect hash for switches with 8 or more cases | `@(no_perfect_hash)` |
+| [Lookup tables](#lookup-tables-chosen-automatically) | a pure small-input proc becomes a table | `@(no_table)` |
+| [Specialization](#specialization-chosen-automatically) | a copy of a proc per constant argument | `@(no_specialize)` |
+| [Closure literals as arguments](#closures-passed-as-literals) | a copy of the callee calling the closure body directly | none |
+| [Memoization](#memo) | caches a self-recursive pure proc | `@(no_memo)` |
+| [Cold failure paths](#error-paths-are-cold) | tells LLVM that error branches are unlikely | none |
+
+Every rewrite records a *hint* (a label with a reason) that feeds `-opt-report` and the editor's inlay hints. Labels that start with "no" or "not" are decisions *against* a rewrite.
+
+## Details of each rewrite
+
+### Formatting and serialization
+
+#### `fmt` calls with a literal format
+
+`fmt.printf`, `fmt.println`, `fmt.sbprintf`, `fmt.tprintf`, `fmt.wprintf`, the `e`/`a` variants and the rest compile to a proc that writes each piece directly. That removes three costs: format parsing at run time, `any` boxing, and the type switch.
+
+- `%v %d %s %x %t %c` on basic types are written directly.
+- Other verbs and flags still go through `fmt`, one argument at a time.
+- A format vidar can't read is left alone: `{}` arguments, `*` widths, explicit argument indexes.
+
+#### Generated printers
+
+`%v` and `%#v` (and `print` / `println`) of a type that vidar can see all the way down are written by generated `__print_T` procs instead of fmt's walk over type info.
+
+**Applies to** a struct, enum, fixed array, slice or dynamic array made of:
+
+- plain structs (no tags, `using`, `any` or directives);
+- enums without explicit values;
+- strings, bools, runes, integers and floats at the leaves.
+
+**Guarantees:**
+
+- The output is fmt's, byte for byte, and so is the count fmt returns.
+- A `when` on the argument's type keeps fmt for anything vidar guessed wrong.
+- A program that registers its own fmt formatters keeps fmt everywhere.
+- `%v` of a float goes straight to fmt's float formatter.
+
+#### Generated JSON encoding
+
+`json.marshal(x)` with the default options, for a type that the printers above accept, calls a generated writer. It produces encoding/json's exact bytes, without the walk over type info:
+
+- key quoting and JSON string escaping;
+- floats through `io.write_f*`;
+- enums as integers;
+- the `json:"name"`, `json:"-"` and `omitempty` tags.
+
+It sits under a `when` on the type, and it is not used in a program that registers its own marshalers.
+
+#### Generated JSON decoding
+
+`json.unmarshal(data, &x)` and `json.unmarshal_string`, with the default specification (an `allocator =` may be given), call a generated reader. The target type may be a struct with tags and fields of any type.
+
+The reader returns encoding/json's result and error for every input. It works in three steps.
+
+**1. Check that the input is strict JSON.** RFC 8259 syntax, valid UTF-8 in strings, only whitespace after the value, at most 256 levels deep. Anything else goes to `json.unmarshal` untouched, so its errors (`Invalid_Data`) and its JSON5 support (comments, unquoted keys, trailing commas, hex, `Infinity`, a value followed by more text) stay encoding/json's.
+
+**2. Read strict JSON with encoding/json's rules:**
+
+| Input | What the reader does |
+|---|---|
+| a key | names the first field with that `json:` name (`json:"-"` included), else the first field without one named so |
+| an unknown key | skipped |
+| `null` | zeroes the field |
+| an integer | goes through `i64` (`strconv.parse_i128` past 18 digits) and is truncated as encoding/json truncates |
+| a float | one division for up to 15 digits over a power of ten up to 22 (the fast path `strconv.parse_f64` takes too), `strconv.parse_f64` otherwise |
+| an enum | takes its integer or its name |
+| a string | unquoted (escapes, surrogate pairs) and allocated as `unquote_string` allocates it |
+| an array | counted first, from a table the check filled; a fixed array with too many elements is the error before anything is written; slices and dynamic arrays get exactly that length |
+
+**3. Hand back what it can't read.** A value the reader doesn't read itself goes to `json.unmarshal` on its own bytes. That covers the wrong kind of value for its field, a float or a string into an integer, a rune, and a field of a type it can't see, such as a map. An `Unsupported_Type_Error`'s token is moved back to its offset, line and column in the whole input.
+
+**The one difference:** object keys aren't allocated (encoding/json clones each one and frees it), so an allocator that is nearly out of memory can fail later than it would.
+
+Not used in a program that registers its own unmarshalers. Hints: `json unmarshal` / `no json unmarshal`.
+
+### Bounds checks and loops
+
+#### Bounds checks a loop already guarantees
+
+The check is dropped (`#no_bounds_check` on the statement) when both of these hold:
+
+1. The index comes from one of these loops:
+   - `for i in 0..<len(a)`
+   - `for x, i in a`
+   - `for i := 0; i < len(a); i += 1`
+2. Nothing in the loop can change `a`'s length: `a` is a local or parameter that isn't reassigned, appended to, or reachable through a pointer.
+
+Constant offsets count too: `a[i + 1]` in `for i in 0..<len(a) - 1`, and `a[i - 2]` in `for i in 2..<len(a)`.
+
+#### Bounds checks moved before the loop
+
+Some loops don't index by `len(a)` but still index by the loop variable on every pass. These get **one** check before the loop, and the indexes inside go unchecked:
+
+```odin
+for i in 0..<n { b[i] }          // __vidar.bounds_upto(n, lo, len(b)) before the loop
+for x, i in a { b[i] }           // arrays indexed in lockstep
+```
+
+**Applies when** the loop runs over `lo..<n` (or `for x, i in a`), has no `break`, `return` or `or_*` in it, and indexes an array by plain `i` on every pass, outside any `if`.
+
+**Details:**
+
+- The check fails with the same index the loop would have failed on.
+- It is a statement of its own, so LLVM can still vectorize the loop.
+- A failing check panics before the loop's first iteration, not at the iteration that would have failed.
+
+#### `reserve` before append loops
+
+A loop whose trip count is known before it starts, and that appends to an array, gets a `reserve` before it so the array grows once.
+
+**Loops with a known trip count:**
+
+- `for i in a..<b`, `a..=b`
+- `for x in xs` over a slice, array, dynamic array or string
+- `for i := a; i < n; i += 1`
+
+**What it adds:** `reserve(&xs, len(xs) + count)`, where `count` adds up every value an `append(&xs, v)` (or `append(p, v)` for a pointer `p`) takes as a statement of the loop body.
+
+**Appends under an `if`** (or its `else if` / `else` branches) count as the branch that appends the most, so the reserve is an upper bound. A reserve can't be undone, so that is only done for elements of at most 16 bytes.
+
+**Skipped when** the body can `break`, `continue` or `return`; the loop can change the bounds; or it reassigns, clears, resizes or takes the address of the array.
+
+### Memory
+
+#### Allocations freed together
+
+Adjacent `x := make([]E, n)` and `p := new(T)` that are only freed by a `defer delete(x)` / `defer free(p)` in the same block become **one** allocation, sliced up, and freed by the defer that runs last.
+
+#### Constant-size buffers on the stack
+
+`x := make([]T, N)` with a constant `N` and a matching `defer delete(x)` in the same block becomes:
+
+```odin
+__x_buf: [N]T
+x := __x_buf[:]
+```
+
+**Applies when** `x` can't outlive the proc. It may only be:
+
+- indexed;
+- measured with `len` / `cap`;
+- looped over;
+- passed to procs that don't keep it. Vidar follows calls into procs with bodies, 4 calls deep, and knows certain `core:fmt`, `core:slice`, `core:mem` and `core:math` procs.
+
+**Size limit:** up to 4 KB in a proc a goroutine can reach, 64 KB elsewhere.
+
+Opt out with `@(no_stack_buffer)`. Hints: `stack buffer` / `no stack buffer`.
+
+#### `#soa` layout
+
+A local array of a plain struct becomes `#soa`: each field gets an array of its own, so a loop that touches only some fields reads less memory.
+
+**Which declarations:** a local `a: [dynamic]T`, `a: [N]T`, `a := make([dynamic]T, ...)` or `a := make([]T, n)`, with or without a declared type (`a: [dynamic]T = make([dynamic]T, ...)`).
+
+**Which structs:** a plain struct `T` (no `using`, tags, directives or parameters) with at least 3 fields or about 32 bytes, where some loop touches only some of its fields.
+
+**Every use of `a` must mean the same on an `#soa` container.** These are fine:
+
+- `a[i].f`: read, write, `+=`, `a[i].f[j]`
+- `a[i]` as a whole value: copied, assigned, compared, passed
+- `len`, `cap`, `for x in a`
+- `for &x in a`, using only `x.f`
+- `append(&a, ...)`, `clear`, `reserve`, `resize`, `delete`
+
+**These keep the layout as it was:** `&a[i]` or `&a[i].f`, slicing, passing `a` to a proc, returning it, reassigning it, capturing it.
+
+#### Struct fields reordered
+
+A plain struct whose fields would pack tighter sorted by alignment, largest first, is written that way, as long as nothing can see its layout. Positional literals of it are rewritten with field names.
+
+**Which structs:** no directives, `using`, tags or blank fields.
+
+**Nothing may see the layout.** The type must never be:
+
+- measured (`size_of`, `offset_of`, `type_info_of`, ...);
+- cast, transmuted or converted;
+- used as a map key;
+- converted to `any`.
+
+No value of a type holding it may reach code vidar can't see: core and foreign procs, and proc values. That keeps fmt and encoding/json, whose output follows the field order, on the order as written.
+
+Hints: `reordered` / `not reordered`.
+
+#### Interface arrays held inline
+
+A local `[dynamic]I` whose elements all come from `new_clone(value)` holds the values themselves, as `union { T1, T2, ... }`:
+
+| Before | After |
+|---|---|
+| `append(&xs, new_clone(Circle{1}))` | `append(&xs, Circle{1})` |
+| `for s in xs` | `for &s in xs` |
+| `grow(s, k)` | `__I_v_grow(&s, k)`, a switch that calls the impl directly |
+
+**Applies when** `I` is closed (it has no bases) and the array is used only to append such clones, loop over, call `I`'s methods on the elements, index for a method call, `len`, `clear` and `delete`. Each element was reachable only through the array, so nobody can tell the difference.
+
+**Not when** an implementation is over 64 bytes, or an impl method uses its receiver other than through its fields (it could keep a pointer, which would dangle once the array grows).
+
+Hints: `value interface` / `no value interface`.
+
+### Control flow
+
+#### String switches through a perfect hash
+
+A `switch s` with **8 or more** string-literal cases switches on `__strswitch_N(s)` instead:
+
+1. A perfect hash of the string picks the one candidate. It uses the length and the first, middle and last bytes with a multiplier found at compile time, or seeded FNV-1a when those collide.
+2. One compare confirms it.
+3. Each case's strings become their indexes.
+
+Case bodies, `fallthrough` and the default case stay as written. Opt out with `@(no_perfect_hash)`. Hints: `perfect hash` / `no perfect hash`.
+
+#### Lookup tables, chosen automatically
+
+A proc becomes a table when **all** of these hold:
+
+- It takes one `bool`, `u8` or `i8` and returns an integer or `bool`.
+- Its body is pure integer code: locals, constants, arithmetic, `if` / `for` / `switch`, and calls to procs that pass the same check.
+- It has a loop or at least 24 operations.
+- It finishes at compile time for every input.
+
+Floats, strings, globals, pointers and macros rule a proc out, because the compile-time interpreter can't promise to compute them exactly as the compiled program does. To ask for a table yourself, see [`@(table)`](#table). Opt out with `@(no_table)`.
+
+#### Specialization, chosen automatically
+
+A proc gets a copy per constant argument when the calls pass constants to it **and** that parameter bounds a loop, or divides, shifts or branches inside one. It is skipped when:
+
+- every call passes the same constant (LLVM already folds that);
+- it would take more than 4 copies.
+
+To ask for it yourself, see [`@(specialize)`](#specialize). Opt out with `@(no_specialize)`.
+
+#### Closures passed as literals
+
+This is like Rust monomorphizing closures. Take:
+
+```odin
+for_each(xs, proc[&total, k](x: int) { total += x * k })
+```
+
+It becomes a call to `for_each__closure0(xs, &total, k)`: a copy of `for_each` in which `f(x)` is a direct call to the closure's body, lifted to a proc of its own, with the captures in an environment on the copy's stack. LLVM can then inline it, and nothing is allocated.
+
+**Applies when** the callee is a plain proc with a body, and its body only calls the parameter.
+
+**Across files and packages:** the copy is written in the caller's file, so a callee in another file or package qualifies when its body uses nothing private the caller can't see (`@(private)` across packages, `@(private="file")` across files). Imports it needs that the caller's file lacks are added under a `__` name.
+
+**Keeps the call as it was** if the callee stores the parameter, passes it on, returns it, compares it, or captures it in another closure.
+
+**Limits:** each call passing a literal gets its own copy, at most 4 per proc; the calls past that call the original. Closure values held in variables (`g := proc[k]...; for_each(xs, g)`) aren't specialized.
+
+#### Error paths are cold
+
+With `-opt`, every failure path of Vidar's [error handling](error-handling.md) is hinted cold:
+
+- The checks behind `catch`, `or_return X` and `errdefer` are wrapped in `intrinsics.expect(..., false)`, which LLVM turns into branch weights.
+- The panic behind `catch unreachable` is `@(cold)`, with or without `-opt`.
+- Plain Odin `or_return` that is a whole statement (`x := f() or_return`, `x = f() or_return`, `f() or_return`) is written out the same way under `-opt`, returning the error itself, so its failure path is cold too.
+
+## Reading `-opt-report`
+
+`-opt-report` stands in for `-opt` and also prints each decision as `file:line: name: label: reason`. It lists:
+
+- each proc that was tabulated or specialized, and each one that nearly was, with the reason;
+- every statement and call it rewrote.
+
+The language server shows the same as inlay hints. A decision inside a macro's expansion is shown at the macro call, prefixed with the macro's name.
 
 ```
 main.vidar:9: collatz: table: 256 results, has a loop, pure integer code
@@ -44,9 +313,23 @@ main.vidar:80: bs: #soa: a loop touches 3 of 10 fields of Body (x, y, z); 10 fie
 main.vidar:95: ps: not #soa: ps is passed to 'sum_x' (line 98)
 ```
 
-## `@(table)`
+## Opting out
 
-`@(table)` on a proc with one parameter of type `bool`, `u8`, `i8` or an enum turns it into a lookup: the result for every value is stored, and the proc becomes `return table[x]`. For `bool`, `u8` and `i8`, vidar runs the body at compile time and writes the table as a `@(rodata)` literal. For an enum (whose members must not have explicit values), or a body that can't run at compile time, the table is filled once at startup from the original body. The body must not depend on anything but its argument; vidar can't check that for a table you ask for, which is why only the automatic tables are restricted to code it can check. Two parameters of type `bool`, `u8` or `i8` give a two-dimensional table, `table[x][y]`; `-opt` makes those on its own when there are at most 4096 results.
+Each automatic choice has an attribute that keeps a proc out of it, for example when you want a baseline to benchmark against.
+
+| Attribute | Keeps the proc out of |
+|---|---|
+| `@(no_table)` | automatic lookup tables |
+| `@(no_specialize)` | automatic specialized copies |
+| `@(no_memo)` | automatic memoization |
+| `@(no_stack_buffer)` | stack buffers for constant-size `make` |
+| `@(no_perfect_hash)` | perfect-hash string switches |
+
+## Opt-in syntax
+
+### `@(table)`
+
+`@(table)` on a proc with one parameter of type `bool`, `u8`, `i8` or an enum turns it into a lookup. The result for every value is stored, and the proc becomes `return table[x]`.
 
 ```odin
 @(table)
@@ -61,9 +344,20 @@ collatz :: proc(b: u8) -> int {         // collatz :: #force_inline proc(b: u8) 
 }
 ```
 
-## `@(memo)`
+**How the table is built:**
 
-`@(memo)` gives each outer call a memo table that the proc's calls to itself share; it is freed when the outer call returns, so nothing is kept between calls and nothing is shared between goroutines. The table is an array when every parameter is `bool`, `u8` or `i8` (4096 results at most), else a map keyed by the parameters. The proc keeps its name and signature; its body becomes `__f_memo_body`, in place. `-opt` adds it on its own to a pure integer proc that calls itself more than once per call (exponential recursion, like `fib`), unless the program has `@(no_alloc)` procs, since the table allocates. `@(no_memo)` opts a proc out.
+| Parameter | Table |
+|---|---|
+| `bool`, `u8`, `i8` | vidar runs the body at compile time and writes a `@(rodata)` literal |
+| an enum (members must not have explicit values), or a body that can't run at compile time | filled once at startup from the original body |
+| two parameters of type `bool`, `u8` or `i8` | a two-dimensional table, `table[x][y]`; `-opt` makes those on its own when there are at most 4096 results |
+
+> [!WARNING]
+> The body must not depend on anything but its argument. Vidar can't check that for a table you ask for. That is why only the *automatic* tables are restricted to code vidar can check.
+
+### `@(memo)`
+
+`@(memo)` gives each outer call a memo table that the proc's calls to itself share.
 
 ```odin
 fib :: proc(n: int) -> int {           // -opt: fib(n) makes the table, __fib_memo(n, &table) looks up or computes
@@ -72,9 +366,15 @@ fib :: proc(n: int) -> int {           // -opt: fib(n) makes the table, __fib_me
 }
 ```
 
-## `@(specialize)`
+- The table is freed when the outer call returns, so nothing is kept between calls and nothing is shared between goroutines.
+- The table is an array when every parameter is `bool`, `u8` or `i8` (4096 results at most), else a map keyed by the parameters.
+- The proc keeps its name and signature; its body becomes `__f_memo_body`, in place.
+- `-opt` adds it on its own to a pure integer proc that calls itself more than once per call (exponential recursion, like `fib`), unless the program has `@(no_alloc)` procs, since the table allocates.
+- `@(no_memo)` opts a proc out.
 
-`@(specialize)` on a proc gives each call that passes constants a copy where those parameters are compile-time (`$radius`), so Odin builds one version per value and LLVM can unroll loops, turn divisions into shifts and drop branches. Parameters of basic types and enums qualify; calls with run-time values call the original.
+### `@(specialize)`
+
+`@(specialize)` on a proc gives each call that passes constants a copy where those parameters are compile-time (`$radius`). Odin then builds one version per value, and LLVM can unroll loops, turn divisions into shifts and drop branches.
 
 ```odin
 @(specialize)
@@ -84,9 +384,11 @@ box_blur(dst, src, 1)       // box_blur__radius(dst, src, 1), with `$radius: int
 box_blur(dst, src, r)       // the original
 ```
 
-On a `@(specialize)` proc, a call passing a closure literal also gets a copy calling the closure's body directly, as `-opt` does on its own (see above), together with any constants it passes. This happens without `-opt` too, and isn't capped.
+- Parameters of basic types and enums qualify.
+- Calls with run-time values call the original.
+- On a `@(specialize)` proc, a call passing a closure literal also gets a copy calling the closure's body directly, as `-opt` does on its own (see [closures passed as literals](#closures-passed-as-literals)), together with any constants it passes. This happens without `-opt` too, and isn't capped.
 
-## `@(no_alloc)` and `@(hot)`
+### `@(no_alloc)` and `@(hot)`
 
 Two promises the compiler checks:
 
@@ -98,10 +400,43 @@ step :: proc(w: ^World) { ... }    // error: @(no_alloc) 'step' can allocate: ap
 blur :: proc(dst, src: []int) { ... }   // with -opt, warning: @(hot) 'blur': no bounds proof: an index here isn't proven in bounds by its loop
 ```
 
-- **`@(no_alloc)`** is a compile error when the proc, or anything it calls, can allocate. It follows calls into procs with bodies (in any package), proc groups, and interface methods when every impl is known. It stops at `make`, `new`, `new_clone`, `append`, `reserve`, `resize` and the other allocating built-ins, map inserts, `[dynamic]` and `map` literals, and allocating `core:` procs (`fmt.aprintf`, `fmt.tprintf`, `fmt.sbprintf`, `strings.clone`, `strings.builder_make`, ...). A call it can't follow is an error too: a call through a closure or proc value, an interface whose impls aren't all known, or a `core:` proc that isn't on the list of procs known not to allocate (`fmt.println`/`printf`/`bprintf`, `core:math`, `core:time`'s ticks and durations, `strings.has_prefix`, ...). The message names the allocation and the chain of calls that reached it. As a backstop, in builds below `-o:size` the proc's `context.allocator` and `context.temp_allocator` panic, so an allocation the analysis missed fails loudly in tests.
-- **`@(hot)`**, with `-opt`, turns every `-opt` decision against something inside the proc into a warning, on the command line and in the editor: an index that keeps its bounds check inside a loop (`no bounds proof`), a call through a closure value (`no direct call`), a closure literal not inlined, a `vtable` call, and an allocation inside a loop. Without `-opt` it does nothing.
+#### `@(no_alloc)`
 
-## `Pool(I)`
+A compile error when the proc, or anything it calls, can allocate. The message names the allocation and the chain of calls that reached it.
+
+**What it follows:**
+
+- calls into procs with bodies, in any package;
+- proc groups;
+- interface methods, when every impl is known.
+
+**What it stops at (an error):**
+
+- `make`, `new`, `new_clone`, `append`, `reserve`, `resize` and the other allocating built-ins;
+- map inserts, and `[dynamic]` and `map` literals;
+- allocating `core:` procs: `fmt.aprintf`, `fmt.tprintf`, `fmt.sbprintf`, `strings.clone`, `strings.builder_make`, ...
+
+**A call it can't follow is an error too:**
+
+- a call through a closure or proc value;
+- an interface whose impls aren't all known;
+- a `core:` proc that isn't on the list of procs known not to allocate: `fmt.println` / `printf` / `bprintf`, `core:math`, `core:time`'s ticks and durations, `strings.has_prefix`, ...
+
+**Run-time backstop:** in builds below `-o:size`, the proc's `context.allocator` and `context.temp_allocator` panic, so an allocation the analysis missed fails loudly in tests.
+
+#### `@(hot)`
+
+With `-opt`, turns every `-opt` decision against something inside the proc into a warning, on the command line and in the editor:
+
+- an index that keeps its bounds check inside a loop (`no bounds proof`);
+- a call through a closure value (`no direct call`);
+- a closure literal that was not inlined;
+- a `vtable` call;
+- an allocation inside a loop.
+
+Without `-opt` it does nothing.
+
+### `Pool(I)`
 
 `Pool(I)` holds values of every type implementing the interface `I`, stored by type: one `[dynamic]T` per implementation instead of one array of interface values. `for s in pool` becomes one loop per type, in which `s` is a `^T`, so method calls are direct calls Odin can inline. `s` converts to `I` like any pointer to an implementation.
 
@@ -112,10 +447,17 @@ for s in shapes do total += area(s)      // a Circle loop, then a Rect loop, ...
 len(shapes); clear(&shapes); delete(shapes)
 ```
 
+**Behavior:**
+
 - Values of one type keep their order; types are visited in the order of their `impl` blocks.
 - `break`, `continue` and labels act on the whole loop, as written.
-- Every implementation of `I` must be known: `I` must not be extended by an interface in another package. No impl of `I` can be for a parametric type (`Box($T)`, `Box(int)`): there is no one array type for it.
-- `append` takes values, not pointers, and is a statement of its own. `for s, i in pool` (an index) is an error.
+
+**Restrictions:**
+
+- Every implementation of `I` must be known: `I` must not be extended by an interface in another package.
+- No impl of `I` can be for a parametric type (`Box($T)`, `Box(int)`): there is no one array type for it.
+- `append` takes values, not pointers, and is a statement of its own.
+- `for s, i in pool` (an index) is an error.
 
 ## What it buys
 
@@ -141,4 +483,8 @@ Newer sections, measured so far only on a 4-core linux/amd64 VM (`-o:speed`; re-
 | 1,000,000 structs, fields reordered (40 bytes to 24) | 112 ms | 53 ms |
 | `examples/fanout --uneven` at 4 threads, before and after work stealing | 101 ms | 40 ms |
 
-Bounds checks rarely matter: LLVM already removes most of them in loops like these. The table wins only when the body costs more than a memory load; a bit count, which LLVM turns into one instruction, gains nothing. On the slime_mud server simulation, `-opt` took a run from 980 ms to 760 ms; the hand-written Odin version takes 905 ms.
+**Reading the numbers:**
+
+- Bounds checks rarely matter: LLVM already removes most of them in loops like these.
+- The table wins only when the body costs more than a memory load. A bit count, which LLVM turns into one instruction, gains nothing.
+- On the slime_mud server simulation, `-opt` took a run from 980 ms to 760 ms. The hand-written Odin version takes 905 ms.
