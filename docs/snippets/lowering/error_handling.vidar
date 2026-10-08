@@ -1,0 +1,24 @@
+package main
+
+import "core:fmt"
+
+Error :: enum { None, Bad }
+
+step :: proc() -> (int, Error) { return 1, nil }
+
+run :: proc() -> (n: int, err: Error) {
+	errdefer fmt.println("failed")
+	n = step() or_return .Bad
+	return
+}
+
+main :: proc() {
+	v := step() catch err {
+		fmt.println(err)
+		return
+	}
+	_ = v
+}
+
+// title: Error handling
+// about: `or_return <value>`, `catch` and `errdefer` are written out as plain Odin on the same lines. The failure check is a small generic from the runtime package.

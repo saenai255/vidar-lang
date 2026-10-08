@@ -1,0 +1,112 @@
+# Error handling
+
+Odin's multiple results and `or_return` stay as they are. Three small additions cover the cases they don't.
+
+```odin
+load_config :: proc(path: string) -> (Config, Error) {
+	data := os.read_entire_file(path) or_return .Read_Failed    // propagate a different error
+	defer delete(data)
+
+	parsed := json.parse(data) catch err {                     // handle inline, error bound to `err`
+		log.errorf("bad config %s: %v", path, err)
+		return {}, .Bad_Format
+	}
+
+	buf := make([]u8, 1024)
+	errdefer delete(buf)                                        // runs only if we return a failure
+	cfg := Config{raw = buf}
+	validate(&cfg) or_return
+	n := strconv.parse_int("42") catch unreachable             // can't fail; panics with the error if it does
+	return cfg, nil
+}
+```
+
+## The forms
+
+| Form | Meaning |
+|---|---|
+| `x := f() or_return <value>` | if `f` fails, return zero values plus `<value>` as the error |
+| `x := f() catch err { ... }` | if `f` fails, run the block with the error bound to `err` (the name is optional) |
+| `x := f() catch unreachable` | if `f` fails, panic with the error, reporting the source line |
+| `errdefer stmt` | a `defer` that only runs when the procedure returns a failure |
+
+## A runnable example
+
+```odin
+Error :: enum { None, Bad }
+
+step :: proc(i: int) -> (int, Error) {
+	if i > 2 do return 0, .Bad
+	return i * 10, nil
+}
+
+run :: proc(limit: int) -> (total: int, err: Error) {
+	buf := make([]u8, 8)
+	errdefer fmt.println("cleaning up after failure")
+	defer delete(buf)
+	for i in 0..<limit {
+		v := step(i) or_return .Bad       // on failure: return the zero total plus .Bad
+		total += v
+	}
+	return total, nil
+}
+
+main :: proc() {
+	t, e := run(2)
+	fmt.println(t, e)                     // 10 None
+	t, e = run(5)                         // prints "cleaning up after failure" first
+	fmt.println(t, e)                     // 30 Bad
+
+	v := step(1) catch err {              // the block must leave the scope
+		fmt.println("failed:", err)
+		return
+	}
+	fmt.println(v)                        // 10
+	n := strconv.parse_int("42") catch unreachable
+	fmt.println(n)                        // 42
+	step(9) catch err { fmt.println("bare call, falls through:", err) }
+}
+```
+
+Output:
+
+```
+10 None
+cleaning up after failure
+30 Bad
+10
+42
+bare call, falls through: Bad
+```
+
+## What counts as a failure
+
+"Fails" follows `or_return`. The last result is a failure when it is:
+
+- `false` (an ok-bool), or
+- not nil/zero (an error enum, union or pointer).
+
+It works for your procs and for `core:` procs alike, through a small generic check in the runtime package.
+
+## `or_return <value>` and `catch`
+
+- **Where they go.** After a call that is the whole right-hand side of `x := ...` or `x = ...`, or after a bare call statement. The declared names get the call's leading results.
+- **Named results.** `or_return <value>` works like Odin's `or_return`: it sets only the error result and returns, so `errdefer` sees the other results as they were when the call failed.
+- **A value starting with `-` or `&` is ambiguous** after `or_return`, because in Odin `f() or_return - 1` subtracts from the result. Vidar rejects it. Write `or_return (-1)` for the error value, or `(f() or_return) - 1` for the arithmetic.
+- **A `catch` block must leave the scope** (`return`, `break`, `continue`, `panic`) when it follows a declaration or assignment; otherwise the values would be used unset. After a bare call it may fall through.
+
+## `errdefer`
+
+- It looks at the procedure's last result *after* `return` has set it.
+- Unnamed results are given names in the generated code. This doesn't change how the procedure is called.
+
+## How it lowers
+
+Everything becomes plain Odin on the same line:
+
+```odin
+x, e := f(); if failed(e) { ... }
+defer if failed(err) { ... }
+```
+
+With [`-opt`](optimization.md#error-paths-are-cold), every failure path is also hinted cold.

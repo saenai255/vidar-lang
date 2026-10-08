@@ -11,15 +11,22 @@
     "build:binaries": "npm run build && node scripts/build-binaries.js",
     "bench": "node scripts/bench.js",
     "stress": "node scripts/stress.js",
-    "vsix": "node scripts/vsix.js"
+    "vsix": "node scripts/vsix.js",
+    "docs:gen": "npm run build && node scripts/gen-docs.js",
+    "docs:dev": "npm run docs:gen && vitepress dev docs",
+    "docs:build": "npm run docs:gen && vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "license": "ISC",
   "description": "Vidar: Odin with closures, interfaces, cyclic imports and typed compile-time macros, transpiled to plain Odin",
   "devDependencies": {
     "@types/node": "^20.19.43",
     "esbuild": "^0.25.12",
+    "mermaid": "^11.17.2",
     "postject": "^1.0.0-alpha.6",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitepress": "^1.6.4",
+    "vitepress-plugin-mermaid": "^2.0.17"
   },
   "bin": {
     "vidar": "dist/cli.js",

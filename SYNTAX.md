@@ -1,6 +1,6 @@
 # Vidar syntax reference
 
-Everything Vidar adds on top of Odin, in one place. Anything not listed here is plain Odin and passes through unchanged. The [README](README.md) explains how each feature lowers to Odin; [examples/](examples) has a runnable program per feature.
+Everything Vidar adds on top of Odin, in one place. Anything not listed here is plain Odin and passes through unchanged. The [docs](docs/README.md) explain how each feature lowers to Odin; [examples/](examples) has a runnable program per feature.
 
 All new keywords are contextual: `closure`, `quote`, `interface`, `impl`, `catch`, `unreachable` (after `catch`) and `errdefer` stay usable as ordinary identifiers, and `take` is a keyword only inside `do!` and `comptime!` blocks.
 
@@ -9,7 +9,7 @@ All new keywords are contextual: `closure`, `quote`, `interface`, `impl`, `catch
 | Syntax | Meaning |
 |---|---|
 | `proc[x](...) -> R { ... }` | closure capturing `x` by value (a copy taken when the closure is created) |
-| `proc[&x](...) -> R { ... }` | closure capturing `x` by reference: a pointer to `x` where it lives, so the closure must not outlive it |
+| `proc[&x](...) -> R { ... }` | closure capturing a pointer to `x`, where it lives, so the closure must not outlive it |
 | `proc[x, &y, z](...) { ... }` | mixed capture list |
 | `proc[](...) { ... }` | closure with no captures |
 | `proc(...) { ... }` | (no brackets) an ordinary Odin proc, not a closure |
@@ -358,7 +358,7 @@ case 1: fmt.println("timed out")
 }
 ```
 
-`go`, `Chan(T)`, `make_chan`, `send`, `recv`, `close`, `select`, `try_select`, `on_recv`, `on_send`, `sleep`, `yield`, `after`, `Wait_Group` (`add`, `done`, `wait`), `Mutex` (`lock`, `unlock`, `try_lock`), `blocking`, TCP (`listen_tcp`, `accept`, `dial`, `send`, `recv`, `send_file`), UDP (`udp_socket`, `bind`, `send_to`, `recv_from`), `wait_ready`, files (`open`, `read_at`, `write_at`, `stat`, `read_entire_file`, `write_entire_file`) and `resolve`. All of them park only the calling goroutine. See the [README](README.md#goroutines-and-channels).
+`go`, `Chan(T)`, `make_chan`, `send`, `recv`, `close`, `select`, `try_select`, `on_recv`, `on_send`, `sleep`, `yield`, `after`, `Wait_Group` (`add`, `done`, `wait`), `Mutex` (`lock`, `unlock`, `try_lock`), `blocking`, TCP (`listen_tcp`, `accept`, `dial`, `send`, `recv`, `send_file`), UDP (`udp_socket`, `bind`, `send_to`, `recv_from`), `wait_ready`, files (`open`, `read_at`, `write_at`, `stat`, `read_entire_file`, `write_entire_file`) and `resolve`. All of them park only the calling goroutine. See the [goroutines guide](docs/language/goroutines.md).
 
 Example: [examples/goroutines](examples/goroutines).
 

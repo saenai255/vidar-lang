@@ -1,0 +1,15 @@
+package main
+
+import "core:fmt"
+
+main :: proc() {
+	xs := []int{1, 2, 3}
+	v := do! {
+		if len(xs) > 2 do take xs[2]
+		take 0
+	}
+	fmt.println(v)
+}
+
+// title: `do!`
+// about: The block runs just before the statement that uses its value, and `take` stores the value in a temporary.

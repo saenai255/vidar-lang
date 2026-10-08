@@ -2,7 +2,7 @@
 
 Notes for coding agents working on Vidar.
 Vidar is a TypeScript transpiler from `.vidar` to plain Odin. A `.vidar` program is Odin plus closures, interfaces, error handling, cyclic imports, comptime macros and goroutines.
-The language is documented in [README.md](README.md) and [SYNTAX.md](SYNTAX.md). The current batch of performance work is tracked in [PERF_PROGRESS.md](PERF_PROGRESS.md).
+The language is documented in [docs/](docs/README.md) and [SYNTAX.md](SYNTAX.md); [README.md](README.md) is the short entry point. The current batch of performance work is tracked in [PERF_PROGRESS.md](PERF_PROGRESS.md).
 
 ## Setup
 
@@ -22,7 +22,7 @@ The language is documented in [README.md](README.md) and [SYNTAX.md](SYNTAX.md).
 
 ## Where things are
 
-README's "Source layout" table lists every source file. Some things it doesn't make obvious:
+[docs/internals/source-layout.md](docs/internals/source-layout.md) lists every source file ([architecture.md](docs/internals/architecture.md) shows how they fit). Some things it doesn't make obvious:
 
 - **The two generated runtime packages live inside TypeScript strings.**
   - The `vidar_runtime` Odin package (closure types, `expect`, error helpers) is a string in `src/emitter.ts`.
@@ -212,7 +212,7 @@ git worktree remove --force "$TMPDIR/vidar-base"
 
 "bounds, hoisted", "bounds, lockstep" and "bounds, offsets" are newer than this table; on a 4-core linux/amd64 VM they run 14.7, 14.4 and 20.5 ms. "Append in a loop" is bimodal there (about 55 or 97 ms with identical code), from heap state left by earlier sections.
 
-"Closure, called through" was 8.4 ms until item 1 of PERF_PROGRESS; it should now match "closure, specialized" (re-measure on the M3; measured on linux/amd64 so far). README's "What it buys" table compares the plain and Vidar versions.
+"Closure, called through" was 8.4 ms until item 1 of PERF_PROGRESS; it should now match "closure, specialized" (re-measure on the M3; measured on linux/amd64 so far). the "What it buys" table in [docs/language/optimization.md](docs/language/optimization.md) compares the plain and Vidar versions.
 
 **slime_mud:**
 - `node examples/slime_mud/bench/bench.js` builds the Vidar and Odin versions and checks they behave the same.
@@ -251,7 +251,7 @@ git worktree remove --force "$TMPDIR/vidar-base"
 **Editor:** VS Code runs the `vidar-lsp` binary bundled in the installed `.vsix`, not `dist/`. To see an analyzer or LSP change there, run `npm run vsix`, then reload the VS Code window. It rebuilds the binaries, packages the `.vsix` and installs it with the CLI inside `/Applications/Visual Studio Code.app` (`code` is not on PATH; `VSCODE_CLI` overrides it). It takes about 15 s.
 
 **Docs:** when behavior changes, update:
-- README.md: the feature's section, plus "Tests", "Source layout" and "Limits" when they're affected;
+- docs/: the feature's page under `docs/language/`, plus `contributing.md` (tests), `internals/source-layout.md` and `limits.md` when they're affected. `docs/reference/` and `docs/internals/lowering.md` are generated: run `npm run docs:gen` after changing `src/lsp/docs.ts`, `src/prelude.vidar`, `src/sched.ts` (public procs or `#config` flags), the usage text in `src/cli.ts`, `tests/errors/`, or the emitted code of a construct in `docs/snippets/lowering/`. Keep README.md short and update its index only when a page is added or renamed;
 - SYNTAX.md;
 - examples/README.md;
 - for perf work, the status table and log in PERF_PROGRESS.md.
