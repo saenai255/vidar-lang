@@ -80,6 +80,16 @@ async function main() {
   assert.equal(frames[1].source.path, source);
   assert.equal(frames[1].line, lineOf("total := add(1)"));
 
+  assert.equal(frames[0].name, "closure");
+  const scopes = await request("scopes", { frameId: frames[0].id });
+  const locals = (await request("variables", { variablesReference: scopes.body.scopes[0].variablesReference })).body.variables;
+  const value = (name) => locals.find((v) => v.name === name)?.value;
+  assert.equal(value("n"), "10", JSON.stringify(locals));
+  assert.equal(value("x"), "1");
+  assert.ok(!locals.some((v) => v.name.startsWith("__")), "generated names are hidden");
+  const sum = await request("evaluate", { expression: "n + x", frameId: frames[0].id, context: "watch" });
+  assert.equal(sum.body?.result, "11", JSON.stringify(sum));
+
   const step = async (command) => {
     await request(command, { threadId: thread });
     await event("stopped");

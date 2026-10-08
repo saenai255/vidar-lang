@@ -92,6 +92,7 @@ export class DapMap {
     return frames.map((f) => {
       const file = this.forGen(f.source?.path);
       if (!file) return f;
+      f = { ...f, name: f.name?.replace(/^_proclit\$anon-\d+$/, "closure") };
       const line = sourceLine(file.lines, f.line);
       // generated code with no source line is shown dimmed, as the debugger gave it
       if (!line) return { ...f, presentationHint: "subtle" };

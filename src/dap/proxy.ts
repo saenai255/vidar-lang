@@ -71,6 +71,7 @@ export class Proxy {
   private internal = new Map<number, (m: DapMessage) => void>();
   private nextInternal = INTERNAL_SEQ;
   private serverSeq = 0;
+  private evaluates = new Map<number, any>();
   private lastStep?: { command: string; args: any };
   private autoSteps = 0;
   private justMyCode = true;
@@ -123,6 +124,9 @@ export class Proxy {
         if (pending) this.breakpoints.set(m.seq, pending);
         return this.toBackend({ ...m, arguments: args });
       }
+      case "evaluate":
+        this.evaluates.set(m.seq, m.arguments);
+        break;
       case "next":
       case "stepIn":
       case "stepOut":
@@ -172,13 +176,17 @@ export class Proxy {
 
   private async handleBackend(m: DapMessage): Promise<void> {
     const map = this.map;
-    if (map && m.type === "response" && m.success) {
+    if (map && m.type === "response" && m.command === "evaluate") {
+      m = await this.evaluateCaptured(m);
+    } else if (map && m.type === "response" && m.success) {
       if (m.command === "setBreakpoints") {
         const pending = this.breakpoints.get(m.request_seq!);
         this.breakpoints.delete(m.request_seq!);
         if (pending) m = { ...m, body: map.breakpointsResponse(pending, m.body) };
       } else if (m.command === "stackTrace" && m.body?.stackFrames) {
         m = { ...m, body: { ...m.body, stackFrames: map.frames(m.body.stackFrames) } };
+      } else if (m.command === "variables" && Array.isArray(m.body?.variables)) {
+        m = { ...m, body: { ...m.body, variables: await this.withCaptures(m.body.variables) } };
       }
     } else if (map && m.type === "event") {
       if (m.event === "output" && typeof m.body?.output === "string") m = { ...m, body: { ...m.body, output: map.mapOutput(m.body.output) } };
@@ -186,6 +194,45 @@ export class Proxy {
       else if (m.event === "stopped" && (await this.stepOn(map, m.body))) return;
     }
     this.toClient(m);
+  }
+
+  /** A closure's `__env` and its padding give way to the variables it captured. */
+  private async withCaptures(vars: any[]): Promise<any[]> {
+    const out: any[] = [];
+    for (const v of vars) {
+      if (v.name === "__env_raw") continue;
+      if (v.name === "__env" && v.variablesReference > 0) out.push(...(await this.captures(v.variablesReference)));
+      else out.push(v);
+    }
+    return out;
+  }
+
+  private async captures(reference: number, depth = 0): Promise<any[]> {
+    const kids: any[] = (await this.ask("variables", { variablesReference: reference }))?.body?.variables ?? [];
+    const out: any[] = [];
+    for (const k of kids) {
+      if (k.name === "__pad") continue;
+      if (k.name === "__caps" && k.variablesReference > 0 && depth < 2) out.push(...(await this.captures(k.variablesReference, depth + 1)));
+      else out.push(k);
+    }
+    return out;
+  }
+
+  /** `n` inside a closure is `__env.__caps.n` to the debugger: a failed watch or hover is retried that way. */
+  private async evaluateCaptured(m: DapMessage): Promise<DapMessage> {
+    const args = this.evaluates.get(m.request_seq!);
+    this.evaluates.delete(m.request_seq!);
+    if (m.success || !args?.frameId || args.context === "repl") return m;
+    const scopes: any[] = (await this.ask("scopes", { frameId: args.frameId }))?.body?.scopes ?? [];
+    const locals = scopes[0] && (await this.ask("variables", { variablesReference: scopes[0].variablesReference }))?.body?.variables;
+    const env = locals?.find((v: any) => v.name === "__env");
+    if (!env?.variablesReference) return m;
+    const names = new Set((await this.captures(env.variablesReference)).map((c) => c.name as string));
+    // whole identifiers that aren't fields (`a.b`) and aren't in strings
+    const rewritten = (args.expression as string).replace(/(?<![\w.$"'])[A-Za-z_]\w*/g, (id) => (names.has(id) ? `__env.__caps.${id}` : id));
+    if (rewritten === args.expression) return m;
+    const retry = await this.ask("evaluate", { ...args, expression: rewritten });
+    return retry ? { ...m, success: true, message: undefined, body: retry.body } : m;
   }
 
   /** A step ended on generated code with no source line (or inside Odin's own code): steps again, and says whether it did. */

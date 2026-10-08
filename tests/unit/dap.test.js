@@ -56,3 +56,8 @@ test("stepping into Odin's own code steps back out, unless justMyCode is off", (
   assert.equal(map.keepStepping(core, "stepIn", false), null);
   assert.equal(map.keepStepping(core, "next", true), null);
 });
+
+test("a closure frame is called closure", () => {
+  const [f] = map.frames([{ id: 1, name: "_proclit$anon-3", line: 4, source: { path: join(dir, "main.odin") } }]);
+  assert.equal(f.name, "closure");
+});
