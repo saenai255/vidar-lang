@@ -42,3 +42,17 @@ test("frames in generated code move to .vidar lines; helper frames are dimmed", 
   assert.equal(b.source.path, gen);
   assert.equal(c.source.path, "/odin/core/fmt.odin");
 });
+
+test("a step that ends on generated code with no source line goes on", () => {
+  const gen = join(dir, "main.odin");
+  assert.equal(map.keepStepping({ line: 4, source: { path: gen } }, "next", true), null);
+  assert.equal(map.keepStepping({ line: 9, source: { path: gen } }, "next", true), "next");
+  assert.equal(map.keepStepping({ line: 9, source: { path: gen } }, "stepIn", true), "stepIn");
+});
+
+test("stepping into Odin's own code steps back out, unless justMyCode is off", () => {
+  const core = { line: 7, source: { path: "/odin/core/fmt.odin" } };
+  assert.equal(map.keepStepping(core, "stepIn", true), "stepOut");
+  assert.equal(map.keepStepping(core, "stepIn", false), null);
+  assert.equal(map.keepStepping(core, "next", true), null);
+});

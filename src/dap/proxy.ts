@@ -56,6 +56,10 @@ export function dapMain(argv: string[], self: string[]): Promise<number> {
 
 // the debugger numbers its own messages; ours start far above
 const SERVER_SEQ = 2_000_000;
+// requests the adapter makes itself are numbered from here, so their answers aren't passed on
+const INTERNAL_SEQ = 1_000_000;
+// most steps taken on one step request to get past generated code
+const MAX_AUTO_STEPS = 50;
 
 export class Proxy {
   private map?: DapMap;
@@ -64,7 +68,12 @@ export class Proxy {
   private clientQueue: Promise<void> = Promise.resolve();
   private backendQueue: Promise<void> = Promise.resolve();
   private breakpoints = new Map<number, PendingBreakpoints>();
+  private internal = new Map<number, (m: DapMessage) => void>();
+  private nextInternal = INTERNAL_SEQ;
   private serverSeq = 0;
+  private lastStep?: { command: string; args: any };
+  private autoSteps = 0;
+  private justMyCode = true;
 
   constructor(private readonly backend: ChildProcess, private readonly self: string[]) {
     backend.stdout!.on("data", (d: Buffer) => this.fromBackend.push(d));
@@ -90,6 +99,15 @@ export class Proxy {
     this.toClient({ seq: ++this.serverSeq + SERVER_SEQ, type: "response", request_seq: req.seq, command: req.command, success: true, ...fields });
   }
 
+  private ask(command: string, args: any): Promise<DapMessage | undefined> {
+    return new Promise((done) => {
+      const seq = this.nextInternal++;
+      const timer = setTimeout(() => (this.internal.delete(seq), done(undefined)), 10_000);
+      this.internal.set(seq, (m) => (clearTimeout(timer), done(m.success ? m : undefined)));
+      this.toBackend({ seq, type: "request", command, arguments: args });
+    });
+  }
+
   // ---- editor -> debugger ----
 
   private async handleClient(m: DapMessage): Promise<void> {
@@ -105,6 +123,16 @@ export class Proxy {
         if (pending) this.breakpoints.set(m.seq, pending);
         return this.toBackend({ ...m, arguments: args });
       }
+      case "next":
+      case "stepIn":
+      case "stepOut":
+        this.lastStep = { command: m.command, args: m.arguments };
+        this.autoSteps = 0;
+        break;
+      case "continue":
+      case "pause":
+        this.lastStep = undefined;
+        break;
     }
     this.toBackend(m);
   }
@@ -125,13 +153,20 @@ export class Proxy {
     const binary = /^built (.+) with debug info$/m.exec(build.stderr)?.[1];
     if (!binary) return this.reply(m, { success: false, message: "vidar build -debug did not report a binary" });
     this.map = new DapMap(outDir, readRunMap(outDir));
-    const { opt, odinFlags, outDir: _out, ...rest } = a;
+    this.justMyCode = a.justMyCode !== false;
+    const { opt, odinFlags, outDir: _out, justMyCode: _jmc, ...rest } = a;
     this.toBackend({ ...m, arguments: { ...rest, program: binary, cwd: a.cwd ?? dirname(input) } });
   }
 
   // ---- debugger -> editor ----
 
   private backendMessage(m: DapMessage): void {
+    const answer = m.type === "response" && m.request_seq !== undefined ? this.internal.get(m.request_seq) : undefined;
+    if (answer) {
+      this.internal.delete(m.request_seq!);
+      return answer(m);
+    }
+    if (m.type === "response" && m.request_seq! >= INTERNAL_SEQ) return;
     this.backendQueue = this.backendQueue.then(() => this.handleBackend(m));
   }
 
@@ -148,8 +183,21 @@ export class Proxy {
     } else if (map && m.type === "event") {
       if (m.event === "output" && typeof m.body?.output === "string") m = { ...m, body: { ...m.body, output: map.mapOutput(m.body.output) } };
       else if (m.event === "breakpoint" && m.body?.breakpoint) m = { ...m, body: { ...m.body, breakpoint: map.breakpoint(m.body.breakpoint) } };
+      else if (m.event === "stopped" && (await this.stepOn(map, m.body))) return;
     }
     this.toClient(m);
+  }
+
+  /** A step ended on generated code with no source line (or inside Odin's own code): steps again, and says whether it did. */
+  private async stepOn(map: DapMap, stop: any): Promise<boolean> {
+    const step = this.lastStep;
+    if (stop?.reason !== "step" || !step || this.autoSteps >= MAX_AUTO_STEPS) return false;
+    const top = (await this.ask("stackTrace", { threadId: stop.threadId, startFrame: 0, levels: 1 }))?.body?.stackFrames?.[0];
+    const command = top && map.keepStepping(top, step.command, this.justMyCode);
+    if (!command) return false;
+    this.autoSteps++;
+    this.toBackend({ seq: this.nextInternal++, type: "request", command, arguments: { threadId: stop.threadId, singleThread: step.args?.singleThread } });
+    return true;
   }
 }
 

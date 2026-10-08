@@ -80,6 +80,30 @@ async function main() {
   assert.equal(frames[1].source.path, source);
   assert.equal(frames[1].line, lineOf("total := add(1)"));
 
+  const step = async (command) => {
+    await request(command, { threadId: thread });
+    await event("stopped");
+    const trace = await request("stackTrace", { threadId: thread, levels: 8 });
+    return trace.body.stackFrames;
+  };
+  const here = (f) => `${f.source?.path === source ? "main.vidar" : f.source?.path}:${f.line}`;
+
+  let top = (await step("next"))[0];
+  assert.equal(here(top), `main.vidar:${lineOf("return triple(y)")}`);
+
+  // into a proc of the program
+  const inside = await step("stepIn");
+  assert.ok(inside[0].source.path === source && [lineOf("triple :: proc"), lineOf("return x * 3")].includes(inside[0].line), `stopped in ${here(inside[0])}`);
+  assert.equal(inside[1].line, lineOf("return triple(y)"));
+  await step("stepOut");
+
+  // stepping into fmt.println comes back out: Odin's own code isn't the program's
+  let after = await step("next");
+  for (let i = 0; i < 6 && after[0].line !== lineOf("fmt.println(total)"); i++) after = await step("next");
+  assert.equal(here(after[0]), `main.vidar:${lineOf("fmt.println(total)")}`);
+  after = await step("stepIn");
+  assert.equal(after[0].source.path, source, `stopped in ${here(after[0])}`);
+
   await request("disconnect", { terminateDebuggee: true });
 }
 
