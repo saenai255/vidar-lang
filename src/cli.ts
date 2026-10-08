@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { constants, tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -25,10 +25,11 @@ function formatError(err: CompileError, program: Program | undefined, kind = "er
 
 function usage(): never {
   console.error(`usage:
-  vidar build <dir|file${EXT}> [-opt] [-o <out-dir>] [-bin|-lib|-dll] [-debug] [-- odin flags]
+  vidar build <dir|file${EXT}> [-opt] [-o <out-dir>] [-bin|-lib|-dll] [-out <file>] [-debug] [-- odin flags]
                      transpile the program (default out dir: ./out/<name>) and write <out-dir>/vidar.map.json;
                      -bin, -lib (static library) or -dll (shared library) also runs 'odin build' on it, putting
-                     the result next to the generated .odin; -debug implies -bin and adds debug info;
+                     the result next to the generated .odin, or at -out <file>; -debug implies -bin and adds debug info;
+                     a previous vidar build in the out dir is removed first;
                      odin flags after -- (e.g. -o:speed) are passed through
   vidar run   <dir|file${EXT}> [-opt] [-- args...]      transpile and 'odin run'
   vidar test  <dir|file${EXT}> [-opt] [--run <name>[,<name>...]] [-- odin flags]
@@ -124,6 +125,8 @@ export function main(argv: string[]): number | Promise<number> {
   const name = basename(resolve(input)).replace(/\.vidar$/, "");
   const o = valueOf("-o");
   const outDir = cmd === "build" ? resolve(o ?? join("out", name)) : mkdtempSync(join(tmpdir(), "vidar-"));
+  // only a previous vidar build is removed: it holds the map file
+  if (cmd === "build" && existsSync(join(outDir, MAP_FILE))) rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
   writeOutput(out, outDir);
   writeFileSync(join(outDir, MAP_FILE), JSON.stringify(runMapOf(out)) + "\n");
@@ -132,7 +135,11 @@ export function main(argv: string[]): number | Promise<number> {
     console.error(`wrote ${out.files.size} file(s) to ${outDir}`);
     if (!mode) return 0;
     // the generated .odin stays next to the binary, so the debugger can show it
-    const binary = join(outDir, artifactName(name, mode));
+    const target = valueOf("-out");
+    let binary = target ? resolve(target) : join(outDir, artifactName(name, mode));
+    // a package named like the program owns that path in the tree
+    if (!target && existsSync(binary) && statSync(binary).isDirectory()) binary += ".bin";
+    mkdirSync(dirname(binary), { recursive: true });
     const odinArgs = ["build", outDir, `-out:${binary}`, ...(mode === "exe" ? [] : [`-build-mode:${mode}`]), ...(debug ? ["-debug"] : []), ...defines, ...tail];
     const r = spawnSync("odin", odinArgs, { encoding: "utf8", stdio: ["inherit", "inherit", "pipe"] });
     if (r.stderr) process.stderr.write(mapper(r.stderr));
