@@ -157,7 +157,7 @@ function followCursor(e) {
   expand.timer = setTimeout(() => refreshExpansion(e.textEditor, false).catch(() => {}), 150);
 }
 
-// ---- debugging: build with `vidar build -debug`, then hand the binary to CodeLLDB or gdb ----
+// ---- debugging: build with `vidar build -debug`, then hand the binary to CodeLLDB or gdb, or run `vidar dap` ----
 
 /** How to run the vidar CLI: `vidar.cliPath`, else the bundled binary in CLI mode, else `vidar` on PATH. */
 function cliCommand() {
@@ -204,6 +204,14 @@ function buildForDebug(config, cwd) {
   });
 }
 
+const adapterFactory = {
+  createDebugAdapterDescriptor(session) {
+    const cli = cliCommand();
+    const backend = session.configuration.debuggerPath;
+    return new vscode.DebugAdapterExecutable(cli.command, [...cli.args, "dap", ...(backend && backend !== "gdb" ? ["--backend", backend] : [])], { env: { ...process.env, ...cli.env } });
+  },
+};
+
 const debugProvider = {
   provideDebugConfigurations() {
     return [{ type: "vidar", request: "launch", name: "Debug Vidar program", program: "${workspaceFolder}" }];
@@ -222,6 +230,13 @@ const debugProvider = {
     if (!config.program) {
       vscode.window.showErrorMessage("vidar debug configuration: set `program` to the package directory or .vidar file");
       return undefined;
+    }
+    if (config.debugger === "dap") {
+      // `vidar dap` builds, runs lldb-dap and maps positions itself: the vidar session is the one that runs
+      const name = path.basename(path.resolve(cwd, config.program)).replace(/\.vidar$/, "");
+      const outDir = path.resolve(cwd, config.outDir ?? path.join("out", `${name}-debug`));
+      await context.workspaceState.update("vidar.debugOutDir", outDir);
+      return { ...config, program: path.resolve(cwd, config.program), outDir, cwd };
     }
     const built = await vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: "vidar build -debug" }, () => buildForDebug(config, cwd));
     if (built.error) {
@@ -246,6 +261,7 @@ async function activate(ctx) {
   extensionPath = context.extensionPath;
   context.subscriptions.push(
     vscode.debug.registerDebugConfigurationProvider("vidar", debugProvider),
+    vscode.debug.registerDebugAdapterDescriptorFactory("vidar", adapterFactory),
     vscode.commands.registerCommand("vidar.showGeneratedOdin", showGeneratedOdin),
     vscode.commands.registerCommand("vidar.expandAtCursor", expandAtCursor),
     vscode.commands.registerCommand("vidar.expandAtCursorToggleOpt", toggleExpandOpt),

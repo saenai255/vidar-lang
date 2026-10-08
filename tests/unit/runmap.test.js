@@ -108,3 +108,25 @@ main :: proc() {
   assert.equal(mapped, "/src/m.vidar(9:2) runtime assertion: failed");
   assert.equal(generatedLine(saved.files[name].lines, 9), at);
 });
+
+test("a closure body lifted into a helper maps back to its .vidar lines", () => {
+  const src = `package main
+
+main :: proc() {
+	n := 3
+	f := proc[n](x: int) -> int {
+		y := x + n
+		return y * 2
+	}
+	_ = f(1)
+}
+`;
+  const out = emitProgram(loadProgram([{ path: "/src/m.vidar", text: src }], { followImports: false }));
+  const name = [...out.sourceOf.keys()][0];
+  const gen = out.files.get(name).split("\n");
+  const lines = out.lineMap.get(name);
+  const at = (text) => gen.findIndex((l) => l.includes(text));
+  assert.equal(lines[at("y := x + __env.n")], 6);
+  assert.equal(lines[at("return y * 2")], 7);
+  assert.equal(lines[at("call = proc(")], 5);
+});

@@ -10,7 +10,6 @@ What the compiler doesn't do yet, grouped by feature.
 - **Calling closures relies on type inference.** Vidar finds a closure's type through annotations, `:=` from closure literals or proc results (named or not, also of procs written `#force_inline proc` or `#force_no_inline proc`), struct fields, indexing and captures. If it can't tell that a callee is a closure, the call is left as is, and Odin reports it as a call to a non-procedure.
 - **Closures that use `$T` stay in their proc.** A closure body using the enclosing proc's polymorphic parameters (or a local constant built from them) isn't copied into a specialized callee by `@(specialize)` or `-opt`: the call goes through the closure value. A closure type naming a local type, called through an expression that isn't a name, field or index (`make_adder(1)(2)`), needs a file-scope helper and doesn't build.
 - **Closure size.** Every closure value carries room for `VIDAR_CLOSURE_ENV` bytes of captures (128 by default), whether it uses them or not. Arrays of closures and channels of closures are that much bigger.
-- **Run-time locations inside closure bodies aren't mapped.** A closure body with captures is lifted into generated lines that have no source line, so a panic, a goroutine dump or a race report from inside one shows a `.odin` location rather than the `.vidar` line.
 
 ## Interfaces
 
@@ -48,6 +47,12 @@ What the compiler doesn't do yet, grouped by feature.
 
 - **`-opt` and `@(table)` trust the compile-time interpreter.** Automatic tables use only integer code it runs exactly. A `@(table)` you write yourself must be pure, which vidar does not check.
 - **`@(no_alloc)` trusts lists.** Core procs are judged by name from a list of ones known not to allocate. A custom `fmt` formatter, or an allocator set on the context, isn't followed. The run-time backstop only covers builds below `-o:size`.
+
+## Debugging
+
+- **`vidar dap` needs `lldb-dap`** (or `lldb-vscode`). gdb's own DAP mode isn't supported.
+- **Pointer captures show as pointers.** A closure that captured `&x` lists `x` as a `^T`, not the value it points at.
+- **Columns aren't mapped.** A frame's column is always 1, and a breakpoint binds to a line, not a position in it.
 
 ## Language server
 

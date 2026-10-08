@@ -1,6 +1,6 @@
 # Debugging
 
-Odin has no `#line` directive, so a debugger steps through the generated Odin rather than the `.vidar` source. Vidar keeps that code close to the source: lines it doesn't rewrite stay the same, and a lowered construct takes as many lines as it did.
+Odin has no `#line` directive, so a plain debugger steps through the generated Odin rather than the `.vidar` source. Vidar keeps that code close to the source: lines it doesn't rewrite stay the same, and a lowered construct takes as many lines as it did. [`vidar dap`](#with-vidar-dap) goes further and translates positions, so a debugger session never shows generated code.
 
 ## Building with debug info
 
@@ -44,6 +44,27 @@ The extension adds a `vidar` debug configuration. It runs `vidar build -debug` (
 |---|---|
 | a debug build exists that is still current with the file (saved, and not changed since) | the real generated file from that build, where breakpoints bind |
 | otherwise | the program's generated Odin in an unsaved editor, for reading |
+
+## With `vidar dap`
+
+```bash
+vidar dap [--backend <lldb-dap>]
+```
+
+A [debug adapter](https://microsoft.github.io/debug-adapter-protocol/) on stdin and stdout, for any editor that speaks DAP. It runs `lldb-dap` underneath (from `PATH`, Xcode's command line tools or LLVM; `--backend` or `VIDAR_DAP_BACKEND` name one) and rewrites what passes through, using `vidar.map.json`:
+
+- **Launch.** `program` is a `.vidar` file or package directory. The adapter builds it with `vidar build -debug` and starts the binary. `args`, `cwd`, `env` and `stopOnEntry` go to lldb-dap; `opt`, `odinFlags` and `outDir` (default `out/<name>-debug`) control the build. A failed build is reported with its errors on `.vidar` lines.
+- **Breakpoints** set on `.vidar` lines bind to the generated line. A line that produced no code is reported unverified.
+- **Stack frames** are on `.vidar` files and lines, including the bodies of closures. A closure frame is named `closure`. A frame in generated code with no source line (a closure's setup, say) is shown dimmed, as the debugger gave it.
+- **Stepping** goes on past generated lines that have no source line. With `justMyCode` (the default), stepping into Odin's own code (`core`, `base`) steps back out; set `"justMyCode": false` to follow calls into it.
+- **Variables.** A closure's `__env` and `__env_raw` are replaced by the variables it captured. Watch and hover expressions can name a captured variable directly (`n`, `n + x`). A pointer capture (`&x`) shows as the pointer.
+- **Output.** Generated `.odin` locations in the program's output, such as a panic's, are rewritten to `.vidar` ones.
+
+In VS Code, set `"debugger": "dap"` in the `vidar` debug configuration (`debuggerPath` then names `lldb-dap`):
+
+```json
+{ "type": "vidar", "request": "launch", "name": "Debug game", "program": "${workspaceFolder}/examples/cyclic", "debugger": "dap" }
+```
 
 ## What generated names mean
 

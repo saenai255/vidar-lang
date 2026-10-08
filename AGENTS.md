@@ -51,6 +51,7 @@ Times are from a 12-core M3 Pro.
 | `npm run bench` | `examples/negative_cost` timed against `HEAD`; see "Benchmarks" | 15 s |
 | `npm run stress -- <case> [-n 500] [-t 10] [-jN]` | builds one case once and runs it `-n` times to catch rare hangs; on a hang it saves the CPU use and a stack of every thread; `-opt`, `-o:` and `-define:` pass through | 1 s for 100 runs of `sched_pending_io` |
 | `node scripts/test-lsp.js` | the language server, end to end over stdio | 6 s |
+| `node scripts/test-dap.js` | `vidar dap` against a real `lldb-dap`, end to end; prints `SKIP` without `lldb-dap` | 10 s |
 | `VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js` | the same suite against a built binary | |
 | `node scripts/passthrough.js <files...>` | plain Odin files must come out unchanged; try `$(find "$(odin root)/core" -name '*.odin')` | |
 
