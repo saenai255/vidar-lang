@@ -9,7 +9,7 @@ Color :: enum { Red, Green, Blue }
 
 paint :: proc(id: int, scale: f64, c: Color, out: sched.Chan(string), wg: ^sched.Wait_Group) {
 	defer sched.done(wg)
-	sched.sleep(time.Duration(10 * (3 - id)) * time.Millisecond)
+	sched.sleep(time.Duration(100 * (3 - id)) * time.Millisecond)
 	sched.send(out, fmt.aprintf("worker %d: %v x%.1f", id, c, scale))
 }
 
