@@ -35,6 +35,18 @@ For a one-page cheat sheet of every construct, see [SYNTAX.md](../SYNTAX.md). Ea
 | [Debugging](tools/debugging.md) | `-debug`, `lldb`/`gdb`, mapping crashes to `.vidar` lines |
 | [Language server](tools/language-server.md) | editor features, VS Code extension |
 
+## Reference
+
+Generated from the compiler's own tables by `npm run docs:gen`, so they match the code.
+
+| Page | What it covers |
+|---|---|
+| [Keywords](reference/keywords.md) | Vidar's and Odin's keywords |
+| [Built-ins](reference/builtins.md) | built-in procs, types, constants, context fields |
+| [Comptime built-ins](reference/comptime.md) | helpers for `proc!` and `comptime!`, parameter kinds |
+| [Attributes](reference/attributes.md) | `@(table)`, `@(no_alloc)`, `@(private)`, ... |
+| [Command line](reference/cli.md) | the full usage text of `vidar` |
+
 ## How the compiler works
 
 | Page | What it covers |

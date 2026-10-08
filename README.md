@@ -21,4 +21,6 @@ npm test
 - **Language:** [Closures](docs/language/closures.md), [Interfaces](docs/language/interfaces.md), [Error handling](docs/language/error-handling.md), [Anonymous struct literals](docs/language/anonymous-structs.md), [Cyclic imports](docs/language/cyclic-imports.md), [Collections](docs/language/collections.md), [Goroutines and channels](docs/language/goroutines.md), [Built-in macros](docs/language/builtin-macros.md), [Comptime procs](docs/language/comptime.md), [`-opt`](docs/language/optimization.md).
 - **Tools:** [Testing](docs/tools/testing.md), [Debugging](docs/tools/debugging.md), [Language server](docs/tools/language-server.md).
 - **Compiler internals:** [Architecture](docs/internals/architecture.md), [Source layout](docs/internals/source-layout.md), [Contributing](docs/contributing.md).
+- **Reference** (generated from the compiler): [Keywords](docs/reference/keywords.md), [Built-ins](docs/reference/builtins.md), [Comptime built-ins](docs/reference/comptime.md), [Attributes](docs/reference/attributes.md), [CLI usage](docs/reference/cli.md).
+- **Browse as a site:** `npm run docs:dev`.
 - **Known gaps:** [Limits](docs/limits.md).

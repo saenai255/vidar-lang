@@ -3,16 +3,16 @@
 Vidar is a source-to-source compiler written in TypeScript. It reads `.vidar` files (Odin plus a few constructs), checks them, and writes an Odin package tree. The `odin` compiler then builds that tree. Vidar never produces machine code.
 
 ```mermaid
-flowchart LR
+flowchart TD
     src[".vidar / .odin files"] --> lex["lexer.ts"]
     lex --> parse["parser.ts"]
-    parse --> load["project.ts<br/>follow imports,<br/>group import cycles"]
-    load --> an["analyzer.ts<br/>scopes, types, captures,<br/>macro expansion"]
-    an --> chk["escape.ts, checks.ts,<br/>autoopt.ts (-opt)"]
-    chk --> emit["emitter.ts<br/>lower and re-emit"]
+    parse --> load["project.ts: follow imports, group cycles"]
+    load --> an["analyzer.ts: scopes, types, macros"]
+    an --> chk["escape.ts, checks.ts, autoopt.ts"]
+    chk --> emit["emitter.ts: lower and re-emit"]
     emit --> out["Odin tree + vidar.map.json"]
     out --> odin["odin build / run / check / test"]
-    odin --> map["runmap.ts<br/>errors and panics back to .vidar lines"]
+    odin --> map["runmap.ts: errors back to .vidar lines"]
 ```
 
 ## Stages
