@@ -1,0 +1,8 @@
+package main
+
+import "lib:util"
+
+main :: proc() {
+	x := util.twice(21)
+	_ = x
+}

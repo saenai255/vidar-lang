@@ -10,7 +10,7 @@ import { resetGensym } from "./comptime";
 import type { File, Node } from "./ast";
 import { PackageInfo, Scope, Unit } from "./scope";
 import { PRELUDE_PATH, PRELUDE_SOURCE } from "./prelude";
-import { findManifest, resolveCollection } from "./manifest";
+import { MANIFEST, findManifest, resolveCollection } from "./manifest";
 import { SCHED_ASM, SCHED_IMPORT, SCHED_SOURCE } from "./sched";
 import { markRaces } from "./race";
 
@@ -117,14 +117,26 @@ export function loadProgram(entry: string | Source[], opts: LoadOptions = {}): P
   };
   const packageAt = (dir: string) => byDir.get(dirKey(dir));
   const sources: Source[] = [];
-  const manifests = new Map<string, ReturnType<typeof findManifest>>();
+  const read = (path: string) => opts.overrides?.get(path) ?? readFileSync(path, "utf8");
+  const manifests = new Map<string, { manifest: ReturnType<typeof findManifest>; error?: CompileError; reported?: boolean }>();
+  const manifestFor = (fromDir: string) => {
+    let entry = manifests.get(fromDir);
+    if (!entry) {
+      try {
+        entry = { manifest: findManifest(fromDir, read) };
+      } catch (err) {
+        if (!(err instanceof CompileError)) throw err;
+        entry = { manifest: null, error: err };
+      }
+      manifests.set(fromDir, entry);
+    }
+    return entry;
+  };
   // The directory an import names: relative, or a collection declared by the nearest vidar.toml.
   const importDir = (fromDir: string, path: string): string | null => {
     if (isRelativeImport(path)) return resolve(fromDir, path);
-    if (!manifests.has(fromDir)) manifests.set(fromDir, findManifest(fromDir));
-    return resolveCollection(manifests.get(fromDir) ?? null, path);
+    return resolveCollection(manifestFor(fromDir).manifest, path);
   };
-  const read = (path: string) => opts.overrides?.get(path) ?? readFileSync(path, "utf8");
 
   const fail = (err: unknown) => {
     if (!tolerant || !(err instanceof CompileError)) throw err;
@@ -156,6 +168,12 @@ export function loadProgram(entry: string | Source[], opts: LoadOptions = {}): P
           continue;
         }
         if (s.k !== "Import") continue;
+        const bad = isRelativeImport(s.path) ? undefined : manifestFor(dir);
+        if (bad?.error && !bad.reported) {
+          bad.reported = true;
+          const at = bad.error.pos;
+          fail(new CompileError(`${MANIFEST}: ${bad.error.message} (${at ? `${at.file}:${at.line}` : MANIFEST})`, s.toks[s.pathTok].pos));
+        }
         const target = importDir(dir, s.path);
         if (!target) continue;
         let dep = packageAt(target);

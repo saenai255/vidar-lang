@@ -1000,6 +1000,33 @@ function change(text) {
     check("removing a workspace folder drops its unopened programs", !afterRemove.includes("index_app_main") && afterRemove.includes("index_tool_bits"), JSON.stringify(afterRemove));
   }
 
+
+  {
+    // collections declared in a vidar.toml
+    const colDir = join(dir, "collections");
+    cpSync("tests/lsp/collections", colDir, { recursive: true });
+    const colMain = join(colDir, "main.vidar");
+    const colUri = pathToFileURL(colMain).toString();
+    const colText = readFileSync(colMain, "utf8");
+    const colDiag = nextDiagnostics((d) => d.uri === colUri);
+    notify("textDocument/didOpen", { textDocument: { uri: colUri, languageId: "vidar", version: 1, text: colText } });
+    check("a collection import resolves with no diagnostics", (await colDiag).diagnostics.length === 0, "");
+    const colLine = colText.split("\n").findIndex((l) => l.includes("util.twice"));
+    const colDef = await request("textDocument/definition", { textDocument: { uri: colUri }, position: { line: colLine, character: colText.split("\n")[colLine].indexOf("twice") + 1 } });
+    check("definition jumps into a collection package", colDef.result?.uri === pathToFileURL(join(colDir, "vendor", "lib", "util", "util.vidar")).toString(), JSON.stringify(colDef.result));
+    const toml = join(colDir, "vidar.toml");
+    writeFileSync(toml, "[collections]\nlib = oops\n");
+    const badDiag = nextDiagnostics((d) => d.uri === colUri && d.diagnostics.length > 0);
+    notify("workspace/didChangeWatchedFiles", { changes: [{ uri: pathToFileURL(toml).toString(), type: 2 }] });
+    const bd2 = await badDiag;
+    check("a broken vidar.toml is reported on the import", /vidar\.toml: collection 'lib' must be a string/.test(bd2.diagnostics[0]?.message ?? ""), JSON.stringify(bd2.diagnostics));
+    writeFileSync(toml, "[collections]\nlib = \"./vendor/lib\"\n");
+    const okDiag = nextDiagnostics((d) => d.uri === colUri && d.diagnostics.length === 0);
+    notify("workspace/didChangeWatchedFiles", { changes: [{ uri: pathToFileURL(toml).toString(), type: 2 }] });
+    await okDiag;
+    check("fixing the vidar.toml clears the diagnostic", true, "");
+  }
+
   writeFileSync(file, original);
   const restored = nextDiagnostics((d) => d.uri === uri && d.diagnostics.length === 0);
   change(original);
