@@ -215,6 +215,8 @@ git worktree remove --force "$TMPDIR/vidar-base"
 
 ## What to watch for
 
+**Language:** always use inclusive language in code, comments, docs, commit messages and PR text: `allowlist`/`denylist`, `main`/`primary`, `parent`/`child`, `placeholder`, not terms like whitelist, blacklist, master, slave or dummy. Use they/them for people whose pronouns are unknown.
+
 **Generated code:**
 - **Plain Odin passes through unchanged** without `-opt`, byte for byte. The `plain_*` cases and the `core` samples check this.
 - **Line structure is kept.**
