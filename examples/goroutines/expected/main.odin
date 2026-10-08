@@ -163,7 +163,7 @@ __closure_4 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env)) {
 	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at main.vidar:69: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
 	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
 	return __vidar.Closure(proc(__vidar.Env)){
-		call = proc(__env_raw: __vidar.Env) { __env := transmute(__Env)__env_raw; sched.sleep(50 * time.Millisecond); sched.send(__env.slow, "too late") },
+		call = proc(__env_raw: __vidar.Env) { __env := transmute(__Env)__env_raw; sched.sleep(500 * time.Millisecond); sched.send(__env.slow, "too late") },
 		env = transmute(__vidar.Env)__Env{__caps = {__c0}},
 	}
 }

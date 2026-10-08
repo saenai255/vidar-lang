@@ -66,7 +66,7 @@ main :: proc() {
 	// select with a timeout
 	slow := sched.make_chan(string)
 	timeout := sched.make_chan(bool, 1)
-	sched.go(proc[slow]() { sched.sleep(50 * time.Millisecond); sched.send(slow, "too late") })
+	sched.go(proc[slow]() { sched.sleep(500 * time.Millisecond); sched.send(slow, "too late") })
 	sched.go(proc[timeout]() { sched.sleep(10 * time.Millisecond); sched.send(timeout, true) })
 	msg: string
 	switch sched.select(sched.on_recv(slow, &msg), sched.on_recv(timeout)) {
