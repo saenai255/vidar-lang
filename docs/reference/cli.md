@@ -25,6 +25,7 @@ usage:
   -define:NAME=value is passed on to odin; run and test print panics, failed asserts and test
   messages at .vidar locations
   vidar lsp                                     run the language server on stdio (same as vidar-lsp)
+  vidar dap   [--backend <lldb-dap>]            debug adapter on stdio: breakpoints and stack frames on .vidar lines
   vidar --version
 
 A directory is a package. Packages it imports by relative path are transpiled too;

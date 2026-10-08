@@ -27,12 +27,13 @@ For how these files fit together, read [Architecture](architecture.md) first.
 | `src/fmtspec.ts` | reads `fmt` format strings for `-opt` |
 | `src/manifest.ts` | reads `vidar.toml` and resolves declared collection imports to directories |
 | `src/project.ts` | loads a program by following imports, groups import cycles (Tarjan's algorithm), and emits the output tree; shared by the CLI and the language server |
-| `src/cli.ts` | `build` / `run` / `test` / `check` / `emit` / `fmt` / `map` / `new` |
+| `src/cli.ts` | `build` / `run` / `test` / `check` / `emit` / `fmt` / `map` / `new` / `dap` |
 | `src/scaffold.ts` | `vidar new`: the files of a new program or library package |
 | `src/paths.ts` | comparing paths from Odin, ols and the editor: on Windows without case and with either slash |
 | `src/runmap.ts` | generated `.odin` locations mapped back to `.vidar` lines: compile errors, the line filter on `run` / `test` output, `vidar.map.json` and `vidar map`, and the reverse lookup for *Show Generated Odin* |
 | `src/watch.ts` | `--watch`: the files of a program, the watch loop (`fs.watch` on each package directory, polling as the fallback, debounced), and rerunning the command in a child process that is killed on change |
 | `src/format.ts` | `vidar fmt`: token-based formatter (indentation, spacing, trailing whitespace), its per-line edits for the language server, and the `fmt` command |
+| `src/dap/` | `vidar dap`: `wire.ts` (DAP framing), `translate.ts` (the `.vidar` ↔ generated positions of breakpoints, frames and steps, from `vidar.map.json`) and `proxy.ts` (builds on launch, runs lldb-dap, rewrites messages both ways, steps past generated code, shows a closure's captures as variables) |
 | `src/bin.ts` | entry point of the standalone binary (`vidar`, `vidar-lsp`) |
 | `src/lsp/` | language server: `features.ts` (index, hover, definition, completion, …), `navigation.ts` (workspace symbols, implementations, call hierarchy), `semantic.ts` (semantic tokens), `actions.ts` (quick fixes), `expand.ts` (the code for the statement at the cursor), `optreport.ts` (`-opt` decisions by proc, for `vidar/optReport` and code lenses), `server.ts` (protocol, `odin check` on save), `workspace.ts` (the workspace index) and `odin.ts` (shadow tree and forwarding to ols) |
 | `editors/vscode/` | VS Code extension: grammar, client, the Optimization Report view (`optreport.js`) and the `vidar` debug configuration |

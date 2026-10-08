@@ -48,6 +48,12 @@ What the compiler doesn't do yet, grouped by feature.
 - **`-opt` and `@(table)` trust the compile-time interpreter.** Automatic tables use only integer code it runs exactly. A `@(table)` you write yourself must be pure, which vidar does not check.
 - **`@(no_alloc)` trusts lists.** Core procs are judged by name from a list of ones known not to allocate. A custom `fmt` formatter, or an allocator set on the context, isn't followed. The run-time backstop only covers builds below `-o:size`.
 
+## Debugging
+
+- **`vidar dap` needs `lldb-dap`** (or `lldb-vscode`). gdb's own DAP mode isn't supported.
+- **Pointer captures show as pointers.** A closure that captured `&x` lists `x` as a `^T`, not the value it points at.
+- **Columns aren't mapped.** A frame's column is always 1, and a breakpoint binds to a line, not a position in it.
+
 ## Language server
 
 - **Renaming a field or enum member** is refused while any use of a member of that name has a type vidar can't infer, or sits in a comptime proc (see [Language server](tools/language-server.md#fields-and-enum-members)). Fields of anonymous structs and of Odin's own types aren't renamed.

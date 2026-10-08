@@ -37,6 +37,7 @@ npm run stress -- tests/cases/sched_pending_io -n 2000   # run one case many tim
 | [Errors](#errors) | `tests/errors/`, `tests/errors_pkg/` | programs that must fail with a given message |
 | [Passthrough](#passthrough) | `scripts/test.js` | real Odin files come out unchanged |
 | [Language server](#language-server) | `scripts/test-lsp.js` | the server, end to end |
+| [Debug adapter](#debug-adapter) | `tests/unit/dap.test.js`, `scripts/test-dap.js` | `vidar dap`, end to end against lldb-dap (skipped without it) |
 | [Benchmark](#benchmark), [stress runs](#stress-runs) | `scripts/bench.js`, `scripts/stress.js` | not part of `npm test` |
 | [CI](#ci) | `.github/workflows/build.yml` | what runs on every PR |
 
@@ -127,6 +128,10 @@ A few real files from Odin's `core` library must transpile to themselves unchang
 3. a 500-run stress of `tests/cases/sched_pending_io`.
 
 When a step fails, the stress run's `hang-*.txt` stacks are uploaded as an artifact. The binaries are built and released only after it passes.
+
+### Debug adapter
+
+`scripts/test-dap.js` drives `vidar dap` over stdio like an editor, against a real `lldb-dap` and `odin` (it prints `SKIP` and passes when either is missing). It launches `tests/dap/closure` and checks breakpoints on `.vidar` lines (including one with no code), frames inside a closure, its captured variables and a watch expression naming one, stepping into and out of a proc, and that stepping into `fmt` steps back out. The translation itself is covered without a debugger by `tests/unit/dap.test.js`.
 
 ### Language server
 

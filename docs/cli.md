@@ -39,6 +39,7 @@ vidar new   hello                        # start a program in a new directory (-
 | `vidar fmt <files\|dirs> [--check\|--write]` | format `.vidar` files. See [below](#vidar-fmt) |
 | `vidar new <dir> [--lib]` | start a program in an empty directory |
 | `vidar lsp` | run the language server on stdio (same as `vidar-lsp`) |
+| `vidar dap [--backend <lldb-dap>]` | run the [debug adapter](tools/debugging.md#with-vidar-dap) on stdio: breakpoints, stack frames, variables and stepping on `.vidar` lines |
 | `vidar --version` | print the version |
 
 The full usage text is in the [command line reference](reference/cli.md).
