@@ -6,6 +6,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { Analyzer, posOf } from "./analyzer";
 import { hotWarnings } from "./checks";
 import { fmtMain } from "./format";
+import { dapMain } from "./dap/proxy";
 import { newMain } from "./scaffold";
 import { CompileError } from "./lexer";
 import { Output, Program, emitProgram, loadProgram, transpile } from "./project";
@@ -44,6 +45,7 @@ function usage(): never {
   -define:NAME=value is passed on to odin; run and test print panics, failed asserts and test
   messages at .vidar locations
   vidar lsp                                     run the language server on stdio (same as vidar-lsp)
+  vidar dap   [--backend <lldb-dap>]            debug adapter on stdio: breakpoints and stack frames on .vidar lines
   vidar --version
 
 A directory is a package. Packages it imports by relative path are transpiled too;
@@ -87,6 +89,7 @@ export function main(argv: string[]): number | Promise<number> {
   }
   if (argv[0] === "fmt") return fmtMain(argv.slice(1));
   if (argv[0] === "new") return newMain(argv.slice(1));
+  if (argv[0] === "dap") return dapMain(argv.slice(1), cliCommand());
   const [cmd, input, ...args] = argv;
   if (cmd === "map" && input) return mapCommand(input);
   const end = args.indexOf("--");
@@ -160,6 +163,12 @@ export function main(argv: string[]): number | Promise<number> {
   const pkg = [...out.files].find(([f]) => !f.includes("/"))?.[1].match(/^\s*package\s+(\w+)/m)?.[1] ?? "main";
   const select = names ? [`-define:ODIN_TEST_NAMES=${names.split(",").map((n) => (n.includes(".") ? n : `${pkg}.${n}`)).join(",")}`] : [];
   return runMapped(["test", outDir, `-out:${join(outDir, binaryName(name))}`, ...defines, ...select, ...tail], mapper, true);
+}
+
+/** The command that runs this CLI again: node and the script, or the standalone binary. */
+function cliCommand(): string[] {
+  const script = process.argv[1];
+  return script && /cli\.js$/.test(script) ? [process.execPath, script] : [process.execPath];
 }
 
 /** Runs odin with its stderr (and stdout, for `odin test`) rewritten line by line to .vidar locations. */

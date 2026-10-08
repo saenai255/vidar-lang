@@ -1,0 +1,17 @@
+package main
+
+import "core:fmt"
+
+triple :: proc(x: int) -> int {
+	return x * 3
+}
+
+main :: proc() {
+	n := 10
+	add := proc[n](x: int) -> int {
+		y := x + n
+		return triple(y)
+	}
+	total := add(1)
+	fmt.println(total)
+}
