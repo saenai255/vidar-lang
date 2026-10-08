@@ -163,6 +163,11 @@
         }
       }
     },
+    "breakpoints": [
+      {
+        "language": "vidar"
+      }
+    ],
     "debuggers": [
       {
         "type": "vidar",
