@@ -231,7 +231,7 @@ const debugProvider = {
       vscode.window.showErrorMessage("vidar debug configuration: set `program` to the package directory or .vidar file");
       return undefined;
     }
-    if (config.debugger === "dap") {
+    if ((config.debugger ?? "dap") === "dap") {
       // `vidar dap` builds, runs lldb-dap and maps positions itself: the vidar session is the one that runs
       const name = path.basename(path.resolve(cwd, config.program)).replace(/\.vidar$/, "");
       const outDir = path.resolve(cwd, config.outDir ?? path.join("out", `${name}-debug`));
