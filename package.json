@@ -1,6 +1,6 @@
 {
   "name": "vidar",
-  "version": "0.1.0",
+  "version": "0.1.0-dev",
   "main": "dist/cli.js",
   "scripts": {
     "build": "tsc -p . && node -e \"require('fs').copyFileSync('src/prelude.vidar', 'dist/prelude.vidar')\"",

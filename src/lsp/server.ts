@@ -14,7 +14,7 @@ import { Program as Analysis, emitProgram, loadProgram, outputName, preludeSourc
 import { optimizeAll } from "../optimize";
 import { hotWarnings } from "../checks";
 import { PRELUDE_PATH } from "../prelude";
-import { writeOutput } from "../cli";
+import { writeOutput, version } from "../cli";
 import { formatEdits } from "../format";
 import { generatedLine } from "../runmap";
 import { relativeInside } from "../paths";
@@ -256,7 +256,7 @@ connection.onInitialize((params): InitializeResult => {
       codeActionProvider: { codeActionKinds: [CodeActionKind.QuickFix, CodeActionKind.SourceFixAll] },
       documentFormattingProvider: true,
     },
-    serverInfo: { name: "vidar-lsp", version: "0.1.0" },
+    serverInfo: { name: "vidar-lsp", version: version() },
   };
 });
 
