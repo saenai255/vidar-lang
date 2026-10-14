@@ -22,10 +22,10 @@ What the compiler doesn't do yet, grouped by feature.
 
 ## Destructors
 
-- **Only locals are destroyed.** A type with `impl Destroy` can't be a struct field, array or slice element, map value, union variant or parametric type argument, or a package-level variable; each is a compile error. Heap values (`new`, `free`) are never destroyed.
-- **No generics.** A destructible value can't be passed to a `$T` parameter, and a parametric type can't implement `Destroy`.
+- **No containers yet.** A type with `impl Destroy` can't be held in a slice, dynamic array, map or `distinct` type, or in a package-level variable; each is a compile error. Heap values (`new`, `free`) are never destroyed.
+- **No parametric impls.** `impl Destroy for Box($T)` isn't supported (a `Box(File)` is still destroyed through its fields).
+- **Generic code is checked at run time.** A copy of `T` in generic code fails Odin's `#assert` only where the file can name the type, and stops the program otherwise. Parameters are borrowed, so a generic proc that returns or stores its parameter can't be used with a destructible type. Temporaries of type `T` in generic code are never destroyed.
 - **Destroy procs see zero values.** Declarations without a value, returned locals and the results that come with an error are destroyed too.
-- **Types vidar can't infer.** When a local's type can't be told and its value involves a destructible type, vidar asks for the type to be written out.
 
 See [Destructors](language/destructors.md).
 

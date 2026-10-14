@@ -354,7 +354,7 @@ Removes an element by swapping the last one in.
 - `complex128`: Complex number of two `f64`.
 - `complex64`: Complex number of two `f32`.
 - `cstring`: Null-terminated C string.
-- `Destroy`: Vidar: `impl Destroy for T { destroy = t_destroy }`, with `t_destroy :: proc(x: ^T)`, destroys each local of type `T` when its scope ends, the old value on assignment, and never a local that is returned (it moves out). Copies are compile errors; borrow with `&x`. Built in unless the program declares its own `Destroy`.
+- `Destroy`: Vidar: `impl Destroy for T { destroy = t_destroy }`, with `t_destroy :: proc(x: ^T)`, destroys each local of type `T` when its scope ends, the old value on assignment, and never a local that is returned (it moves out). Structs, arrays, unions and `Maybe`s holding a `T` are destroyed too, and so are generic code's values (found at run time). Copies are compile errors; borrow with `&x`. Built in unless the program declares its own `Destroy`.
 - `f16`: 16-bit float.
 - `f32`: 32-bit float.
 - `f64`: 64-bit float.

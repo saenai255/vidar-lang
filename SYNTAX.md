@@ -104,12 +104,15 @@ Examples: [examples/interfaces](examples/interfaces), [examples/methods](example
 | `x = make_t()`, `p^ = make_t()` | the old value is destroyed once the new one is stored |
 | `return x` | moves `x` out: the caller destroys it |
 | `f(x)` with `f :: proc(t: T)` | the parameter borrows `x`; `f` can't return or store it |
+| `S :: struct { f: T, ... }`, `[4]T`, `Maybe(T)`, `union { T, ... }`, `Pair(T)` | hold a `T`, so they are destroyed (and can't be copied) too: a struct's own impl first, then its fields last first |
+| `x: T` in a generic proc, or a local vidar can't type | destroyed through `__vidar.destroy`, found at run time; a copy fails Odin's `#assert` where the file can name the type, else stops the program |
 | `y := x`, `y = x`, `return param`, `proc[x]`, `new_clone(x)` | compile errors: a copy would be destroyed twice; borrow with `&x` |
 | `make_t()` as a statement, `f(make_t())`, `_ = make_t()` | compile errors: nothing would destroy the value |
 
 Rules:
 - A destroy proc must accept the zero value: declarations without a value, returned locals and the values that come back with an error are all destroyed.
-- For now, `T` can't be held inside another type (fields, arrays, slices, maps, `Maybe`, parametric types, `distinct`), in a package-level variable, or by a generic parameter; each is a compile error. Hold `^T` instead.
+- For now, `T` can't be held in a slice, dynamic array, map, `distinct` type or package-level variable, and a parametric type can't implement `Destroy`; each is a compile error. Hold `^T` instead.
+- A generic proc that returns or stores a by-value parameter copies it, so it can't be used with a `T`.
 - A file holding a `T` must import the package of its destroy proc.
 
 See [Destructors](docs/language/destructors.md).

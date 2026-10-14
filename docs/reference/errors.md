@@ -3055,6 +3055,69 @@ main :: proc() {
 }
 ```
 
+### destroy copy derived
+
+The message contains:
+
+```text
+'a' is a Log, which holds a value with impl Destroy, and 'b := a' would copy it
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+
+// Log has no impl of its own, but holds a File, so it is destroyed (and can't be copied) too
+Log :: struct {
+	out:   File,
+	level: int,
+}
+
+main :: proc() {
+	a := Log{out = File{"log"}}
+	b := a
+	fmt.println(b.level)
+}
+```
+
+### destroy copy field
+
+The message contains:
+
+```text
+'log.out' is a File, which has impl Destroy, and 'f := log.out' would copy it
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+
+Log :: struct {
+	out:   File,
+	level: int,
+}
+
+main :: proc() {
+	log := Log{out = File{"log"}}
+	f := log.out
+	fmt.println(f.name)
+}
+```
+
 ### destroy dropped
 
 The message contains:
@@ -3103,35 +3166,6 @@ open :: proc(name: string) -> File { return File{name} }
 main :: proc() {
 	files: [dynamic]File
 	fmt.println(len(files))
-}
-```
-
-### destroy generic param
-
-The message contains:
-
-```text
-can't be passed to a generic parameter yet
-```
-
-This program fails to compile:
-
-```odin
-package main
-
-import "core:fmt"
-
-File :: struct { name: string }
-file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
-impl Destroy for File { destroy = file_destroy }
-open :: proc(name: string) -> File { return File{name} }
-
-same :: proc(x: $T) -> T { return x }
-
-main :: proc() {
-	f := open("a")
-	g := same(f)
-	fmt.println(g.name)
 }
 ```
 
@@ -3352,12 +3386,12 @@ same :: proc(f: File) -> File {
 main :: proc() {}
 ```
 
-### destroy struct field
+### destroy slice
 
 The message contains:
 
 ```text
-a struct field can't hold a File yet
+a slice can't hold a File yet
 ```
 
 This program fails to compile:
@@ -3370,11 +3404,9 @@ import "core:fmt"
 File :: struct { name: string }
 file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
 impl Destroy for File { destroy = file_destroy }
-open :: proc(name: string) -> File { return File{name} }
 
-Log :: struct {
-	out:   File,
-	level: int,
+Batch :: struct {
+	files: []File,
 }
 
 main :: proc() {}
@@ -3404,33 +3436,6 @@ show :: proc(f: File) { fmt.println(f.name) }
 
 main :: proc() {
 	show(open("a"))
-}
-```
-
-### destroy unknown type
-
-The message contains:
-
-```text
-vidar can't tell the type of 'g'
-```
-
-This program fails to compile:
-
-```odin
-package main
-
-import "core:fmt"
-
-File :: struct { name: string }
-file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
-impl Destroy for File { destroy = file_destroy }
-open :: proc(name: string) -> File { return File{name} }
-
-main :: proc() {
-	f := open("a")
-	g := abs(f)
-	fmt.println(g)
 }
 ```
 

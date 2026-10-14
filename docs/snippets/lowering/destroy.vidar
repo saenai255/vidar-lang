@@ -10,6 +10,8 @@ file_destroy :: proc(f: ^File) {
 
 impl Destroy for File { destroy = file_destroy }
 
+Log :: struct { out: File, level: int }
+
 open :: proc(name: string) -> File {
 	f := File{name}
 	return f
@@ -18,8 +20,9 @@ open :: proc(name: string) -> File {
 main :: proc() {
 	f := open("a")
 	f = open("b")
-	fmt.println(f.name)
+	l := Log{out = open("log")}
+	fmt.println(f.name, l.level)
 }
 
 // title: `impl Destroy`
-// about: The impl block disappears. Each local gets a `defer` on the line that declares it, an assignment destroys the old value once the new one is stored, and a returned local is set to zero after the result is copied, so its `defer` has nothing to destroy.
+// about: The impl block disappears. Each local gets a `defer` on the line that declares it, an assignment destroys the old value once the new one is stored, and a returned local is set to zero after the result is copied, so its `defer` has nothing to destroy. A struct holding a `File` gets a destructor of its own, written at the end of the file.
