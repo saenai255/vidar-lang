@@ -1,7 +1,7 @@
 {
   "name": "vidar",
   "displayName": "Vidar",
-  "description": "Odin with closures, interfaces, cyclic imports and typed macros: syntax highlighting and language server client",
+  "description": "Odin with closures, interfaces, cyclic imports and typed macros: syntax highlighting and a client for the vidar-lsp language server (installed separately)",
   "version": "0.1.0",
   "publisher": "vidar",
   "license": "MIT",
@@ -122,12 +122,12 @@
         "vidar.server.path": {
           "type": "string",
           "default": "vidar-lsp",
-          "description": "Language server to run: an executable name or path, or the path to dist/lsp/server.js. Leave unset to use the server bundled in the extension, falling back to vidar-lsp on PATH."
+          "description": "Language server to run: an executable name or path, or the path to dist/lsp/server.js. The extension doesn't include a server: install vidar so that vidar-lsp is on PATH, or set this."
         },
         "vidar.cliPath": {
           "type": "string",
           "default": "",
-          "description": "vidar CLI the `vidar` debug configuration runs `vidar build -debug` with: an executable, or the path to dist/cli.js. Leave empty to use the binary bundled in the extension, falling back to `vidar` on PATH."
+          "description": "vidar CLI the `vidar` debug configuration runs `vidar build -debug` with: an executable, or the path to dist/cli.js. Leave empty to use `vidar` on PATH (or dist/cli.js next to a `vidar.server.path` that is dist/lsp/server.js)."
         },
         "vidar.odinCheckOnSave": {
           "type": "boolean",

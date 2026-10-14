@@ -12,23 +12,19 @@ Syntax highlighting plus a client for the `vidar-lsp` language server:
 
 ## Install from a .vsix (recommended)
 
-The `.vsix` bundles the language server, so nothing else needs installing, apart from `odin` for the checks on save.
+The extension doesn't include the language server. Install vidar first so that `vidar-lsp` (and `vidar`, for debugging) are on your PATH, or point `vidar.server.path` at the server. You also need `odin` for the checks on save.
 
 ```bash
-cd ../.. && npm run build:binaries      # builds bin/<os>-<arch>/vidar-lsp
 cd editors/vscode && npm install && npm run package
 ```
 
-This produces `vidar-<os>-<arch>-<version>.vsix`. From the repository root, `npm run vsix` does both steps and installs the result. Install it with **Extensions: Install from VSIX...** in VS Code, or with `code --install-extension vidar-darwin-arm64-0.1.0.vsix`.
-
-- `npm run package -- --target linux-x64` packages a binary built with `scripts/build-binaries.js --target linux-x64`.
-- `npm run package -- --no-server` makes a platform-independent `.vsix` that uses `vidar-lsp` from your PATH.
+This produces `vidar-<version>.vsix`, the same for every platform. From the repository root, `npm run vsix` packages and installs it. Install it with **Extensions: Install from VSIX...** in VS Code, or with `code --install-extension vidar-0.1.0.vsix`.
 
 ## Settings
 
-- `vidar.server.path`: leave unset to use the bundled server. Otherwise set an executable or a path to `dist/lsp/server.js`; it falls back to `vidar-lsp` on PATH.
+- `vidar.server.path` (default `vidar-lsp`): the language server, an executable on PATH, a path to one, or a path to `dist/lsp/server.js` (run with VS Code's own Node).
 - `vidar.odinCheckOnSave` (default `true`) and `vidar.odinPath` (default `odin`): run `odin check` on save.
-- `vidar.cliPath`: the `vidar` CLI the debug configuration builds with, an executable or a path to `dist/cli.js`. Leave unset to use the binary bundled in the `.vsix` (falling back to `vidar` on PATH, or to `dist/cli.js` next to a `vidar.server.path` that is `dist/lsp/server.js`).
+- `vidar.cliPath`: the `vidar` CLI the debug configuration builds with, an executable or a path to `dist/cli.js`. Leave unset to use `vidar` on PATH, or `dist/cli.js` next to a `vidar.server.path` that is `dist/lsp/server.js`.
 - `vidar.optHints` (default `on`): inlay hints showing what `-opt` decides (`table`, `specialized ×2`, `unchecked`, `grouped alloc`, `fmt inlined`, `devirtualized` / `vtable` / `direct`); `all` also shows what it decided against, `off` hides them.
 - `vidar.optCodeLens` (default `true`): the "N optimizations, M not" code lens over each proc; none while `vidar.optHints` is `off`.
 

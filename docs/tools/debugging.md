@@ -27,7 +27,7 @@ To find the generated line for a `.vidar` line, look it up in `vidar.map.json`, 
 
 ## In VS Code
 
-The extension adds a `vidar` debug configuration. By default it runs [`vidar dap`](#with-vidar-dap), which builds the program and debugs it on `.vidar` lines. With `"debugger": "lldb"` it instead runs `vidar build -debug` (the CLI bundled in the extension, or `vidar.cliPath`) and starts [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) on the binary, or gdb through the C/C++ extension with `"debugger": "gdb"`. Those two stop on the generated Odin, so a breakpoint in a `.vidar` file never binds.
+The extension adds a `vidar` debug configuration. By default it runs [`vidar dap`](#with-vidar-dap), which builds the program and debugs it on `.vidar` lines. With `"debugger": "lldb"` it instead runs `vidar build -debug` (`vidar` on PATH, or `vidar.cliPath`) and starts [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) on the binary, or gdb through the C/C++ extension with `"debugger": "gdb"`. Those two stop on the generated Odin, so a breakpoint in a `.vidar` file never binds.
 
 ```json
 { "type": "vidar", "request": "launch", "name": "Debug game", "program": "${workspaceFolder}/examples/cyclic", "args": [] }
