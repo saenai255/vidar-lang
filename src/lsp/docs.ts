@@ -78,7 +78,7 @@ export const BUILTIN_TYPE_DOCS: Record<string, string> = {
   any: "Any value, as a pointer to its data and its `typeid`.",
   complex64: "Complex number of two `f32`.", complex128: "Complex number of two `f64`.",
   quaternion256: "Quaternion of four `f64`.",
-  Destroy: "Vidar: `impl Destroy for T { destroy = t_destroy }`, with `t_destroy :: proc(x: ^T)`, destroys each local of type `T` when its scope ends, the old value on assignment, and never a local that is returned (it moves out). Copies are compile errors; borrow with `&x`. Built in unless the program declares its own `Destroy`.",
+  Destroy: "Vidar: `impl Destroy for T { destroy = t_destroy }`, with `t_destroy :: proc(x: ^T)`, destroys each local of type `T` when its scope ends, the old value on assignment, and never a local that is returned (it moves out). Structs, arrays, unions and `Maybe`s holding a `T` are destroyed too, and so are generic code's values (found at run time). Copies are compile errors; borrow with `&x`. Built in unless the program declares its own `Destroy`.",
   Pool: "Vidar: `Pool(I)` holds values of every implementation of interface `I`, one array per type. `for s in pool` loops over each type in turn with `s: ^T`, so method calls are direct. Supports `append` (values), `len`, `clear` and `delete`.",
 };
 

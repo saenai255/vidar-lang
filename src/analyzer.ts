@@ -231,6 +231,8 @@ export class Analyzer {
   readonly ifaceSyms: GlobalSym[] = [];
   /** impl Destroy (destroy.ts), by type */
   readonly destructors = new Map<GlobalSym, Destructor>();
+  /** some value is destroyed or copy-checked through vidar_runtime/destroy.odin, so types register there */
+  destroyDispatch = false;
 
   /** `-opt`: the emitter also rewrites plain Odin where the result is provably the same */
   optimize = false;

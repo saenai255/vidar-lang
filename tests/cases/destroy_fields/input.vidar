@@ -1,0 +1,72 @@
+package main
+
+import "core:fmt"
+import "core:strings"
+
+File :: struct { name: string }
+
+file_destroy :: proc(f: ^File) {
+	if f.name == "" do return
+	fmt.println("close", f.name)
+}
+
+impl Destroy for File { destroy = file_destroy }
+
+open :: proc(name: string) -> File { return File{name} }
+
+// no impl of its own: a Log is destroyed through its fields, last first
+Log :: struct {
+	out:   File,
+	level: int,
+	err:   File,
+}
+
+// an impl and fields: the impl runs first, then the fields
+Server :: struct {
+	name:  string,
+	log:   Log,
+	spare: [2]File,
+	extra: Maybe(File),
+}
+
+server_destroy :: proc(s: ^Server) { fmt.println("stop", s.name) }
+
+impl Destroy for Server { destroy = server_destroy }
+
+// a union holding a File destroys the variant it holds
+Handle :: union { File, int }
+
+make_log :: proc(tag: string) -> Log {
+	// fresh values move into the literal
+	l := Log{out = open(fmt.tprint(tag, "out")), err = open(fmt.tprint(tag, "err"))}
+	return l
+}
+
+main :: proc() {
+	fmt.println("-- fields")
+	{
+		l := make_log("l")
+		l.level = 2
+		fmt.println("level", l.level)
+	}
+	fmt.println("-- impl and fields")
+	{
+		s := Server{name = "s", log = make_log("s"), spare = {open("spare0"), open("spare1")}}
+		s.extra = open("extra")
+	}
+	fmt.println("-- array, Maybe, union")
+	{
+		arr := [2]File{open("a0"), open("a1")}
+		m: Maybe(File) = open("maybe")
+		h: Handle = open("handle")
+		n: Handle = 5
+		none: Maybe(File)
+	}
+	fmt.println("-- a type vidar can't tell is destroyed at run time")
+	{
+		up := strings.to_upper("x", context.temp_allocator)
+		k := abs(-3)
+		fmt.println(up, k)
+	}
+	fmt.println("-- end")
+}

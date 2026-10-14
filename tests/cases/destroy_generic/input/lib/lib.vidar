@@ -1,0 +1,29 @@
+package lib
+
+import "core:fmt"
+
+// generic code that knows nothing about File
+Pair :: struct($T: typeid) { a, b: T }
+
+// builds its values, so it owns them: the pair is destroyed by its caller
+make_pair :: proc(mk: proc(string) -> $T) -> Pair(T) {
+	p := Pair(T){mk("p0"), mk("p1")}
+	return p
+}
+
+// a local of type T is destroyed here, whatever T is
+scratch :: proc(mk: proc(string) -> $T) {
+	t := mk("scratch")
+	fmt.println("in scratch")
+}
+
+// borrowing is fine
+name_of :: proc(x: $T) -> string {
+	return fmt.tprint(x)
+}
+
+// a generic copy of a type without a destructor is an ordinary copy
+first :: proc(xs: []$T) -> T {
+	x := xs[0]
+	return x
+}

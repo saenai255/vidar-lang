@@ -6,6 +6,7 @@ import { CompileError, lex } from "./lexer";
 import { Parser } from "./parser";
 import { A, Analyzer } from "./analyzer";
 import { ColumnEntry, Emitter, CLOSURE_RUNTIME } from "./emitter";
+import { DESTROY_RUNTIME } from "./destroy";
 import { resetGensym } from "./comptime";
 import type { File, Node } from "./ast";
 import { PackageInfo, Scope, Unit } from "./scope";
@@ -334,6 +335,7 @@ export function emitProgram(p: Program, expansions?: Map<Node, string[]>, opts: 
     closures ||= em.usesRuntime;
   }
   if (closures) files.set(`${RUNTIME_DIR}/runtime.odin`, CLOSURE_RUNTIME);
+  if (closures && p.analyzer.destroyDispatch) files.set(`${RUNTIME_DIR}/destroy.odin`, DESTROY_RUNTIME);
   return { files, sourceOf, lineMap, ...(columns ? { columns } : {}) };
 }
 

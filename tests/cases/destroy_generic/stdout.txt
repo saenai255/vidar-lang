@@ -1,0 +1,8 @@
+in scratch
+close scratch
+pair p0 p1 File{name = "borrowed"}
+in scratch
+7
+close borrowed
+close p1
+close p0

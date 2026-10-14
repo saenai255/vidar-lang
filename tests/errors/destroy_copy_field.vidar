@@ -1,4 +1,4 @@
-// error: a struct field can't hold a File yet
+// error: 'log.out' is a File, which has impl Destroy, and 'f := log.out' would copy it
 package main
 
 import "core:fmt"
@@ -6,11 +6,14 @@ import "core:fmt"
 File :: struct { name: string }
 file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
 impl Destroy for File { destroy = file_destroy }
-open :: proc(name: string) -> File { return File{name} }
 
 Log :: struct {
 	out:   File,
 	level: int,
 }
 
-main :: proc() {}
+main :: proc() {
+	log := Log{out = File{"log"}}
+	f := log.out
+	fmt.println(f.name)
+}
