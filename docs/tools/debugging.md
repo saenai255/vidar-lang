@@ -27,7 +27,7 @@ To find the generated line for a `.vidar` line, look it up in `vidar.map.json`, 
 
 ## In VS Code
 
-The extension adds a `vidar` debug configuration. It runs `vidar build -debug` (the CLI bundled in the extension, or `vidar.cliPath`), then starts [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) on the binary, or gdb through the C/C++ extension with `"debugger": "gdb"`.
+The extension adds a `vidar` debug configuration. By default it runs [`vidar dap`](#with-vidar-dap), which builds the program and debugs it on `.vidar` lines. With `"debugger": "lldb"` it instead runs `vidar build -debug` (the CLI bundled in the extension, or `vidar.cliPath`) and starts [CodeLLDB](https://marketplace.visualstudio.com/items?itemName=vadimcn.vscode-lldb) on the binary, or gdb through the C/C++ extension with `"debugger": "gdb"`. Those two stop on the generated Odin, so a breakpoint in a `.vidar` file never binds.
 
 ```json
 { "type": "vidar", "request": "launch", "name": "Debug game", "program": "${workspaceFolder}/examples/cyclic", "args": [] }
@@ -60,10 +60,10 @@ A [debug adapter](https://microsoft.github.io/debug-adapter-protocol/) on stdin 
 - **Variables.** A closure's `__env` and `__env_raw` are replaced by the variables it captured. Watch and hover expressions can name a captured variable directly (`n`, `n + x`). A pointer capture (`&x`) shows as the pointer.
 - **Output.** Generated `.odin` locations in the program's output, such as a panic's, are rewritten to `.vidar` ones.
 
-In VS Code, set `"debugger": "dap"` in the `vidar` debug configuration (`debuggerPath` then names `lldb-dap`):
+In VS Code this is the default for the `vidar` debug configuration (`debuggerPath` then names `lldb-dap`):
 
 ```json
-{ "type": "vidar", "request": "launch", "name": "Debug game", "program": "${workspaceFolder}/examples/cyclic", "debugger": "dap" }
+{ "type": "vidar", "request": "launch", "name": "Debug game", "program": "${workspaceFolder}/examples/cyclic" }
 ```
 
 ## What generated names mean
