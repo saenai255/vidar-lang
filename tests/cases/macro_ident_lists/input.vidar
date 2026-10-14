@@ -7,6 +7,12 @@ fn :: proc!(captures: []Ident, body: Stmt) -> Expr {
 	return quote(proc[$captures]() { $body })
 }
 
+// A closure returning its body's value, typed with type_of_expr.
+fn_ret :: proc!(captures: []Ident, body: Expr) -> Expr {
+	T := type_of_expr(body)
+	return quote(proc[$captures]() -> $T { return $body })
+}
+
 // Comptime code can count and walk the list.
 names :: proc!(xs: []Ident = {}) -> Expr {
 	out := ""
@@ -30,6 +36,10 @@ main :: proc() {
 
 	hello := fn!({}) { fmt.println("no captures") }
 	hello()
+
+	total := fn_ret!({a, b}, a + b)     // untyped int: int
+	bigger := fn_ret!({a, b}, a > b)    // untyped bool: bool
+	fmt.println(total(), bigger())
 
 	fmt.println(names!({a, &b,}))
 	fmt.println(names!())

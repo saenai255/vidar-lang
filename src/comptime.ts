@@ -856,7 +856,7 @@ const BUILTINS: Record<string, Builtin> = {
     if (e?.k !== "expr") throw new CompileError("type_of_expr: expected an Expr", pos);
     const ty = e.ty;
     if (!ty) throw new CompileError("type_of_expr: the type of this expression is not known at compile time", pos);
-    if (ty.t === "untyped") return { k: "type", toks: tokensOf({ int: "int", float: "f64", string: "string", rune: "rune", bool: "bool" }[ty.kind], pos) };
+    if (ty.t === "untyped") return { k: "type", toks: tokensOf({ int: "int", float: "f64", string: "string", rune: "rune", bool: "bool" }[ty.kind], pos).filter((t) => t.kind !== "semi") };
     if (ty.t === "node") return { k: "type", toks: slice(ty.node), node: ty.node, scope: ty.scope };
     throw new CompileError("type_of_expr: the type of this expression is not known at compile time", pos);
   },
