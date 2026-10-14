@@ -76,7 +76,11 @@ test("formatting is idempotent over every .vidar file in the repository, and ind
   }
 });
 
-/** program roots: case inputs, examples with a main.vidar, slime_mud */
+/** Whether a program imports vidar:sched: those don't transpile while goroutines are disabled (src/sched.ts). */
+const usesSched = (path) =>
+  statSync(path).isDirectory() ? readdirSync(path).some((n) => n !== "expected" && usesSched(join(path, n))) : path.endsWith(".vidar") && readFileSync(path, "utf8").includes('"vidar:sched"');
+
+/** program roots: case inputs, examples with a main.vidar, slime_mud (without goroutines, those that don't use them) */
 function programs() {
   const roots = [];
   for (const dir of [join(root, "tests", "cases"), join(root, "examples")]) {
@@ -89,7 +93,7 @@ function programs() {
     }
   }
   roots.push({ entry: join(root, "examples", "slime_mud", "vidar"), opt: false });
-  return roots;
+  return process.env.VIDAR_GOROUTINES === "1" ? roots : roots.filter((r) => !usesSched(r.entry));
 }
 
 /** generated Odin as tokens, whitespace ignored (inside strings too: `dbg!`/`stringify` labels follow the source's spacing) */

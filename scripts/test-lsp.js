@@ -74,9 +74,16 @@ function nextDiagnostics(pred = () => true, timeout = 20000) {
 
 let pass = 0;
 let fail = 0;
+let skipped = 0;
 function check(name, ok, detail) {
   ok ? pass++ : fail++;
   console.log(`${ok ? "PASS" : "FAIL"} lsp: ${name}${ok ? "" : `\n  ${detail}`}`);
+}
+// goroutines are disabled for now (src/sched.ts): checks on vidar:sched are skipped unless VIDAR_GOROUTINES=1
+const GOROUTINES = process.env.VIDAR_GOROUTINES === "1";
+function skip(name) {
+  skipped++;
+  console.log(`SKIP lsp: ${name} (goroutines are disabled)`);
 }
 const doc = { uri };
 let version = 1;
@@ -300,6 +307,8 @@ function change(text) {
   check("completion across a cycle hides the other package's private members", aLabels.includes("g") && !aLabels.includes("h"), JSON.stringify(aLabels));
 
   // the bundled "vidar:sched" package: completion, and definitions that open a real file
+  if (!GOROUTINES) ["a program importing vidar:sched has no errors", "definition of a vidar:sched member opens the bundled source", "completion after sched. lists the public API only"].forEach(skip);
+  else {
   const sch = realpathSync(mkdtempSync(join(tmpdir(), "vidar-lsp-sched-")));
   cpSync("tests/lsp/sched", sch, { recursive: true });
   const sMainPath = join(sch, "main.vidar");
@@ -321,6 +330,7 @@ function change(text) {
   const sComp = await request("textDocument/completion", { textDocument: { uri: sMain }, position: { line: eLine, character: sEdited.split("\n")[eLine].indexOf("sched.") + 6 } });
   const sLabels = (sComp.result ?? []).map((c) => c.label);
   check("completion after sched. lists the public API only", ["go", "make_chan", "select", "on_recv", "Chan", "sleep"].every((x) => sLabels.includes(x)) && !sLabels.includes("park"), JSON.stringify(sLabels));
+  }
 
   // ---- workspace symbols, implementations and the call hierarchy (tests/lsp/nav) ----
   const nav = realpathSync(mkdtempSync(join(tmpdir(), "vidar-lsp-nav-")));
@@ -682,7 +692,9 @@ function change(text) {
   const semDir = realpathSync(mkdtempSync(join(tmpdir(), "vidar-lsp-semantic-")));
   cpSync("tests/lsp/semantic", semDir, { recursive: true });
   const semUri = pathToFileURL(join(semDir, "main.vidar")).toString();
-  const semText = readFileSync(join(semDir, "main.vidar"), "utf8");
+  let semText = readFileSync(join(semDir, "main.vidar"), "utf8");
+  // without goroutines, the fixture's vidar:sched lines become blank (line numbers stay put)
+  if (!GOROUTINES) writeFileSync(join(semDir, "main.vidar"), (semText = semText.replace(/^.*\bsched\b.*$/gm, "")));
   const semLines = semText.split("\n");
   const semDiag = nextDiagnostics((d) => d.uri === semUri);
   notify("textDocument/didOpen", { textDocument: { uri: semUri, languageId: "vidar", version: 1, text: semText } });
@@ -727,8 +739,11 @@ function change(text) {
   semIs("local constant", tokAt(semFull, "fmt.println(apply", "LIMIT"), "variable", ["readonly"]);
   semIs("enum member declaration", tokAt(semFull, "Color :: enum", "Red"), "enumMember", ["declaration"]);
   semIs("package alias", tokAt(semFull, "fmt.println(apply", "fmt"), "namespace");
-  semIs("goroutine start", tokAt(semFull, "sched.go(", "go"), "function", ["async", "defaultLibrary"]);
-  semIs("bundled package", tokAt(semFull, "sched.go(", "sched"), "namespace", ["defaultLibrary"]);
+  if (!GOROUTINES) ["semantic token: goroutine start", "semantic token: bundled package"].forEach(skip);
+  else {
+    semIs("goroutine start", tokAt(semFull, "sched.go(", "go"), "function", ["async", "defaultLibrary"]);
+    semIs("bundled package", tokAt(semFull, "sched.go(", "sched"), "namespace", ["defaultLibrary"]);
+  }
   check("semantic tokens never cover generated __ names", semFull.length > 30 && !semFull.some((t) => !t.text || t.text.startsWith("__")), JSON.stringify(semFull.filter((t) => !t.text || t.text.startsWith("__"))));
   const bumpLine = semLines.findIndex((l) => l.includes("bump := proc"));
   const semRange = decode((await request("textDocument/semanticTokens/range", { textDocument: { uri: semUri }, range: { start: { line: bumpLine, character: 0 }, end: { line: bumpLine + 1, character: 0 } } })).result?.data ?? []);
@@ -1034,7 +1049,7 @@ function change(text) {
   const brokenMain = await renameAll(dir, file, original);
   check("renaming any symbol in the main fixture keeps the program equivalent", brokenMain.length === 0, brokenMain.join("\n  "));
 
-  console.log(`\n${pass} passed, ${fail} failed`);
+  console.log(`\n${pass} passed, ${fail} failed${skipped ? `, ${skipped} skipped` : ""}`);
   await request("shutdown", null);
   notify("exit", null);
   process.exit(fail ? 1 : 0);

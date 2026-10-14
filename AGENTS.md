@@ -55,6 +55,8 @@ Times are from a 12-core M3 Pro.
 | `VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js` | the same suite against a built binary | |
 | `node scripts/passthrough.js <files...>` | plain Odin files must come out unchanged; try `$(find "$(odin root)/core" -name '*.odin')` | |
 
+**Goroutines are disabled for now** (`goroutinesEnabled` in `src/sched.ts`): importing `vidar:sched` is a compile error unless `VIDAR_GOROUTINES=1` is set. Every test runner skips what imports it (`SKIP ... (goroutines are disabled)`), and CI's 4-thread and stress steps are off (`if: false`). `VIDAR_GOROUTINES=1 node scripts/test.js` (or `test-lsp.js`, or `npm run stress`) runs them again. `tests/errors_pkg/package_goroutines_disabled` checks the error and runs only while they are disabled.
+
 Notes on `scripts/test.js`:
 - **Jobs:** `-jN` defaults to half the cores. More jobs barely help, because `odin build` already uses every core. Fewer jobs make timeouts less likely when several worktrees run tests at once.
 - **Output:** one `PASS` / `FAIL` line per check, in case order, then `N passed, M failed`. `node scripts/test.js | grep -v '^PASS'` shows only the failures and the summary.
@@ -108,9 +110,10 @@ odin run "$TMPDIR/case" -out:"$TMPDIR/case/prog" | diff tests/cases/<name>/stdou
 - **LSP features:** add checks to `scripts/test-lsp.js`. Its workspaces are in `tests/lsp/` and are copied to a temp dir on each run.
 - **slime_mud:** `examples/slime_mud` has no top-level `main.vidar`, so `npm test` skips it. After a compiler change, also run these (each takes under a second):
   ```bash
-  node dist/cli.js check examples/slime_mud/vidar
-  node dist/cli.js check examples/slime_mud/vidar -opt
+  VIDAR_GOROUTINES=1 node dist/cli.js check examples/slime_mud/vidar
+  VIDAR_GOROUTINES=1 node dist/cli.js check examples/slime_mud/vidar -opt
   ```
+  Its server uses goroutines, so it needs `VIDAR_GOROUTINES=1` while they are disabled.
 
 ## Slow tests and hangs
 
