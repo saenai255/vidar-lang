@@ -2431,6 +2431,7 @@ export class Analyzer {
     switch (kind) {
       case "Expr": {
         const node = this.parseTokens(toks, (p) => p.parseExpr());
+        this.expandForTyping(node, scope);
         const ty = this.typeOf(node, scope);
         if (of) this.checkTyped(node, ty, { t: "node", node: of, scope: macro.scope }, scope, `argument '${name}'`, pos);
         return { k: "expr", toks: toks.slice(0, -1), node, ty, scope };
@@ -2456,6 +2457,29 @@ export class Analyzer {
         }
       }
     }
+  }
+
+  /**
+   * Expands the macro calls in a macro's `Expr` argument, so `type_of_expr` and typed parameters
+   * see their types (`outer!(inner!(x))`). The argument is passed on as its tokens, and the
+   * outer expansion expands them again where they land. Proc bodies are skipped: their scope differs.
+   */
+  private expandForTyping(e: Node, scope: Scope): void {
+    if (e.k === "ProcLit") return;
+    if (e.k === "MacroCall") {
+      if (A(e)._expansion) return;
+      // a macro that returns statements has no type, but may still land where statements go
+      const target = this.macroTarget(e, scope);
+      const ret = target?.lit.sig.results[0]?.type;
+      if (target && (!ret || this.paramKind(ret).kind === "Stmt")) return;
+      this.nested(e, () => {
+        const out = this.expandMacro(e, scope, "expr") as Expr;
+        A(e)._expansion = out;
+        this.expandForTyping(out, scope);
+      });
+      return;
+    }
+    for (const c of children(e)) this.expandForTyping(c, scope);
   }
 
   /** Typed macro check: decided here when the types are known, otherwise emitted as an Odin compile-time check. */

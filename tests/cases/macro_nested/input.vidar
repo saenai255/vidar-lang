@@ -1,0 +1,68 @@
+package main
+
+import "core:fmt"
+import "base:runtime"
+
+PACTMP := "/tmp"
+PACDIR := run_in_context!(take_first!(lookup_dir(PACTMP)))
+
+lookup_dir :: proc "contextless" (base: string) -> (string, bool) {
+    return base, true
+}
+
+// A macro whose argument is another macro call: type_of_expr sees through it.
+run_in_context :: proc!(expr: Expr) -> Expr {
+    T := type_of_expr(expr)
+    return quote {
+        (proc "contextless" () -> $T {
+            context = runtime.default_context()
+            return $expr
+        })()
+    }
+}
+
+take_first :: proc!(call: Expr) -> Expr {
+    T := type_of_expr(call)
+    return quote {
+        (proc "contextless" () -> $T {
+            first, _ := $call
+            return first
+        })()
+    }
+}
+
+twice :: proc!(x: Expr) -> Expr {
+    return quote($x * 2)
+}
+
+// A macro whose expansion calls another macro.
+quad :: proc!(x: Expr) -> Expr {
+    T := type_of_expr(x)
+    return quote($T(twice!($x) + twice!($x)))
+}
+
+sum :: proc!(a: Expr(int), b: Expr(int)) -> Expr {
+    return quote($a + $b)
+}
+
+main :: proc() {
+    fmt.println(PACDIR)
+    fmt.println(quad!(twice!(3)))
+    fmt.println(sum!(twice!(1), quad!(2)))
+    f := 1.5
+    fmt.println(quad!(twice!(f)))
+    stmts()
+}
+
+// A macro returning statements, passed as an Expr argument and spliced as a statement.
+say :: proc!(x: Expr) -> Stmt {
+    return quote { fmt.println($x) }
+}
+
+run :: proc!(s: Expr) -> Stmt {
+    return quote { $s }
+}
+
+stmts :: proc() {
+    run!(say!("from a statement macro"))
+}
