@@ -250,7 +250,7 @@ Comptime builtins:
 |---|---|
 | `type_name(T)` | the type's name as a string |
 | `type_fields(T)` | the struct's field names |
-| `type_of_expr(e)` | the type of an `Expr` argument, as a `Type` |
+| `type_of_expr(e)` | the type of an `Expr` argument, as a `Type`; a macro call in the argument is expanded first |
 | `stringify(x)` | source text of a code value |
 | `ident(s)` | a name from a string |
 | `parse_expr(s)` | an `Expr` parsed from a string |
