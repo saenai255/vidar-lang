@@ -136,7 +136,8 @@ jobs:
       - name: Smoke test
         run: |
           bin/${{ matrix.target }}/vidar --version
-          bin/${{ matrix.target }}/vidar emit tests/cases/closure_values/input.vidar > /dev/null
+          # a case without goroutines: they are disabled for now (src/sched.ts)
+          bin/${{ matrix.target }}/vidar emit tests/cases/closure_types/input.vidar > /dev/null
 
       # the extension doesn't include the language server, so one .vsix serves every platform
       - name: Package extension
