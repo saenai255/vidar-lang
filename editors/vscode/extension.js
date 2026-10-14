@@ -6,24 +6,15 @@ const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
 const optReport = require("./optreport");
 
 let client;
-let extensionPath;
 let context;
 
-/** The server shipped inside a platform-specific .vsix, if any. */
-function bundledServer() {
-  const file = path.join(extensionPath, "server", process.platform === "win32" ? "vidar-lsp.exe" : "vidar-lsp");
-  if (!fs.existsSync(file)) return undefined;
-  try {
-    fs.chmodSync(file, 0o755); // zip extraction may drop the executable bit
-  } catch {}
-  return file;
+/** The language server the user installed: `vidar.server.path`, by default `vidar-lsp` on PATH. */
+function serverPath() {
+  return vscode.workspace.getConfiguration("vidar").get("server.path") || "vidar-lsp";
 }
 
 function serverOptions() {
-  const cfg = vscode.workspace.getConfiguration("vidar");
-  const configured = cfg.inspect("server.path");
-  const explicit = configured.workspaceFolderValue ?? configured.workspaceValue ?? configured.globalValue;
-  const path = explicit ?? bundledServer() ?? configured.defaultValue;
+  const path = serverPath();
   // a .js path runs with VS Code's own Node; anything else is an executable on PATH
   if (path.endsWith(".js")) return { module: path, transport: TransportKind.stdio };
   return { command: path, args: ["--stdio"], transport: TransportKind.stdio };
@@ -36,7 +27,16 @@ async function start() {
     initializationOptions: { odinCheckOnSave: cfg.get("odinCheckOnSave"), odinPath: cfg.get("odinPath"), ols: cfg.get("ols"), olsPath: cfg.get("olsPath"), optHints: cfg.get("optHints") },
     synchronize: { configurationSection: "vidar" },
   });
-  await client.start();
+  try {
+    await client.start();
+  } catch (err) {
+    client = undefined;
+    const pick = await vscode.window.showErrorMessage(
+      `Vidar: could not start the language server '${serverPath()}' (${err?.message ?? err}). Install vidar so that vidar-lsp is on PATH, or set vidar.server.path.`,
+      "Open Settings",
+    );
+    if (pick) vscode.commands.executeCommand("workbench.action.openSettings", "vidar.server.path");
+  }
 }
 
 /** The first generated line (0-based) for .vidar line `line` (0-based), skipping comment-only lines; as `generatedLine` in src/runmap.ts. */
@@ -93,6 +93,7 @@ async function showGeneratedOdin() {
     const doc = await vscode.workspace.openTextDocument(built.file);
     return revealLine(doc, generatedLine(built.lines, line, doc.getText().split("\n")), vscode.ViewColumn.Beside);
   }
+  if (!client) return vscode.window.showErrorMessage("Vidar: the language server is not running");
   const res = await client.sendRequest("vidar/generatedOdin", { uri: editor.document.uri.toString(), line });
   if (res.error) return vscode.window.showErrorMessage(res.error);
   const multi = Object.keys(res.files).length > 1;
@@ -159,17 +160,14 @@ function followCursor(e) {
 
 // ---- debugging: build with `vidar build -debug`, then hand the binary to CodeLLDB or gdb, or run `vidar dap` ----
 
-/** How to run the vidar CLI: `vidar.cliPath`, else the bundled binary in CLI mode, else `vidar` on PATH. */
+/** How to run the vidar CLI: `vidar.cliPath`, else `dist/cli.js` next to a `dist/lsp/server.js` server, else `vidar` on PATH. */
 function cliCommand() {
   const cfg = vscode.workspace.getConfiguration("vidar");
   const configured = cfg.get("cliPath");
   if (configured) return configured.endsWith(".js") ? { command: "node", args: [configured], env: {} } : { command: configured, args: [], env: {} };
-  const server = cfg.inspect("server.path");
-  const explicit = server.workspaceFolderValue ?? server.workspaceValue ?? server.globalValue;
+  const server = serverPath();
   // dist/lsp/server.js sits next to dist/cli.js
-  if (explicit?.endsWith(".js")) return { command: "node", args: [path.join(path.dirname(explicit), "..", "cli.js")], env: {} };
-  const bundled = bundledServer();
-  if (bundled) return { command: bundled, args: [], env: { VIDAR_CLI: "1" } };
+  if (server.endsWith(".js")) return { command: "node", args: [path.join(path.dirname(server), "..", "cli.js")], env: {} };
   return { command: "vidar", args: [], env: {} };
 }
 
@@ -258,7 +256,6 @@ const debugProvider = {
 
 async function activate(ctx) {
   context = ctx;
-  extensionPath = context.extensionPath;
   context.subscriptions.push(
     vscode.debug.registerDebugConfigurationProvider("vidar", debugProvider),
     vscode.debug.registerDebugAdapterDescriptorFactory("vidar", adapterFactory),
@@ -274,7 +271,7 @@ async function activate(ctx) {
       expand.timer = setTimeout(() => refreshExpansion(expandSource(), true).catch(() => {}), 400);
     }),
     vscode.commands.registerCommand("vidar.restartServer", async () => {
-      await client?.stop();
+      await client?.stop().catch(() => {});
       await start();
     }),
   );

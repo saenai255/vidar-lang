@@ -217,7 +217,7 @@ To color them in any theme, use `editor.semanticTokenColorCustomizations`:
 ```
 
 > [!NOTE]
-> VS Code runs the `vidar-lsp` bundled in the installed `.vsix`, not `dist/`. After an analyzer or LSP change, run `npm run vsix` and reload the window.
+> The VS Code extension runs `vidar-lsp` from PATH (or `vidar.server.path`), not `dist/`. To try an analyzer or LSP change, set `vidar.server.path` to `dist/lsp/server.js`, run `npm run build` and **Vidar: Restart Language Server**.
 
 ### Neovim (0.11+)
 

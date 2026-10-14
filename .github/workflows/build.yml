@@ -135,12 +135,14 @@ jobs:
           bin/${{ matrix.target }}/vidar --version
           bin/${{ matrix.target }}/vidar emit tests/cases/closure_values/input.vidar > /dev/null
 
+      # the extension doesn't include the language server, so one .vsix serves every platform
       - name: Package extension
+        if: matrix.target == 'linux-x64'
         working-directory: editors/vscode
         run: |
           npm pkg set version="$VIDAR_VERSION"
           npm run package
-          mv ./*.vsix "vidar-vscode-$VIDAR_VERSION-${{ matrix.target }}.vsix"
+          mv ./*.vsix "vidar-vscode-$VIDAR_VERSION.vsix"
 
       - uses: actions/upload-artifact@v4
         with:
