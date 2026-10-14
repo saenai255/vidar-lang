@@ -1,0 +1,8 @@
+// error: 'file_close' must take one parameter of type ^File and return nothing
+package main
+
+File :: struct { fd: int }
+file_close :: proc(f: File) {}
+impl Destroy for File { destroy = file_close }
+
+main :: proc() {}

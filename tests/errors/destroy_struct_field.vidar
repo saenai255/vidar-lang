@@ -1,0 +1,16 @@
+// error: a struct field can't hold a File yet
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+Log :: struct {
+	out:   File,
+	level: int,
+}
+
+main :: proc() {}

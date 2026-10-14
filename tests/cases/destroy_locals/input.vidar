@@ -1,0 +1,63 @@
+package main
+
+import "core:fmt"
+
+// impl Destroy: each local File is destroyed when its scope ends, in reverse order
+File :: struct { name: string }
+
+file_destroy :: proc(f: ^File) {
+	if f.name == "" do return // a returned (moved) local is left zero
+	fmt.println("close", f.name)
+}
+
+impl Destroy for File {
+	destroy = file_destroy,
+}
+
+open :: proc(name: string) -> File {
+	return File{name}
+}
+
+// a returned local moves out: only the other one is destroyed
+pick :: proc(early: bool) -> File {
+	a := open("a")
+	if early do return a
+	b := open("b")
+	return b
+}
+
+// a parameter is borrowed: reading it is fine, and it isn't destroyed here
+size :: proc(f: File) -> int { return len(f.name) }
+
+main :: proc() {
+	f := open("main")
+	fmt.println("size", size(f))
+	{
+		g := open("inner")
+		g = open("inner2") // the old value is destroyed
+		fmt.println("in block", g.name)
+	}
+	x := pick(true)
+	y := pick(false)
+	fmt.println("picked", x.name, y.name)
+	for i in 0..<2 do h := open(fmt.tprint("loop", i))
+	a, b := open("first"), open("second")
+	fmt.println(a.name, b.name)
+	p := &a
+	p^ = open("through a pointer")
+	z: File // the zero value is destroyed too, so destroy must accept it
+	z = open("late")
+	count := 0
+	bump := proc[&z, &count]() { count += len(z.name) }
+	bump()
+	fmt.println("count", count)
+	switch count {
+	case 4:
+		k := open("case")
+		defer fmt.println("a user defer runs first:", k.name)
+	}
+	scoped! {
+		s := open("scoped")
+		fmt.println("in scoped", s.name)
+	}
+}

@@ -1,0 +1,15 @@
+// error: Only a local declared in this proc can be returned
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+same :: proc(f: File) -> File {
+	return f
+}
+
+main :: proc() {}

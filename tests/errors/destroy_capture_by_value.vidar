@@ -1,0 +1,15 @@
+// error: a closure can't hold a copy of it. Capture &f
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	f := open("a")
+	show := proc[f]() { fmt.println(f.name) }
+	show()
+}

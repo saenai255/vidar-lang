@@ -1,0 +1,15 @@
+// error: declare it before the statement, not in its initializer
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	if f := open("a"); f.name != "" {
+		fmt.println(f.name)
+	}
+}

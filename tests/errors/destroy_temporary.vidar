@@ -1,0 +1,15 @@
+// error: is a temporary, so it would never be destroyed
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+show :: proc(f: File) { fmt.println(f.name) }
+
+main :: proc() {
+	show(open("a"))
+}

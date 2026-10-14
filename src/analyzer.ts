@@ -5,6 +5,7 @@ import { CaptureSym, Ctx, GlobalSym, LocalSym, PackageInfo, PkgSym, Scope, Sym, 
 import { autoOptimize } from "./autoopt";
 import { checkNoAlloc } from "./checks";
 import { checkCallEscapes, checkEscapes, ifaceEscape } from "./escape";
+import { Destructor, checkDestroys, resolveDestroyImpl } from "./destroy";
 import { MemoInfo, memoPlan } from "./memo";
 import { OdinPackage, odinPackage, procsOf } from "./odinpkg";
 import { CallSpan, Interp, NotConstant, Val, joinTokens, repeatable, respace, valueToTokens, tokensOf } from "./comptime";
@@ -228,6 +229,8 @@ export class Analyzer {
   /** method declaration -> its interface method */
   readonly ifaceMethods = new Map<GlobalSym, IfaceMethod>();
   readonly ifaceSyms: GlobalSym[] = [];
+  /** impl Destroy (destroy.ts), by type */
+  readonly destructors = new Map<GlobalSym, Destructor>();
 
   /** `-opt`: the emitter also rewrites plain Odin where the result is provably the same */
   optimize = false;
@@ -273,6 +276,7 @@ export class Analyzer {
       }
     }
     checkCallEscapes(this, (f) => this.guard(f));
+    if (this.destructors.size) checkDestroys(this, (f) => this.guard(f));
     this.checkFrameValues();
     for (const p of this.closureCalls) this.guard(() => this.specializeClosures(p.e, p.sym, p.info, p.consts));
     if (this.optimize) this.guard(() => autoOptimize(this));
@@ -2050,6 +2054,8 @@ export class Analyzer {
   private resolveImpl(s: ImplBlock, scope: Scope, pkg: PackageInfo): void {
     const pos = posOf(s);
     if (s.iface.k !== "Ident" && s.iface.k !== "Selector") throw new CompileError(`'${nodeText(s.iface)}' is not an interface`, posOf(s.iface));
+    // the built-in Destroy, unless the program declares its own
+    if (s.iface.k === "Ident" && s.iface.name === "Destroy" && !this.lookup("Destroy", scope, null)) return resolveDestroyImpl(this, s, scope, pkg);
     this.expr(s.iface, scope);
     const ifaceSym = this.resolveName(s.iface, scope, null);
     const ifaceNode = ifaceSym?.kind === "global" ? ifaceSym.decl.values[ifaceSym.index] : undefined;

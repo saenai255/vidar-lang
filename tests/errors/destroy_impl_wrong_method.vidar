@@ -1,0 +1,8 @@
+// error: 'close' is not a method of Destroy
+package main
+
+File :: struct { fd: int }
+file_close :: proc(f: ^File) {}
+impl Destroy for File { close = file_close }
+
+main :: proc() {}

@@ -1,0 +1,8 @@
+// error: 'Handle' is not a struct or union type
+package main
+
+Handle :: distinct int
+handle_close :: proc(h: ^Handle) {}
+impl Destroy for Handle { destroy = handle_close }
+
+main :: proc() {}

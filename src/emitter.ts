@@ -13,6 +13,7 @@ import { JsonWriters, registersMarshalers } from "./jsonopt";
 import { JsonReaders } from "./jsonread";
 import type { ValueCall, ValueIface } from "./valueiface";
 import type { Reorder } from "./reorder";
+import type { DestroyDecl, DestroyMove, Destructor } from "./destroy";
 import type { CaptureSym, GlobalSym, LocalSym, PackageInfo, PkgSym, Sym, Ty, Unit } from "./scope";
 
 type ProcLit = Extract<Expr, { k: "ProcLit" }>;
@@ -594,6 +595,17 @@ export class Emitter {
     if (A(n)._race) text = `${this.schedRef()}.__race_w(&${text})^`;
     const raceDecl: string[] | undefined = A(n)._raceDecl;
     if (raceDecl) text += raceDecl.map((name) => `; ${this.schedRef()}.__race_decl(&${name})`).join("");
+    // impl Destroy (destroy.ts): a local is destroyed when its scope ends, the old value when it is assigned,
+    // and a local that is returned is left zero for its defer
+    const destroyDecl: DestroyDecl[] | undefined = A(n)._destroyDecl;
+    if (destroyDecl) text += destroyDecl.map((d) => `; defer ${this.destroyRef(d.dtor, this.tok(d.name))}(&${this.tok(d.name)})`).join("");
+    const destroyAssign: Destructor | undefined = A(n)._destroyAssign;
+    if (destroyAssign && n.k === "Assign") {
+      const lhs = this.emit(n.lhs[0]);
+      text = `{ __vidar_old := ${lhs}; ${text}; ${this.destroyRef(destroyAssign, lhs)}(&__vidar_old) }`;
+    }
+    const destroyMove: DestroyMove[] | undefined = A(n)._destroyMove;
+    if (destroyMove) text = `{ ${destroyMove.map((m) => `defer ${this.emit(m.x)} = ${m.zero}; `).join("")}${text} }`;
     // -opt: every index in the statement is proven in bounds (Odin takes the directive on a block, not a call)
     if (A(n)._noBounds) text = n.k === "ExprStmt" ? `#no_bounds_check { ${text} }` : `#no_bounds_check ${text}`;
     // -opt: the bounds checks of a loop's indexes, done once before it (a statement of its own, so LLVM still vectorizes the loop)
@@ -652,7 +664,7 @@ export class Emitter {
         if (this.tok(n.toks[n.start]) !== "do") return this.block(n);
         // statements hoisted before the body, or a prologue, must stay under the `do`
         // (Odin also rejects `do #no_bounds_check { call }`)
-        if (n.stmts.some((s) => A(s)._pre?.length || A(s)._boundsGuard || (A(s)._noBounds && s.k === "ExprStmt")) || this.prologue.has(n)) {
+        if (n.stmts.some((s) => A(s)._pre?.length || A(s)._boundsGuard || (A(s)._noBounds && s.k === "ExprStmt") || A(s)._destroyDecl) || this.prologue.has(n)) {
           const lines = this.prologue.get(n) ?? [];
           this.prologue.delete(n);
           return `{ ${[...lines, ...n.stmts.map((s) => this.withPre(s))].join("; ")} }`;
@@ -1085,6 +1097,10 @@ export class Emitter {
     if (sym.isPrivate) return undefined;
     for (const s of this.pkg.fileScopes.get(this.file)?.syms.values() ?? []) if (s.kind === "pkg" && s.target?.unit === sym.pkg.unit) return `${s.name}.${sym.odinName}`;
     return undefined;
+  }
+
+  private destroyRef(d: Destructor, local: string): string {
+    return this.qualify(d.proc, d.proc.odinName, `destroy '${local}' with '${d.proc.name}'`);
   }
 
   private qualify(owner: GlobalSym, name: string, what = `use interface '${owner.name}'`): string {
