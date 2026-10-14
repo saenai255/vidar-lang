@@ -11,7 +11,7 @@ import type { File, Node } from "./ast";
 import { PackageInfo, Scope, Unit } from "./scope";
 import { PRELUDE_PATH, PRELUDE_SOURCE } from "./prelude";
 import { MANIFEST, findManifest, resolveCollection } from "./manifest";
-import { SCHED_ASM, SCHED_IMPORT, SCHED_SOURCE } from "./sched";
+import { GOROUTINES_DISABLED, SCHED_ASM, SCHED_IMPORT, SCHED_SOURCE, goroutinesEnabled } from "./sched";
 import { markRaces } from "./race";
 
 export interface Source {
@@ -163,6 +163,10 @@ export function loadProgram(entry: string | Source[], opts: LoadOptions = {}): P
     for (const f of files) {
       for (const s of f.stmts) {
         if (s.k === "Import" && s.path === SCHED_IMPORT) {
+          if (!goroutinesEnabled()) {
+            fail(new CompileError(GOROUTINES_DISABLED, s.toks[s.pathTok].pos));
+            continue;
+          }
           const path = schedSourcePath();
           pkg.deps.add(packageAt(dirname(path)) ?? loadPackage(dirname(path), [{ path, text: SCHED_SOURCE }]));
           continue;

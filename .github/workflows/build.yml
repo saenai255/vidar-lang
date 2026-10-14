@@ -81,12 +81,15 @@ jobs:
       - name: Test
         run: npm test
 
+      # goroutines are disabled for now (src/sched.ts); drop the two `if: false` to run these again
       - name: Test with goroutines on 4 threads
+        if: false
         env:
           VIDAR_ODIN_FLAGS: -define:VIDAR_THREADS=4
         run: node scripts/test.js
 
       - name: Stress the scheduler
+        if: false
         run: npm run stress -- tests/cases/sched_pending_io -n 500
 
       - if: failure()

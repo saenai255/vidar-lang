@@ -36,9 +36,10 @@ main :: proc() {
 | `Stmt` | a `{ ... }` block or statements |
 | `Type` | a type: `f64`, `[]int`, `geo.Vec2` |
 | `Ident` | a bare name, spliced unhygienically (for declaring things) |
+| `[]Ident` | a list of names, `{a, &b}`, each optionally with `&`; splices as `a, &b` (for capture lists) |
 | `int`, `string`, `bool`, … | a compile-time constant; it is evaluated |
 
-**Defaults.** Parameters can have default values, `allocator: Expr = context.allocator`. For `Expr`, `Stmt` and `Type` parameters the default is code; otherwise it's a compile-time value.
+**Defaults.** Parameters can have default values, `allocator: Expr = context.allocator`. For `Expr`, `Stmt`, `Type` and `[]Ident` parameters the default is code; otherwise it's a compile-time value.
 
 ## Results
 
@@ -107,6 +108,8 @@ zero_like :: proc!(x: Expr) -> Expr {
 fmt.println(zero_like!(p))           // Point{x = 0, y = 0}
 ```
 
+It knows the types of literals, locals, struct fields, indexing (a string gives `u8`), your own procs' results, and calls into `core:`, `base:` and `vendor:` packages, which it reads from `odin root`. For a proc group (`math.sqrt`) it picks the member whose parameters match the argument types it knows. A type from the called package comes back qualified with your import name (`strings.Builder`, `time.Time`). For a call with several results, it gives the first. It fails with "not known at compile time" on polymorphic results (`$T`), and on types from a package your file doesn't import.
+
 **`Ident` parameters** splice unhygienically, so a macro can declare names on purpose:
 
 ```odin
@@ -116,6 +119,17 @@ define_twice :: proc!(name: Ident, value: int) -> Stmt {
 
 define_twice!(answer, 21)
 fmt.println(answer)                  // 42
+```
+
+**`[]Ident` parameters** take a list of names in braces, each optionally prefixed with `&`. Spliced, the list becomes `a, &b`, which fits a closure's capture list. In comptime code it is an array, so `len` and `for` work on it:
+
+```odin
+fn :: proc!(captures: []Ident, body: Stmt) -> Expr {
+	return quote(proc[$captures]() { $body })
+}
+
+a, b := 1, 2
+bump := fn!({a, &b}) { b += a }      // proc[a, &b]() { b += a }
 ```
 
 **Defaults and a trailing block:**

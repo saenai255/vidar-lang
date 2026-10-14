@@ -20,6 +20,7 @@ import { generatedLine } from "../runmap";
 import { relativeInside } from "../paths";
 import * as F from "./features";
 import * as Actions from "./actions";
+import { setOdinPath } from "../odinpkg";
 import { OdinBridge } from "./odin";
 import * as N from "./navigation";
 import * as Sem from "./semantic";
@@ -228,6 +229,7 @@ connection.onInitialize((params): InitializeResult => {
   const opts = params.initializationOptions ?? {};
   settings = { ...settings, ...opts };
   Actions.setOdinPath(settings.odinPath);
+  setOdinPath(settings.odinPath);
   hintRefresh = !!params.capabilities.workspace?.inlayHint?.refreshSupport;
   semanticRefresh = !!params.capabilities.workspace?.semanticTokens?.refreshSupport;
   watchRegistration = !!params.capabilities.workspace?.didChangeWatchedFiles?.dynamicRegistration;

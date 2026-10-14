@@ -1,0 +1,46 @@
+package main
+
+import "core:fmt"
+
+// A closure from a capture list and a body.
+fn :: proc!(captures: []Ident, body: Stmt) -> Expr {
+	return quote(proc[$captures]() { $body })
+}
+
+// A closure returning its body's value, typed with type_of_expr.
+fn_ret :: proc!(captures: []Ident, body: Expr) -> Expr {
+	T := type_of_expr(body)
+	return quote(proc[$captures]() -> $T { return $body })
+}
+
+// Comptime code can count and walk the list.
+names :: proc!(xs: []Ident = {}) -> Expr {
+	out := ""
+	for x in xs do out = fmt.tprintf("%s%v ", out, x)
+	return quote(fmt.tprintf("%d: %s", $(len(xs)), $out))
+}
+
+main :: proc() {
+	a := 1
+	b := 2
+	show := fn!({a, b}) { fmt.println(a, b) }
+	show()
+
+	bump := fn!({&a, &b}) { a += 10; b += 20 }
+	bump()
+	fmt.println(a, b)
+
+	mixed := fn!({a, &b}) { b += a }
+	mixed()
+	fmt.println(b)
+
+	hello := fn!({}) { fmt.println("no captures") }
+	hello()
+
+	total := fn_ret!({a, b}, a + b)     // untyped int: int
+	bigger := fn_ret!({a, b}, a > b)    // untyped bool: bool
+	fmt.println(total(), bigger())
+
+	fmt.println(names!({a, &b,}))
+	fmt.println(names!())
+}

@@ -19,7 +19,8 @@ export type Val =
   | { k: "expr"; toks: Token[]; node?: Expr; ty?: Ty; scope?: Scope }
   | { k: "stmts"; toks: Token[] }
   | { k: "type"; toks: Token[]; node?: Expr; scope?: Scope }
-  | { k: "ident"; name: string }
+  /** `ref`: written `&name`, an item of a `[]Ident` argument such as a capture list */
+  | { k: "ident"; name: string; ref?: boolean }
   | { k: "proc"; sym: GlobalSym; lit: ProcLit }
   | { k: "ref"; cell: Cell };
 
@@ -665,7 +666,7 @@ function valEq(a: Val, b: Val): boolean {
   if (a.k !== b.k) return false;
   switch (a.k) {
     case "bool": case "string": return a.v === (b as typeof a).v;
-    case "ident": return a.name === (b as typeof a).name;
+    case "ident": return a.name === (b as typeof a).name && !a.ref === !(b as typeof a).ref;
     case "type": case "expr": case "stmts": return display(a) === display(b);
     case "nil": case "void": return true;
     default: return a === b;
@@ -695,7 +696,7 @@ export function display(v: Val): string {
     case "nil": return "nil";
     case "void": return "void";
     case "expr": case "stmts": case "type": return joinTokens(v.toks);
-    case "ident": return v.name;
+    case "ident": return (v.ref ? "&" : "") + v.name;
     case "proc": return `proc ${v.sym.name}`;
     case "ref": return `&${display(v.cell.v)}`;
   }
@@ -850,12 +851,12 @@ const BUILTINS: Record<string, Builtin> = {
     if (t?.k !== "type") throw new CompileError("type_fields: expected a Type", pos);
     return { k: "array", items: interp.fieldsOf(t, pos).map((v) => ({ k: "string", v }) as Val) };
   },
-  type_of_expr(args, pos) {
+  type_of_expr(args, pos, interp) {
     const e = args[0];
     if (e?.k !== "expr") throw new CompileError("type_of_expr: expected an Expr", pos);
-    const ty = e.ty;
+    const ty = e.ty ?? (e.node && e.scope ? interp.an.typeOfDeep(e.node, e.scope) : undefined);
     if (!ty) throw new CompileError("type_of_expr: the type of this expression is not known at compile time", pos);
-    if (ty.t === "untyped") return { k: "type", toks: tokensOf({ int: "int", float: "f64", string: "string", rune: "rune", bool: "bool" }[ty.kind], pos) };
+    if (ty.t === "untyped") return { k: "type", toks: tokensOf({ int: "int", float: "f64", string: "string", rune: "rune", bool: "bool" }[ty.kind], pos).filter((t) => t.kind !== "semi") };
     if (ty.t === "node") return { k: "type", toks: slice(ty.node), node: ty.node, scope: ty.scope };
     throw new CompileError("type_of_expr: the type of this expression is not known at compile time", pos);
   },
@@ -963,8 +964,10 @@ export function valueToTokens(v: Val, pos: Pos, ctx: "expr" | "stmt" | "splice")
     case "stmts":
     case "type":
       return v.toks.map((t) => fresh(t));
-    case "ident":
-      return [{ kind: "ident", text: v.name, pre: " ", pos }];
+    case "ident": {
+      const name: Token = { kind: "ident", text: v.name, pre: v.ref ? "" : " ", pos };
+      return v.ref ? [{ ...op("&", pos), pre: " " }, name] : [name];
+    }
     case "int": {
       const lit: Token = { kind: "int", text: String(v.v < 0n ? -v.v : v.v), pre: " ", pos };
       return v.v < 0n ? [fresh(op("(", pos)), fresh(op("-", pos)), lit, fresh(op(")", pos))] : [lit];

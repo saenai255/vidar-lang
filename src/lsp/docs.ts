@@ -132,7 +132,7 @@ export const BUILTIN_PROC_DOCS: Record<string, Doc> = {
 export const COMPTIME_BUILTIN_DOCS: Record<string, Doc> = {
   type_name: b("type_name :: proc!(T: Type) -> string", "The spelling of a type, at compile time."),
   type_fields: b("type_fields :: proc!(T: Type) -> []string", "The field names of a struct type, at compile time."),
-  type_of_expr: b("type_of_expr :: proc!(e: Expr) -> Type", "The type of an expression argument, when vidar can infer it."),
+  type_of_expr: b("type_of_expr :: proc!(e: Expr) -> Type", "The type of an expression argument, when vidar can infer it: literals, locals, fields, indexing, your procs' results and calls into `core:` packages (read from `odin root`)."),
   stringify: b("stringify :: proc!(v: any) -> string", "The source text of a code value, or the display form of a constant."),
   ident: b("ident :: proc!(name: string) -> Ident", "Makes an identifier from a string, to splice into quoted code: `$(ident(name))`."),
   compile_error: b("compile_error :: proc!(args: ..any)", "Stops compilation with an error at the macro call site."),
@@ -150,7 +150,7 @@ export const MACRO_KIND_DOCS: Record<string, string> = {
   Expr: "Macro parameter or result kind: an expression. `Expr(T)` requires the expression to have type `T`.",
   Stmt: "Macro parameter or result kind: one or more statements (a trailing `{ ... }` block argument).",
   Type: "Macro parameter or result kind: a type.",
-  Ident: "Macro parameter kind: a bare identifier, e.g. a name the macro declares.",
+  Ident: "Macro parameter kind: a bare identifier, e.g. a name the macro declares. `[]Ident` takes a list, `{a, &b}`, that splices as `a, &b` (e.g. a capture list).",
 };
 
 export const ODIN_CONSTANT_DOCS: Record<string, Doc> = {

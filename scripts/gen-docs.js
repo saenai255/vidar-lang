@@ -155,7 +155,8 @@ const lowering = lowerOrder.map((name) => {
   const src = fs.readFileSync(file, "utf8").split("\n");
   const meta = (k) => (src.find((l) => l.startsWith(`// ${k}: `)) ?? "").slice(k.length + 5);
   const code = src.filter((l) => !/^\/\/ (title|about): /.test(l)).join("\n");
-  const r = spawnSync("node", [path.join(root, "dist", "cli.js"), "emit", file], { encoding: "utf8" });
+  // only transpiled, never run: goroutines (disabled for now, src/sched.ts) still document their lowering
+  const r = spawnSync("node", [path.join(root, "dist", "cli.js"), "emit", file], { encoding: "utf8", env: { ...process.env, VIDAR_GOROUTINES: "1" } });
   if (r.status !== 0) throw new Error(`emit failed for ${name}: ${r.stderr}`);
   const raw = r.stdout.split("\n");
   const cut = raw.findIndex((l) => /^\/\/ ==== (vidar_runtime|vidar_sched)/.test(l));

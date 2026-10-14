@@ -11,6 +11,8 @@
 // other way, and must print the same.
 // tests/sched_debug/<name>/ are vidar:sched debugging checks (deadlocks, trace files, races), each
 // built with its own odin flags; see testSchedDebug.
+// Goroutines are disabled for now (src/sched.ts): every case, check and error test that imports
+// vidar:sched is skipped. VIDAR_GOROUTINES=1 runs them as before.
 const { readdirSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, statSync } = require("node:fs");
 const { join } = require("node:path");
 const { tmpdir, availableParallelism } = require("node:os");
@@ -27,6 +29,22 @@ const picked = (name) => !ONLY || name.includes(ONLY);
 
 let pass = 0;
 let fail = 0;
+let skipped = 0;
+
+const GOROUTINES = process.env.VIDAR_GOROUTINES === "1";
+/** Whether a .vidar file, or any .vidar file under a directory, imports vidar:sched. */
+const usesSched = (path) => {
+  if (!existsSync(path)) return false;
+  if (statSync(path).isDirectory()) return readdirSync(path).some((n) => n !== "expected" && usesSched(join(path, n)));
+  return path.endsWith(".vidar") && readFileSync(path, "utf8").includes('"vidar:sched"');
+};
+/** Skips `name` while goroutines are disabled and `path` uses them. */
+const skipSched = (name, path) => {
+  if (GOROUTINES || !usesSched(path)) return false;
+  skipped++;
+  console.log(`SKIP ${name} (goroutines are disabled)`);
+  return true;
+};
 const JOBS = Number(process.argv.find((a) => a.startsWith("-j"))?.slice(2)) || Math.max(2, Math.floor(availableParallelism() / 2));
 
 /** Counts the result and prints it, or adds it to `log` to print in order later. */
@@ -74,7 +92,7 @@ const cases = [
     const entry = existsSync(join(dir, "input")) ? join(dir, "input") : join(dir, "input.vidar");
     return { name: `tests/cases/${name}`, entry, golden: join(dir, "expected"), stdout: join(dir, "stdout.txt"), passthrough: name.startsWith("plain_"), optimize: name.startsWith("opt_") };
   }),
-].filter((c) => picked(c.name));
+].filter((c) => picked(c.name) && !skipSched(c.name, c.entry));
 
 const work = mkdtempSync(join(tmpdir(), "vidar-test-"));
 
@@ -232,6 +250,7 @@ async function testSchedDebug() {
   const jobs = [];
   for (const name of readdirSync(root)) {
     const entry = join(root, name);
+    if (picked(entry) && skipSched(entry, entry)) continue;
     const check = JSON.parse(readFileSync(join(entry, "check.json"), "utf8"));
     for (const r of check.runs) {
       const label = `${entry} (${r.name})`;
@@ -301,6 +320,7 @@ async function testSchedDebug() {
   for (const f of readdirSync("tests/errors").filter((f) => f.endsWith(".vidar") && picked(join("tests/errors", f)))) {
     const path = join("tests/errors", f);
     const text = readFileSync(path, "utf8");
+    if (skipSched(path, path)) continue;
     expectError(path, text.match(/^\/\/ error: (.*)$/m)[1], () => transpile([{ path, text }]));
   }
 
@@ -308,6 +328,8 @@ async function testSchedDebug() {
   for (const d of readdirSync("tests/errors_pkg").filter((d) => picked(join("tests/errors_pkg", d)))) {
     const dir = join("tests/errors_pkg", d);
     const want = readFileSync(join(dir, "main.vidar"), "utf8").match(/^\/\/ error: (.*)$/m)[1];
+    // the test of the disabled error itself runs only while goroutines are disabled
+    if (want.startsWith("goroutines are disabled") ? GOROUTINES : skipSched(dir, dir)) continue;
     expectError(dir, want, () => emitProgram(loadProgram(dir)));
   }
 
@@ -325,6 +347,6 @@ async function testSchedDebug() {
     report(ok, `passthrough $ODIN_ROOT/${rel}`);
   }
 
-  console.log(`\n${pass} passed, ${fail} failed`);
+  console.log(`\n${pass} passed, ${fail} failed${skipped ? `, ${skipped} skipped` : ""}`);
   process.exit(fail ? 1 : 0);
 })();

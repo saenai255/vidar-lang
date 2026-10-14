@@ -116,11 +116,11 @@ The spelling of a type, at compile time.
 type_of_expr :: proc!(e: Expr) -> Type
 ```
 
-The type of an expression argument, when vidar can infer it.
+The type of an expression argument, when vidar can infer it: literals, locals, fields, indexing, your procs' results and calls into `core:` packages (read from `odin root`).
 
 ## Parameter and result kinds
 
 - `Expr`: Macro parameter or result kind: an expression. `Expr(T)` requires the expression to have type `T`.
-- `Ident`: Macro parameter kind: a bare identifier, e.g. a name the macro declares.
+- `Ident`: Macro parameter kind: a bare identifier, e.g. a name the macro declares. `[]Ident` takes a list, `{a, &b}`, that splices as `a, &b` (e.g. a capture list).
 - `Stmt`: Macro parameter or result kind: one or more statements (a trailing `{ ... }` block argument).
 - `Type`: Macro parameter or result kind: a type.

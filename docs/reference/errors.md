@@ -7,12 +7,12 @@ Every program here is a test in `tests/errors/` and `tests/errors_pkg/` that mus
 - [`do!` blocks](#do-blocks): 7 errors
 - [Anonymous struct literals](#anonymous-struct-literals): 4 errors
 - [Closures](#closures): 28 errors
-- [Comptime and macros](#comptime-and-macros): 27 errors
+- [Comptime and macros](#comptime-and-macros): 28 errors
 - [Declarations and parsing](#declarations-and-parsing): 3 errors
 - [Error handling](#error-handling): 8 errors
 - [Interfaces](#interfaces): 42 errors
 - [Optimization attributes](#optimization-attributes): 17 errors
-- [Packages and imports](#packages-and-imports): 6 errors
+- [Packages and imports](#packages-and-imports): 7 errors
 
 ## `do!` blocks
 
@@ -1156,6 +1156,30 @@ This program fails to compile:
 package main
 f :: proc!(T: Type) -> int { return len(type_fields(T)) }
 main :: proc() { _ = f!([4]int) }
+```
+
+### macro ident list not names
+
+The message contains:
+
+```text
+argument 'captures' must be a list of identifiers, like {a, &b}
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+fn :: proc!(captures: []Ident, body: Stmt) -> Expr {
+	return quote(proc[$captures]() { $body })
+}
+
+main :: proc() {
+	a := 1
+	f := fn!({a + 1}) {}
+	f()
+}
 ```
 
 ### macro ident param
@@ -2824,6 +2848,28 @@ This program fails to compile:
 package main
 import "nowhere"
 main :: proc() {}
+```
+
+### package goroutines disabled
+
+The message contains:
+
+```text
+goroutines are disabled for now: 'vidar:sched' can't be imported
+```
+
+This program fails to compile:
+
+`main.vidar`:
+
+```odin
+package main
+
+import "vidar:sched"
+
+main :: proc() {
+	sched.go(proc[]() {})
+}
 ```
 
 ### package name mismatch

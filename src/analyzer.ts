@@ -6,6 +6,7 @@ import { autoOptimize } from "./autoopt";
 import { checkNoAlloc } from "./checks";
 import { checkCallEscapes, checkEscapes, ifaceEscape } from "./escape";
 import { MemoInfo, memoPlan } from "./memo";
+import { OdinPackage, odinPackage, procsOf } from "./odinpkg";
 import { CallSpan, Interp, NotConstant, Val, joinTokens, repeatable, respace, valueToTokens, tokensOf } from "./comptime";
 
 /** Annotation accessor: analysis results live in `_`-prefixed fields on nodes. */
@@ -222,6 +223,8 @@ export class Analyzer {
   private frameValues: { fix: Extract<ErrorFix, { code: "iface-value" }>; value: Expr; proc: ProcLit; ctx?: Ctx }[] = [];
   private errCounter = 0;
   private anonCounter = 0;
+  /** typeOf also types string indexing and reads `core:` packages from `odin root` (for type_of_expr only) */
+  private deepTypes = false;
   /** method declaration -> its interface method */
   readonly ifaceMethods = new Map<GlobalSym, IfaceMethod>();
   readonly ifaceSyms: GlobalSym[] = [];
@@ -941,6 +944,17 @@ export class Analyzer {
     return undefined;
   }
 
+  /** typeOf, plus what only `type_of_expr` asks for: string indexing and calls into `core:` packages. */
+  typeOfDeep(e: Expr, scope: Scope): Ty | undefined {
+    const was = this.deepTypes;
+    this.deepTypes = true;
+    try {
+      return this.typeOf(e, scope);
+    } finally {
+      this.deepTypes = was;
+    }
+  }
+
   typeOf(e: Expr, scope: Scope, depth = 0): Ty | undefined {
     if (depth > 32) return undefined;
     switch (e.k) {
@@ -957,12 +971,15 @@ export class Analyzer {
       case "Selector": {
         const member: GlobalSym | undefined = A(e)._pkgMember ?? this.pkgMember(e, scope, null)?.member;
         if (member) return this.symTy(member, depth);
+        const odin = this.deepTypes ? this.odinMember(e, scope) : undefined;
+        if (odin) return this.odinValueTy(odin, scope, posOf(e));
         return this.fieldOf(this.typeOf(e.x, scope, depth + 1), e.name);
       }
       case "Index":
         if (e.slice) return this.typeOf(e.x, scope, depth + 1);
         return (() => {
           const t = this.typeOf(e.x, scope, depth + 1);
+          if (this.deepTypes && this.isStringTy(t)) return { t: "node", node: synthIdent("u8", posOf(e)), scope: this.global };
           return t && this.elemOf(t);
         })();
       case "Deref": {
@@ -1013,10 +1030,114 @@ export class Analyzer {
           const td = this.typeDeclOf(sym);
           if (td) return { t: "node", node: fn, scope };
         }
+        const odin = this.deepTypes && fn.k === "Selector" ? this.odinMember(fn, scope) : undefined;
+        if (odin) return this.odinResultTy(odin, e.args, scope, posOf(e));
         const ft = this.normalize(this.typeOf(fn, scope, depth + 1));
         return ft?.t === "sig" ? this.resultTy(ft, 0) : undefined;
       }
     }
+    return undefined;
+  }
+
+  private isStringTy(t: Ty | undefined): boolean {
+    const n = this.normalize(t);
+    return (n?.t === "untyped" && n.kind === "string") || (n?.t === "node" && n.node.k === "Ident" && n.node.name === "string");
+  }
+
+  // ---- types from Odin's collection packages (core:, base:, vendor:), for type_of_expr ----
+
+  /** `pkg.name` where `pkg` imports a collection package that declares `name`. */
+  private odinMember(sel: Selector, scope: Scope): { pkg: OdinPackage; alias: string; name: string } | undefined {
+    if (sel.x.k !== "Ident") return undefined;
+    const p = this.lookup(sel.x.name, scope, null);
+    if (p?.kind !== "pkg" || p.target) return undefined;
+    const pkg = odinPackage(p.path);
+    return pkg?.decls.has(sel.name) ? { pkg, alias: p.name, name: sel.name } : undefined;
+  }
+
+  /**
+   * The type of a call's first result. For a proc group, the members the arguments can call
+   * (by count, then by the argument types vidar knows) must agree on it.
+   */
+  private odinResultTy(m: { pkg: OdinPackage; alias: string; name: string }, args: Expr[], scope: Scope, pos: Pos): Ty | undefined {
+    const imports = m.pkg.decls.get(m.name)!.imports;
+    const at = (t: Expr) => this.odinTypeAt(t, m, imports, scope, pos);
+    const positional = args.filter((a) => a.k !== "FieldValue");
+    const argTys = positional.map((a) => this.typeOf(a, scope));
+    const results: { node: Expr; exact: boolean }[] = [];
+    for (const lit of procsOf(m.pkg, m.name)) {
+      const params = lit.sig.params.flatMap((p) => Array.from({ length: Math.max(1, p.names.length) }, () => p));
+      const variadic = params.findIndex((p) => p.type?.k === "Spread");
+      const required = params.filter((p, i) => !p.value && (variadic < 0 || i < variadic)).length;
+      if (positional.length < required || (variadic < 0 && positional.length > params.length)) continue;
+      const fit = positional.map((_, i) => {
+        const p = params[variadic >= 0 && i >= variadic ? variadic : i];
+        let type = p?.type;
+        if (type?.k === "Spread") type = type.x;
+        const want = type && at(type);
+        return want ? this.compatible(argTys[i], { t: "node", node: want, scope }) : undefined;
+      });
+      if (fit.includes(false)) continue;
+      const r = lit.sig.results[0]?.type;
+      const node = r && at(r);
+      if (!node) return undefined;
+      // exact: every argument whose type vidar knows matches its parameter
+      results.push({ node, exact: fit.every((f, i) => f === true || !argTys[i]) });
+    }
+    const best = results.some((r) => r.exact) ? results.filter((r) => r.exact) : results;
+    if (!best.length || new Set(best.map((r) => nodeText(r.node))).size !== 1) return undefined;
+    return { t: "node", node: best[0].node, scope };
+  }
+
+  /** A variable's or constant's type: its declared type, or an untyped literal's kind. */
+  private odinValueTy(m: { pkg: OdinPackage; alias: string; name: string }, scope: Scope, pos: Pos): Ty | undefined {
+    const { decl, index, imports } = m.pkg.decls.get(m.name)!;
+    if (decl.type) {
+      const node = this.odinTypeAt(decl.type, m, imports, scope, pos);
+      return node && { t: "node", node, scope };
+    }
+    const v = decl.values[index];
+    return v?.k === "Lit" ? this.typeOf(v, scope) : undefined;
+  }
+
+  /**
+   * A type written in a collection package, respelled for `scope`: the package's own names get
+   * `alias.`, other packages get the name `scope` imports them under. Undefined for polymorphic
+   * types and packages `scope` doesn't import.
+   */
+  private odinTypeAt(type: Expr, m: { pkg: OdinPackage; alias: string }, imports: Map<string, string>, scope: Scope, pos: Pos): Expr | undefined {
+    const src = type.toks.slice(type.start, type.end);
+    const out: Token[] = [];
+    const tok = (kind: Token["kind"], text: string, pre: string): Token => ({ kind, text, pre, pos });
+    for (let i = 0; i < src.length; i++) {
+      const t = src[i];
+      if (t.kind === "op" && t.text === "$") return undefined;
+      const afterDot = src[i - 1]?.kind === "op" && src[i - 1].text === ".";
+      if (t.kind === "ident" && !afterDot && src[i + 1]?.kind === "op" && src[i + 1].text === "." && imports.has(t.text)) {
+        const name = this.importNameFor(imports.get(t.text)!, scope);
+        if (!name) return undefined;
+        out.push(tok("ident", name, t.pre));
+        continue;
+      }
+      if (t.kind === "ident" && !afterDot && m.pkg.decls.has(t.text)) {
+        out.push(tok("ident", m.alias, t.pre), tok("op", ".", ""), tok("ident", t.text, ""));
+        continue;
+      }
+      out.push(tok(t.kind, t.text, t.pre));
+    }
+    try {
+      const p = new Parser([...out, eofTok(pos)]);
+      const node = p.parseType();
+      p.expectEnd();
+      return node;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** The name `scope` imports package `path` under. */
+  private importNameFor(path: string, scope: Scope): string | undefined {
+    for (let s: Scope | null = scope; s; s = s.parent) for (const sym of s.syms.values()) if (sym.kind === "pkg" && sym.path === path) return sym.name;
     return undefined;
   }
 
@@ -2257,8 +2378,9 @@ export class Analyzer {
     return { file: posOf(call).file, from: posOf(call).line, to: call.toks[call.end - 1].pos.line };
   }
 
-  private paramKind(t: Expr): { kind: "Expr" | "Stmt" | "Type" | "Ident" | "value"; of?: Expr } {
+  private paramKind(t: Expr): { kind: "Expr" | "Stmt" | "Type" | "Ident" | "Idents" | "value"; of?: Expr } {
     if (t.k === "Ident" && ["Expr", "Stmt", "Type", "Ident"].includes(t.name)) return { kind: t.name as "Expr" };
+    if (t.k === "TypeExpr" && t.what === "slice" && t.parts[1]?.k === "Ident" && t.parts[1].name === "Ident") return { kind: "Idents" };
     if (t.k === "Call" && t.fn.k === "Ident" && t.fn.name === "Expr" && t.args.length === 1) return { kind: "Expr", of: t.args[0] };
     return { kind: "value" };
   }
@@ -2299,6 +2421,7 @@ export class Analyzer {
     if (kind === "Stmt") return { k: "stmts", toks };
     if (kind === "Type") return { k: "type", toks, node: def, scope: macro.scope };
     if (kind === "Ident") return { k: "ident", name: toks[0]?.text ?? name };
+    if (kind === "Idents") return identList(toks, name, def.toks[def.start].pos);
     return this.interp.evalIn(def, macro.scope);
   }
 
@@ -2321,6 +2444,8 @@ export class Analyzer {
       case "Ident":
         if (toks.length !== 2 || toks[0].kind !== "ident") throw new CompileError(`argument '${name}' must be an identifier`, pos);
         return { k: "ident", name: toks[0].text };
+      case "Idents":
+        return identList(toks.slice(0, -1), name, pos);
       case "value": {
         const node = this.parseTokens(toks, (p) => p.parseExpr());
         try {
@@ -2534,12 +2659,29 @@ export class Analyzer {
       const toks = respace(valueToTokens(v, pos, "stmt"), this.callSpan(call));
       return this.parseTokens([...toks, eofTok(pos)], (p) => p.parseStmtList());
     }
-    if (kind === "Type" || kind === "Ident") throw new CompileError(`${where}: macros cannot return ${kind}`, pos);
+    if (kind === "Type" || kind === "Ident" || kind === "Idents") throw new CompileError(`${where}: macros cannot return ${kind}`, pos);
     const toks = respace(valueToTokens(v, pos, "expr"), this.callSpan(call));
     const node = this.parseTokens([...toks, eofTok(pos)], (p) => p.parseExpr());
     if (of) this.checkTyped(node, this.typeOf(node, scope), { t: "node", node: of, scope: sym.scope }, scope, `result of ${where}`, pos);
     return node;
   }
+}
+
+/** A `[]Ident` macro argument, `{a, &b}`: names, each optionally taken by pointer (for capture lists). */
+function identList(toks: Token[], name: string, pos: Pos): Val {
+  const fail = () => new CompileError(`argument '${name}' must be a list of identifiers, like {a, &b}`, pos);
+  const isOp = (t: Token | undefined, text: string) => t?.kind === "op" && t.text === text;
+  if (!isOp(toks[0], "{") || !isOp(toks[toks.length - 1], "}")) throw fail();
+  const items: Val[] = [];
+  for (let i = 1; i < toks.length - 1; i++) {
+    const ref = isOp(toks[i], "&");
+    if (ref) i++;
+    if (toks[i]?.kind !== "ident" || i >= toks.length - 1) throw fail();
+    items.push({ k: "ident", name: toks[i].text, ref });
+    if (!isOp(toks[i + 1], ",") && i + 1 !== toks.length - 1) throw fail();
+    i++;
+  }
+  return { k: "array", items };
 }
 
 export function eofTok(pos: Pos): Token {

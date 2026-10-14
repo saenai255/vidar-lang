@@ -219,6 +219,7 @@ Parameter kinds:
 | `Stmt` | a `{ ... }` block or statements |
 | `Type` | a type: `f64`, `[]int`, `geo.Vec2` |
 | `Ident` | a bare name, spliced unhygienically (to declare something on purpose) |
+| `[]Ident` | a list of names, `{a, &b}`; splices as `a, &b`, e.g. into a capture list `proc[$caps]` |
 | `int`, `string`, `bool`, `f64`, ... | a compile-time constant, evaluated |
 
 Result kinds: `Expr` / `Expr(T)` (usable anywhere an expression is), `Stmt` (statements only), a constant type (folds to a literal), or none (runs for side effects such as `compile_error`).
@@ -347,6 +348,8 @@ Example: [examples/negative_cost](examples/negative_cost).
 ## Goroutines and channels
 
 Not syntax: a library, `import "vidar:sched"`. Goroutines are started from closures.
+
+**Disabled for now:** importing `vidar:sched` is a compile error unless `VIDAR_GOROUTINES=1` is set in the environment.
 
 ```odin
 results := sched.make_chan(string)
