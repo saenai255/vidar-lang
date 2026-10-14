@@ -6,6 +6,7 @@ import { autoOptimize } from "./autoopt";
 import { checkNoAlloc } from "./checks";
 import { checkCallEscapes, checkEscapes, ifaceEscape } from "./escape";
 import { MemoInfo, memoPlan } from "./memo";
+import { OdinPackage, odinPackage, procsOf } from "./odinpkg";
 import { CallSpan, Interp, NotConstant, Val, joinTokens, repeatable, respace, valueToTokens, tokensOf } from "./comptime";
 
 /** Annotation accessor: analysis results live in `_`-prefixed fields on nodes. */
@@ -222,6 +223,8 @@ export class Analyzer {
   private frameValues: { fix: Extract<ErrorFix, { code: "iface-value" }>; value: Expr; proc: ProcLit; ctx?: Ctx }[] = [];
   private errCounter = 0;
   private anonCounter = 0;
+  /** typeOf also types string indexing and reads `core:` packages from `odin root` (for type_of_expr only) */
+  private deepTypes = false;
   /** method declaration -> its interface method */
   readonly ifaceMethods = new Map<GlobalSym, IfaceMethod>();
   readonly ifaceSyms: GlobalSym[] = [];
@@ -941,6 +944,17 @@ export class Analyzer {
     return undefined;
   }
 
+  /** typeOf, plus what only `type_of_expr` asks for: string indexing and calls into `core:` packages. */
+  typeOfDeep(e: Expr, scope: Scope): Ty | undefined {
+    const was = this.deepTypes;
+    this.deepTypes = true;
+    try {
+      return this.typeOf(e, scope);
+    } finally {
+      this.deepTypes = was;
+    }
+  }
+
   typeOf(e: Expr, scope: Scope, depth = 0): Ty | undefined {
     if (depth > 32) return undefined;
     switch (e.k) {
@@ -957,12 +971,15 @@ export class Analyzer {
       case "Selector": {
         const member: GlobalSym | undefined = A(e)._pkgMember ?? this.pkgMember(e, scope, null)?.member;
         if (member) return this.symTy(member, depth);
+        const odin = this.deepTypes ? this.odinMember(e, scope) : undefined;
+        if (odin) return this.odinValueTy(odin, scope, posOf(e));
         return this.fieldOf(this.typeOf(e.x, scope, depth + 1), e.name);
       }
       case "Index":
         if (e.slice) return this.typeOf(e.x, scope, depth + 1);
         return (() => {
           const t = this.typeOf(e.x, scope, depth + 1);
+          if (this.deepTypes && this.isStringTy(t)) return { t: "node", node: synthIdent("u8", posOf(e)), scope: this.global };
           return t && this.elemOf(t);
         })();
       case "Deref": {
@@ -1013,10 +1030,114 @@ export class Analyzer {
           const td = this.typeDeclOf(sym);
           if (td) return { t: "node", node: fn, scope };
         }
+        const odin = this.deepTypes && fn.k === "Selector" ? this.odinMember(fn, scope) : undefined;
+        if (odin) return this.odinResultTy(odin, e.args, scope, posOf(e));
         const ft = this.normalize(this.typeOf(fn, scope, depth + 1));
         return ft?.t === "sig" ? this.resultTy(ft, 0) : undefined;
       }
     }
+    return undefined;
+  }
+
+  private isStringTy(t: Ty | undefined): boolean {
+    const n = this.normalize(t);
+    return (n?.t === "untyped" && n.kind === "string") || (n?.t === "node" && n.node.k === "Ident" && n.node.name === "string");
+  }
+
+  // ---- types from Odin's collection packages (core:, base:, vendor:), for type_of_expr ----
+
+  /** `pkg.name` where `pkg` imports a collection package that declares `name`. */
+  private odinMember(sel: Selector, scope: Scope): { pkg: OdinPackage; alias: string; name: string } | undefined {
+    if (sel.x.k !== "Ident") return undefined;
+    const p = this.lookup(sel.x.name, scope, null);
+    if (p?.kind !== "pkg" || p.target) return undefined;
+    const pkg = odinPackage(p.path);
+    return pkg?.decls.has(sel.name) ? { pkg, alias: p.name, name: sel.name } : undefined;
+  }
+
+  /**
+   * The type of a call's first result. For a proc group, the members the arguments can call
+   * (by count, then by the argument types vidar knows) must agree on it.
+   */
+  private odinResultTy(m: { pkg: OdinPackage; alias: string; name: string }, args: Expr[], scope: Scope, pos: Pos): Ty | undefined {
+    const imports = m.pkg.decls.get(m.name)!.imports;
+    const at = (t: Expr) => this.odinTypeAt(t, m, imports, scope, pos);
+    const positional = args.filter((a) => a.k !== "FieldValue");
+    const argTys = positional.map((a) => this.typeOf(a, scope));
+    const results: { node: Expr; exact: boolean }[] = [];
+    for (const lit of procsOf(m.pkg, m.name)) {
+      const params = lit.sig.params.flatMap((p) => Array.from({ length: Math.max(1, p.names.length) }, () => p));
+      const variadic = params.findIndex((p) => p.type?.k === "Spread");
+      const required = params.filter((p, i) => !p.value && (variadic < 0 || i < variadic)).length;
+      if (positional.length < required || (variadic < 0 && positional.length > params.length)) continue;
+      const fit = positional.map((_, i) => {
+        const p = params[variadic >= 0 && i >= variadic ? variadic : i];
+        let type = p?.type;
+        if (type?.k === "Spread") type = type.x;
+        const want = type && at(type);
+        return want ? this.compatible(argTys[i], { t: "node", node: want, scope }) : undefined;
+      });
+      if (fit.includes(false)) continue;
+      const r = lit.sig.results[0]?.type;
+      const node = r && at(r);
+      if (!node) return undefined;
+      // exact: every argument whose type vidar knows matches its parameter
+      results.push({ node, exact: fit.every((f, i) => f === true || !argTys[i]) });
+    }
+    const best = results.some((r) => r.exact) ? results.filter((r) => r.exact) : results;
+    if (!best.length || new Set(best.map((r) => nodeText(r.node))).size !== 1) return undefined;
+    return { t: "node", node: best[0].node, scope };
+  }
+
+  /** A variable's or constant's type: its declared type, or an untyped literal's kind. */
+  private odinValueTy(m: { pkg: OdinPackage; alias: string; name: string }, scope: Scope, pos: Pos): Ty | undefined {
+    const { decl, index, imports } = m.pkg.decls.get(m.name)!;
+    if (decl.type) {
+      const node = this.odinTypeAt(decl.type, m, imports, scope, pos);
+      return node && { t: "node", node, scope };
+    }
+    const v = decl.values[index];
+    return v?.k === "Lit" ? this.typeOf(v, scope) : undefined;
+  }
+
+  /**
+   * A type written in a collection package, respelled for `scope`: the package's own names get
+   * `alias.`, other packages get the name `scope` imports them under. Undefined for polymorphic
+   * types and packages `scope` doesn't import.
+   */
+  private odinTypeAt(type: Expr, m: { pkg: OdinPackage; alias: string }, imports: Map<string, string>, scope: Scope, pos: Pos): Expr | undefined {
+    const src = type.toks.slice(type.start, type.end);
+    const out: Token[] = [];
+    const tok = (kind: Token["kind"], text: string, pre: string): Token => ({ kind, text, pre, pos });
+    for (let i = 0; i < src.length; i++) {
+      const t = src[i];
+      if (t.kind === "op" && t.text === "$") return undefined;
+      const afterDot = src[i - 1]?.kind === "op" && src[i - 1].text === ".";
+      if (t.kind === "ident" && !afterDot && src[i + 1]?.kind === "op" && src[i + 1].text === "." && imports.has(t.text)) {
+        const name = this.importNameFor(imports.get(t.text)!, scope);
+        if (!name) return undefined;
+        out.push(tok("ident", name, t.pre));
+        continue;
+      }
+      if (t.kind === "ident" && !afterDot && m.pkg.decls.has(t.text)) {
+        out.push(tok("ident", m.alias, t.pre), tok("op", ".", ""), tok("ident", t.text, ""));
+        continue;
+      }
+      out.push(tok(t.kind, t.text, t.pre));
+    }
+    try {
+      const p = new Parser([...out, eofTok(pos)]);
+      const node = p.parseType();
+      p.expectEnd();
+      return node;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** The name `scope` imports package `path` under. */
+  private importNameFor(path: string, scope: Scope): string | undefined {
+    for (let s: Scope | null = scope; s; s = s.parent) for (const sym of s.syms.values()) if (sym.kind === "pkg" && sym.path === path) return sym.name;
     return undefined;
   }
 

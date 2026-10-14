@@ -108,6 +108,8 @@ zero_like :: proc!(x: Expr) -> Expr {
 fmt.println(zero_like!(p))           // Point{x = 0, y = 0}
 ```
 
+It knows the types of literals, locals, struct fields, indexing (a string gives `u8`), your own procs' results, and calls into `core:`, `base:` and `vendor:` packages, which it reads from `odin root`. For a proc group (`math.sqrt`) it picks the member whose parameters match the argument types it knows. A type from the called package comes back qualified with your import name (`strings.Builder`, `time.Time`). For a call with several results, it gives the first. It fails with "not known at compile time" on polymorphic results (`$T`), and on types from a package your file doesn't import.
+
 **`Ident` parameters** splice unhygienically, so a macro can declare names on purpose:
 
 ```odin

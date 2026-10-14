@@ -851,10 +851,10 @@ const BUILTINS: Record<string, Builtin> = {
     if (t?.k !== "type") throw new CompileError("type_fields: expected a Type", pos);
     return { k: "array", items: interp.fieldsOf(t, pos).map((v) => ({ k: "string", v }) as Val) };
   },
-  type_of_expr(args, pos) {
+  type_of_expr(args, pos, interp) {
     const e = args[0];
     if (e?.k !== "expr") throw new CompileError("type_of_expr: expected an Expr", pos);
-    const ty = e.ty;
+    const ty = e.ty ?? (e.node && e.scope ? interp.an.typeOfDeep(e.node, e.scope) : undefined);
     if (!ty) throw new CompileError("type_of_expr: the type of this expression is not known at compile time", pos);
     if (ty.t === "untyped") return { k: "type", toks: tokensOf({ int: "int", float: "f64", string: "string", rune: "rune", bool: "bool" }[ty.kind], pos).filter((t) => t.kind !== "semi") };
     if (ty.t === "node") return { k: "type", toks: slice(ty.node), node: ty.node, scope: ty.scope };

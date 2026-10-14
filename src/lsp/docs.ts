@@ -132,7 +132,7 @@ export const BUILTIN_PROC_DOCS: Record<string, Doc> = {
 export const COMPTIME_BUILTIN_DOCS: Record<string, Doc> = {
   type_name: b("type_name :: proc!(T: Type) -> string", "The spelling of a type, at compile time."),
   type_fields: b("type_fields :: proc!(T: Type) -> []string", "The field names of a struct type, at compile time."),
-  type_of_expr: b("type_of_expr :: proc!(e: Expr) -> Type", "The type of an expression argument, when vidar can infer it."),
+  type_of_expr: b("type_of_expr :: proc!(e: Expr) -> Type", "The type of an expression argument, when vidar can infer it: literals, locals, fields, indexing, your procs' results and calls into `core:` packages (read from `odin root`)."),
   stringify: b("stringify :: proc!(v: any) -> string", "The source text of a code value, or the display form of a constant."),
   ident: b("ident :: proc!(name: string) -> Ident", "Makes an identifier from a string, to splice into quoted code: `$(ident(name))`."),
   compile_error: b("compile_error :: proc!(args: ..any)", "Stops compilation with an error at the macro call site."),

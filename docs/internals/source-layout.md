@@ -8,6 +8,7 @@ For how these files fit together, read [Architecture](architecture.md) first.
 | `src/parser.ts` | Odin parser: every node keeps its token range for lossless re-emission |
 | `src/analyzer.ts` | scopes, imports and package members, capture rules, best-effort type inference, macro expansion |
 | `src/comptime.ts` | interpreter for comptime procs, `quote`/splicing, hygiene |
+| `src/odinpkg.ts` | top-level declarations of `core:`/`base:`/`vendor:` packages, read from `odin root` on demand, so `type_of_expr` can type calls into them |
 | `src/race.ts` | `-define:VIDAR_RACE=true`: marks the writes `vidar:sched`'s race check watches |
 | `src/sched.ts` | the bundled `vidar:sched` package (scheduler, channels, `select`, nbio-backed I/O) and its stack-switching assembly |
 | `src/emitter.ts` | re-emits tokens and lowers closures, interfaces, cross-package references and expansions |

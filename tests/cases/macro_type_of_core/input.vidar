@@ -1,0 +1,33 @@
+package main
+
+import "core:fmt"
+import "core:math"
+import "core:strconv"
+import str "core:strings"
+import "core:time"
+
+// type_of_expr reads core: packages from `odin root`, and types string indexing.
+fn :: proc!(captures: []Ident, body: Expr) -> Expr {
+	T := type_of_expr(body)
+	return quote(proc[$captures]() -> $T { return $body })
+}
+
+show :: proc!(e: Expr) -> Expr {
+	return quote($(type_name(type_of_expr(e))))
+}
+
+main :: proc() {
+	s := "hi"
+	n: string = "bob"
+	upper := fn!({s}, str.to_upper(s))          // core proc, imported under an alias
+	first := fn!({s}, s[0])                     // u8
+	letter := fn!({n}, n[1])                    // u8
+	root := fn!({}, math.sqrt(f64(2)))          // proc group: the f64 member
+	parts := fn!({s}, str.split(s, ""))         // []string
+	num := fn!({}, strconv.parse_int("42") or_else 0)  // (int, bool) or_else: int
+	fmt.println(upper(), first(), letter(), root(), parts(), num())
+
+	fmt.println(show!(math.PI))                 // untyped float constant
+	fmt.println(show!(time.now()))              // the package's own type, qualified
+	fmt.println(show!(str.builder_make()))      // a proc group of the package's own procs
+}
