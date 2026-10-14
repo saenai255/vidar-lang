@@ -12,7 +12,7 @@ Every program here is a test in `tests/errors/` and `tests/errors_pkg/` that mus
 - [Error handling](#error-handling): 8 errors
 - [Interfaces](#interfaces): 42 errors
 - [Optimization attributes](#optimization-attributes): 17 errors
-- [Packages and imports](#packages-and-imports): 6 errors
+- [Packages and imports](#packages-and-imports): 7 errors
 
 ## `do!` blocks
 
@@ -2848,6 +2848,28 @@ This program fails to compile:
 package main
 import "nowhere"
 main :: proc() {}
+```
+
+### package goroutines disabled
+
+The message contains:
+
+```text
+goroutines are disabled for now: 'vidar:sched' can't be imported
+```
+
+This program fails to compile:
+
+`main.vidar`:
+
+```odin
+package main
+
+import "vidar:sched"
+
+main :: proc() {
+	sched.go(proc[]() {})
+}
 ```
 
 ### package name mismatch

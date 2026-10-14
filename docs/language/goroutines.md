@@ -1,5 +1,7 @@
 # Goroutines and channels
 
+> **Disabled for now.** Goroutines fail too often (they crash on linux/arm64), so `import "vidar:sched"` is a compile error. Set `VIDAR_GOROUTINES=1` in the environment to use them anyway.
+
 `import "vidar:sched"` gives Go-style concurrency as a library, with no new syntax:
 
 - `sched.go` runs a closure on a new goroutine.

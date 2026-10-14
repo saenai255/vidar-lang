@@ -13,9 +13,9 @@ Each example is its own directory, and the directory is the program. Run one wit
 | [comptime/](comptime) | `name!(...)` and `comptime! { ... }`: running procs at compile time, strings, lookup tables and structs, static assertions, integer wrap-around |
 | [builtins/](builtins) | the built-in macros `do!`, `dbg!`, `check!`, `with_allocator!`, `locked!`, `timed!`, `track!`, `todo!`, `unimplemented!` |
 | [scoped/](scoped) | the built-in `scoped! { ... }` / `scoped!(allocator) { ... }`: a block with its own temp allocator, freed when the block ends |
-| [fanout/](fanout) | CPU-bound goroutines, for timing `-define:VIDAR_THREADS=N`; the checksum is the same at any thread count |
-| [goroutines/](goroutines) | `import "vidar:sched"`: goroutines from closures, channels, `select` with a timeout, `try_select`, wait groups, and a TCP echo server over `core:nbio` |
-| [sched_io/](sched_io) | I/O that parks only the goroutine: `blocking` on a worker thread, files, DNS, UDP, `sched.Mutex` held across a sleep, and `after` as a `select` timeout |
+| [fanout/](fanout) | *Disabled for now (needs `VIDAR_GOROUTINES=1`).* CPU-bound goroutines, for timing `-define:VIDAR_THREADS=N`; the checksum is the same at any thread count |
+| [goroutines/](goroutines) | *Disabled for now (needs `VIDAR_GOROUTINES=1`).* `import "vidar:sched"`: goroutines from closures, channels, `select` with a timeout, `try_select`, wait groups, and a TCP echo server over `core:nbio` |
+| [sched_io/](sched_io) | *Disabled for now (needs `VIDAR_GOROUTINES=1`).* I/O that parks only the goroutine: `blocking` on a worker thread, files, DNS, UDP, `sched.Mutex` held across a sleep, and `after` as a `select` timeout |
 | [testing/](testing) | `@(test)` procs in their own file, run with `vidar test examples/testing` (one with `--run eval_errors`); failures are reported at `.vidar` lines |
 | [cyclic/](cyclic) | packages that import each other (`game` and `ui`) plus one outside the cycle (`util`), sharing an interface, closures, a macro and error handling |
 

@@ -1,0 +1,8 @@
+// error: goroutines are disabled for now: 'vidar:sched' can't be imported
+package main
+
+import "vidar:sched"
+
+main :: proc() {
+	sched.go(proc[]() {})
+}

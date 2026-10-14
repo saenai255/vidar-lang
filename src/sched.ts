@@ -8,6 +8,16 @@
 
 export const SCHED_IMPORT = "vidar:sched";
 
+/**
+ * Goroutines are disabled for now: they fail too often (crashes on linux/arm64), so importing
+ * vidar:sched is a compile error. VIDAR_GOROUTINES=1 in the environment turns them back on.
+ */
+export function goroutinesEnabled(): boolean {
+  return process.env.VIDAR_GOROUTINES === "1";
+}
+
+export const GOROUTINES_DISABLED = "goroutines are disabled for now: 'vidar:sched' can't be imported (set VIDAR_GOROUTINES=1 to use them anyway)";
+
 export const SCHED_SOURCE = String.raw`package sched
 
 import "base:intrinsics"

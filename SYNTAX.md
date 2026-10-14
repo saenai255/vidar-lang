@@ -349,6 +349,8 @@ Example: [examples/negative_cost](examples/negative_cost).
 
 Not syntax: a library, `import "vidar:sched"`. Goroutines are started from closures.
 
+**Disabled for now:** importing `vidar:sched` is a compile error unless `VIDAR_GOROUTINES=1` is set in the environment.
+
 ```odin
 results := sched.make_chan(string)
 sched.go(proc[url, results]() { fetch(url, results) })

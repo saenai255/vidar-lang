@@ -2,6 +2,8 @@
 
 What the compiler doesn't do yet, grouped by feature.
 
+- **Goroutines are disabled for now.** They fail too often (crashes on linux/arm64), so `import "vidar:sched"` is a compile error. `VIDAR_GOROUTINES=1` in the environment turns them back on. See [Goroutines and channels](language/goroutines.md).
+
 ## Closures
 
 - **Escape analysis trusts what it can't see.** A `&x` closure (or an interface value pointing at a local) passed to a proc value, a closure, an interface method, a `foreign` proc or a `core:` proc is assumed not to escape.
