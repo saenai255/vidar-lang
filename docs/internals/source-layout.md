@@ -21,6 +21,7 @@ For how these files fit together, read [Architecture](architecture.md) first.
 | `src/printers.ts` | `-opt`: generated `%v` / `%#v` printers |
 | `src/strswitch.ts` | `-opt`: perfect hashes for string switches |
 | `src/stackbuf.ts` | `-opt`: which constant-size `make`s go on the stack |
+| `src/destroy.ts` | `impl Destroy`: which locals get a `defer` for their destructor, moves on `return`, and the errors for copies and for places that can't hold a destructible value yet |
 | `src/escape.ts` | the error for a closure holding `&x` that outlives `x`, through locals and calls (per-proc parameter summaries) |
 | `src/autoopt.ts` | `-opt` after analysis: which procs become tables or specialized copies, and the `-opt-report` notes |
 | `src/members.ts` | field and enum-member uses, resolved through the analyzer's types after analysis, for the language server (never run by the compiler) |

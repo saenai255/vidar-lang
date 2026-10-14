@@ -164,7 +164,9 @@ main :: proc() {
 
 ## Cleanup
 
-Cleanup is not built in. Declare it like any other interface:
+`impl Destroy for T { destroy = t_destroy }` is built in: each local of type `T` is destroyed when its scope ends. See [Destructors](destructors.md).
+
+A program that declares its own `Destroy` turns the built-in one off, and `impl Destroy for T` is then an ordinary interface impl:
 
 ```odin
 Destroy :: interface { destroy }
@@ -175,6 +177,7 @@ Then call `destroy(&x)`, or `for d in trash do destroy(d)`.
 
 ## Related
 
+- [Destructors](destructors.md): the built-in `impl Destroy`.
 - [`Pool(I)`](optimization.md#pooli) stores implementations by type so method calls are direct.
 - [Inline interface arrays](optimization.md#interface-arrays-held-inline) under `-opt`.
 - Limits: [Limits](../limits.md).

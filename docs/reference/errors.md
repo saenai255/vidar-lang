@@ -13,6 +13,7 @@ Every program here is a test in `tests/errors/` and `tests/errors_pkg/` that mus
 - [Interfaces](#interfaces): 42 errors
 - [Optimization attributes](#optimization-attributes): 17 errors
 - [Packages and imports](#packages-and-imports): 7 errors
+- [Other](#other): 20 errors
 
 ## `do!` blocks
 
@@ -2944,4 +2945,535 @@ package lib
 package main
 import "lib"
 main :: proc() { _ = lib.secret() }
+```
+
+## Other
+
+### destroy blank
+
+The message contains:
+
+```text
+would throw away a File without destroying it
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	_ = open("a")
+}
+```
+
+### destroy capture by value
+
+The message contains:
+
+```text
+a closure can't hold a copy of it. Capture &f
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	f := open("a")
+	show := proc[f]() { fmt.println(f.name) }
+	show()
+}
+```
+
+### destroy copy
+
+The message contains:
+
+```text
+and 'g := f' would copy it; both copies would be destroyed
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	f := open("a")
+	g := f
+	fmt.println(g.name)
+}
+```
+
+### destroy copy assign
+
+The message contains:
+
+```text
+and 'g = f' would copy it
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	f := open("a")
+	g := open("b")
+	g = f
+}
+```
+
+### destroy dropped
+
+The message contains:
+
+```text
+is thrown away, so it would never be destroyed
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	open("a")
+}
+```
+
+### destroy dynamic array
+
+The message contains:
+
+```text
+a dynamic array can't hold a File yet
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	files: [dynamic]File
+	fmt.println(len(files))
+}
+```
+
+### destroy generic param
+
+The message contains:
+
+```text
+can't be passed to a generic parameter yet
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+same :: proc(x: $T) -> T { return x }
+
+main :: proc() {
+	f := open("a")
+	g := same(f)
+	fmt.println(g.name)
+}
+```
+
+### destroy global
+
+The message contains:
+
+```text
+package-level variables can't hold one yet
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+log_file := File{"log"}
+
+main :: proc() {}
+```
+
+### destroy if init
+
+The message contains:
+
+```text
+declare it before the statement, not in its initializer
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	if f := open("a"); f.name != "" {
+		fmt.println(f.name)
+	}
+}
+```
+
+### destroy impl not struct
+
+The message contains:
+
+```text
+'Handle' is not a struct or union type
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+Handle :: distinct int
+handle_close :: proc(h: ^Handle) {}
+impl Destroy for Handle { destroy = handle_close }
+
+main :: proc() {}
+```
+
+### destroy impl parametric
+
+The message contains:
+
+```text
+impl Destroy for a parametric type is not supported yet
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+Box :: struct($T: typeid) { value: T }
+box_free :: proc(b: ^Box($T)) {}
+impl Destroy for Box($T) { destroy = box_free }
+
+main :: proc() {}
+```
+
+### destroy impl signature
+
+The message contains:
+
+```text
+'file_close' must take one parameter of type ^File and return nothing
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+File :: struct { fd: int }
+file_close :: proc(f: File) {}
+impl Destroy for File { destroy = file_close }
+
+main :: proc() {}
+```
+
+### destroy impl wrong method
+
+The message contains:
+
+```text
+'close' is not a method of Destroy
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+File :: struct { fd: int }
+file_close :: proc(f: ^File) {}
+impl Destroy for File { close = file_close }
+
+main :: proc() {}
+```
+
+### destroy iterator
+
+The message contains:
+
+```text
+returns to this loop would never be destroyed
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+next :: proc(n: ^int) -> (File, bool) {
+	n^ += 1
+	return File{"x"}, n^ < 3
+}
+
+main :: proc() {
+	n := 0
+	for f in next(&n) do fmt.println(f.name)
+}
+```
+
+### destroy multi assign
+
+The message contains:
+
+```text
+assigning several values at once
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	f := open("a")
+	g := open("b")
+	f, g = open("c"), open("d")
+}
+```
+
+### destroy return param
+
+The message contains:
+
+```text
+Only a local declared in this proc can be returned
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+same :: proc(f: File) -> File {
+	return f
+}
+
+main :: proc() {}
+```
+
+### destroy struct field
+
+The message contains:
+
+```text
+a struct field can't hold a File yet
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+Log :: struct {
+	out:   File,
+	level: int,
+}
+
+main :: proc() {}
+```
+
+### destroy temporary
+
+The message contains:
+
+```text
+is a temporary, so it would never be destroyed
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+show :: proc(f: File) { fmt.println(f.name) }
+
+main :: proc() {
+	show(open("a"))
+}
+```
+
+### destroy unknown type
+
+The message contains:
+
+```text
+vidar can't tell the type of 'g'
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	f := open("a")
+	g := abs(f)
+	fmt.println(g)
+}
+```
+
+### destroy unimported
+
+The message contains:
+
+```text
+destroyed by 'file_destroy' in package 'files'; import that package in this file
+```
+
+This program fails to compile:
+
+`files/files.vidar`:
+
+```odin
+package files
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) {}
+impl Destroy for File { destroy = file_destroy }
+```
+
+`main.vidar`:
+
+```odin
+package main
+
+import "core:fmt"
+import "mid"
+
+main :: proc() {
+	f := mid.get()
+	fmt.println(f.name)
+}
+```
+
+`mid/mid.vidar`:
+
+```odin
+package mid
+
+import "../files"
+
+get :: proc() -> files.File { return files.File{"mid"} }
 ```

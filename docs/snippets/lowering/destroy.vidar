@@ -1,0 +1,25 @@
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+
+file_destroy :: proc(f: ^File) {
+	if f.name != "" do fmt.println("close", f.name)
+}
+
+impl Destroy for File { destroy = file_destroy }
+
+open :: proc(name: string) -> File {
+	f := File{name}
+	return f
+}
+
+main :: proc() {
+	f := open("a")
+	f = open("b")
+	fmt.println(f.name)
+}
+
+// title: `impl Destroy`
+// about: The impl block disappears. Each local gets a `defer` on the line that declares it, an assignment destroys the old value once the new one is stored, and a returned local is set to zero after the result is copied, so its `defer` has nothing to destroy.

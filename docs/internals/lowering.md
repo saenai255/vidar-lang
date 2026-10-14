@@ -141,6 +141,57 @@ __Shape_vtable_Circle := __Shape_VTable{
 __Shape_from_Circle :: proc(p: ^Circle) -> Shape { return {data = p, __vtable = &__Shape_vtable_Circle} }
 ```
 
+## `impl Destroy`
+
+The impl block disappears. Each local gets a `defer` on the line that declares it, an assignment destroys the old value once the new one is stored, and a returned local is set to zero after the result is copied, so its `defer` has nothing to destroy.
+
+You write:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+
+file_destroy :: proc(f: ^File) {
+	if f.name != "" do fmt.println("close", f.name)
+}
+
+impl Destroy for File { destroy = file_destroy }
+
+open :: proc(name: string) -> File {
+	f := File{name}
+	return f
+}
+
+main :: proc() {
+	f := open("a")
+	f = open("b")
+	fmt.println(f.name)
+}
+```
+
+Vidar generates:
+
+```odin
+package main
+import "core:fmt"
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) {
+	if f.name != "" do fmt.println("close", f.name)
+}
+open :: proc(name: string) -> File {
+	f := File{name}; defer file_destroy(&f)
+	{ defer f = {}; return f }
+}
+main :: proc() {
+	f := open("a"); defer file_destroy(&f)
+	{ __vidar_old := f; f = open("b"); file_destroy(&__vidar_old) }
+	fmt.println(f.name)
+}
+```
+
 ## Error handling
 
 `or_return <value>`, `catch` and `errdefer` are written out as plain Odin on the same lines. The failure check is a small generic from the runtime package.

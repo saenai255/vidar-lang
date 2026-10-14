@@ -20,6 +20,15 @@ What the compiler doesn't do yet, grouped by feature.
 - A generic impl's vtables are made per instance by Odin, so dispatchers can't name them. Calls on such values always go through the vtable (the `-opt` hint says so), and `Pool(I)` and inline interface arrays refuse interfaces with an impl for a parametric type.
 - Method names are package-level names, so two interfaces in one package can't share a method name (`writer_write`, `stream_write`).
 
+## Destructors
+
+- **Only locals are destroyed.** A type with `impl Destroy` can't be a struct field, array or slice element, map value, union variant or parametric type argument, or a package-level variable; each is a compile error. Heap values (`new`, `free`) are never destroyed.
+- **No generics.** A destructible value can't be passed to a `$T` parameter, and a parametric type can't implement `Destroy`.
+- **Destroy procs see zero values.** Declarations without a value, returned locals and the results that come with an error are destroyed too.
+- **Types vidar can't infer.** When a local's type can't be told and its value involves a destructible type, vidar asks for the type to be written out.
+
+See [Destructors](language/destructors.md).
+
 ## Packages
 
 - **Import cycles merge packages.** Odin sees one package for the whole cycle.

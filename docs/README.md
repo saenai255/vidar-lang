@@ -19,6 +19,7 @@ For a one-page cheat sheet of every construct, see [SYNTAX.md](../SYNTAX.md). Ea
 |---|---|
 | [Closures](language/closures.md) | `proc[x](...)`, captures, `closure(...)` types, lifetime checks |
 | [Interfaces](language/interfaces.md) | `interface`, `impl`, dispatch, generic impls, extending |
+| [Destructors](language/destructors.md) | `impl Destroy`: locals destroyed when their scope ends, moves on `return` |
 | [Error handling](language/error-handling.md) | `or_return <value>`, `catch`, `errdefer` |
 | [Anonymous struct literals](language/anonymous-structs.md) | `x := { a = 1 }` |
 | [Cyclic imports](language/cyclic-imports.md) | how packages that import each other are merged |

@@ -91,9 +91,28 @@ Rules:
 - Impl blocks are only allowed at file scope, and impl targets must be named types or parametric ones (`Box($T)`, `Box(int)`).
 - `impl I for T` binds every method of `I`, inherited ones included, and also implements each base of `I` declared in the same package (or import cycle). A base in another package is reached by converting an `I` value; `base_method(&x)` static calls need an impl of that base itself.
 - Extending is transitive and may form diamonds; an interface can't extend itself, list a base twice, or get two different methods with the same name.
-- There is no builtin cleanup interface; declare `Destroy :: interface { destroy }` yourself.
+- `impl Destroy for T` is the built-in destructor (see [Destructors](#destructors)) unless the program declares its own `Destroy :: interface { destroy }`.
 
 Examples: [examples/interfaces](examples/interfaces), [examples/methods](examples/methods).
+
+## Destructors
+
+| Syntax | Meaning |
+|---|---|
+| `impl Destroy for T { destroy = t_destroy }` | `t_destroy :: proc(x: ^T)` runs for each local of type `T` when its scope ends (a named struct or union, in its own package) |
+| `x := make_t()`, `x: T` | `x` is destroyed at the end of its scope, after later `defer`s; the zero value is destroyed too |
+| `x = make_t()`, `p^ = make_t()` | the old value is destroyed once the new one is stored |
+| `return x` | moves `x` out: the caller destroys it |
+| `f(x)` with `f :: proc(t: T)` | the parameter borrows `x`; `f` can't return or store it |
+| `y := x`, `y = x`, `return param`, `proc[x]`, `new_clone(x)` | compile errors: a copy would be destroyed twice; borrow with `&x` |
+| `make_t()` as a statement, `f(make_t())`, `_ = make_t()` | compile errors: nothing would destroy the value |
+
+Rules:
+- A destroy proc must accept the zero value: declarations without a value, returned locals and the values that come back with an error are all destroyed.
+- For now, `T` can't be held inside another type (fields, arrays, slices, maps, `Maybe`, parametric types, `distinct`), in a package-level variable, or by a generic parameter; each is a compile error. Hold `^T` instead.
+- A file holding a `T` must import the package of its destroy proc.
+
+See [Destructors](docs/language/destructors.md).
 
 ## Error handling
 
