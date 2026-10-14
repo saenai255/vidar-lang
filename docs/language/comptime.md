@@ -36,9 +36,10 @@ main :: proc() {
 | `Stmt` | a `{ ... }` block or statements |
 | `Type` | a type: `f64`, `[]int`, `geo.Vec2` |
 | `Ident` | a bare name, spliced unhygienically (for declaring things) |
+| `[]Ident` | a list of names, `{a, &b}`, each optionally with `&`; splices as `a, &b` (for capture lists) |
 | `int`, `string`, `bool`, … | a compile-time constant; it is evaluated |
 
-**Defaults.** Parameters can have default values, `allocator: Expr = context.allocator`. For `Expr`, `Stmt` and `Type` parameters the default is code; otherwise it's a compile-time value.
+**Defaults.** Parameters can have default values, `allocator: Expr = context.allocator`. For `Expr`, `Stmt`, `Type` and `[]Ident` parameters the default is code; otherwise it's a compile-time value.
 
 ## Results
 
@@ -116,6 +117,17 @@ define_twice :: proc!(name: Ident, value: int) -> Stmt {
 
 define_twice!(answer, 21)
 fmt.println(answer)                  // 42
+```
+
+**`[]Ident` parameters** take a list of names in braces, each optionally prefixed with `&`. Spliced, the list becomes `a, &b`, which fits a closure's capture list. In comptime code it is an array, so `len` and `for` work on it:
+
+```odin
+fn :: proc!(captures: []Ident, body: Stmt) -> Expr {
+	return quote(proc[$captures]() { $body })
+}
+
+a, b := 1, 2
+bump := fn!({a, &b}) { b += a }      // proc[a, &b]() { b += a }
 ```
 
 **Defaults and a trailing block:**

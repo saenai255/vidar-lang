@@ -150,7 +150,7 @@ export const MACRO_KIND_DOCS: Record<string, string> = {
   Expr: "Macro parameter or result kind: an expression. `Expr(T)` requires the expression to have type `T`.",
   Stmt: "Macro parameter or result kind: one or more statements (a trailing `{ ... }` block argument).",
   Type: "Macro parameter or result kind: a type.",
-  Ident: "Macro parameter kind: a bare identifier, e.g. a name the macro declares.",
+  Ident: "Macro parameter kind: a bare identifier, e.g. a name the macro declares. `[]Ident` takes a list, `{a, &b}`, that splices as `a, &b` (e.g. a capture list).",
 };
 
 export const ODIN_CONSTANT_DOCS: Record<string, Doc> = {

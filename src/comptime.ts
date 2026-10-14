@@ -19,7 +19,8 @@ export type Val =
   | { k: "expr"; toks: Token[]; node?: Expr; ty?: Ty; scope?: Scope }
   | { k: "stmts"; toks: Token[] }
   | { k: "type"; toks: Token[]; node?: Expr; scope?: Scope }
-  | { k: "ident"; name: string }
+  /** `ref`: written `&name`, an item of a `[]Ident` argument such as a capture list */
+  | { k: "ident"; name: string; ref?: boolean }
   | { k: "proc"; sym: GlobalSym; lit: ProcLit }
   | { k: "ref"; cell: Cell };
 
@@ -665,7 +666,7 @@ function valEq(a: Val, b: Val): boolean {
   if (a.k !== b.k) return false;
   switch (a.k) {
     case "bool": case "string": return a.v === (b as typeof a).v;
-    case "ident": return a.name === (b as typeof a).name;
+    case "ident": return a.name === (b as typeof a).name && !a.ref === !(b as typeof a).ref;
     case "type": case "expr": case "stmts": return display(a) === display(b);
     case "nil": case "void": return true;
     default: return a === b;
@@ -695,7 +696,7 @@ export function display(v: Val): string {
     case "nil": return "nil";
     case "void": return "void";
     case "expr": case "stmts": case "type": return joinTokens(v.toks);
-    case "ident": return v.name;
+    case "ident": return (v.ref ? "&" : "") + v.name;
     case "proc": return `proc ${v.sym.name}`;
     case "ref": return `&${display(v.cell.v)}`;
   }
@@ -963,8 +964,10 @@ export function valueToTokens(v: Val, pos: Pos, ctx: "expr" | "stmt" | "splice")
     case "stmts":
     case "type":
       return v.toks.map((t) => fresh(t));
-    case "ident":
-      return [{ kind: "ident", text: v.name, pre: " ", pos }];
+    case "ident": {
+      const name: Token = { kind: "ident", text: v.name, pre: v.ref ? "" : " ", pos };
+      return v.ref ? [{ ...op("&", pos), pre: " " }, name] : [name];
+    }
     case "int": {
       const lit: Token = { kind: "int", text: String(v.v < 0n ? -v.v : v.v), pre: " ", pos };
       return v.v < 0n ? [fresh(op("(", pos)), fresh(op("-", pos)), lit, fresh(op(")", pos))] : [lit];

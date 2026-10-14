@@ -2257,8 +2257,9 @@ export class Analyzer {
     return { file: posOf(call).file, from: posOf(call).line, to: call.toks[call.end - 1].pos.line };
   }
 
-  private paramKind(t: Expr): { kind: "Expr" | "Stmt" | "Type" | "Ident" | "value"; of?: Expr } {
+  private paramKind(t: Expr): { kind: "Expr" | "Stmt" | "Type" | "Ident" | "Idents" | "value"; of?: Expr } {
     if (t.k === "Ident" && ["Expr", "Stmt", "Type", "Ident"].includes(t.name)) return { kind: t.name as "Expr" };
+    if (t.k === "TypeExpr" && t.what === "slice" && t.parts[1]?.k === "Ident" && t.parts[1].name === "Ident") return { kind: "Idents" };
     if (t.k === "Call" && t.fn.k === "Ident" && t.fn.name === "Expr" && t.args.length === 1) return { kind: "Expr", of: t.args[0] };
     return { kind: "value" };
   }
@@ -2299,6 +2300,7 @@ export class Analyzer {
     if (kind === "Stmt") return { k: "stmts", toks };
     if (kind === "Type") return { k: "type", toks, node: def, scope: macro.scope };
     if (kind === "Ident") return { k: "ident", name: toks[0]?.text ?? name };
+    if (kind === "Idents") return identList(toks, name, def.toks[def.start].pos);
     return this.interp.evalIn(def, macro.scope);
   }
 
@@ -2321,6 +2323,8 @@ export class Analyzer {
       case "Ident":
         if (toks.length !== 2 || toks[0].kind !== "ident") throw new CompileError(`argument '${name}' must be an identifier`, pos);
         return { k: "ident", name: toks[0].text };
+      case "Idents":
+        return identList(toks.slice(0, -1), name, pos);
       case "value": {
         const node = this.parseTokens(toks, (p) => p.parseExpr());
         try {
@@ -2534,12 +2538,29 @@ export class Analyzer {
       const toks = respace(valueToTokens(v, pos, "stmt"), this.callSpan(call));
       return this.parseTokens([...toks, eofTok(pos)], (p) => p.parseStmtList());
     }
-    if (kind === "Type" || kind === "Ident") throw new CompileError(`${where}: macros cannot return ${kind}`, pos);
+    if (kind === "Type" || kind === "Ident" || kind === "Idents") throw new CompileError(`${where}: macros cannot return ${kind}`, pos);
     const toks = respace(valueToTokens(v, pos, "expr"), this.callSpan(call));
     const node = this.parseTokens([...toks, eofTok(pos)], (p) => p.parseExpr());
     if (of) this.checkTyped(node, this.typeOf(node, scope), { t: "node", node: of, scope: sym.scope }, scope, `result of ${where}`, pos);
     return node;
   }
+}
+
+/** A `[]Ident` macro argument, `{a, &b}`: names, each optionally taken by pointer (for capture lists). */
+function identList(toks: Token[], name: string, pos: Pos): Val {
+  const fail = () => new CompileError(`argument '${name}' must be a list of identifiers, like {a, &b}`, pos);
+  const isOp = (t: Token | undefined, text: string) => t?.kind === "op" && t.text === text;
+  if (!isOp(toks[0], "{") || !isOp(toks[toks.length - 1], "}")) throw fail();
+  const items: Val[] = [];
+  for (let i = 1; i < toks.length - 1; i++) {
+    const ref = isOp(toks[i], "&");
+    if (ref) i++;
+    if (toks[i]?.kind !== "ident" || i >= toks.length - 1) throw fail();
+    items.push({ k: "ident", name: toks[i].text, ref });
+    if (!isOp(toks[i + 1], ",") && i + 1 !== toks.length - 1) throw fail();
+    i++;
+  }
+  return { k: "array", items };
 }
 
 export function eofTok(pos: Pos): Token {
