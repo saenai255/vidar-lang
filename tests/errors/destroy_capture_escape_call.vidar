@@ -1,0 +1,20 @@
+// error: this closure borrows 'f', a File that has impl Destroy, and is passed to remember
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+callbacks: [dynamic]closure()
+
+remember :: proc(cb: closure()) { append(&callbacks, cb) }
+
+setup :: proc() {
+	f := open("log")
+	remember(proc[f]() { fmt.println(f.name) })
+}
+
+main :: proc() { setup() }

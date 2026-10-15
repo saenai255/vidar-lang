@@ -30,6 +30,17 @@ pass :: proc(x: $T) -> T {
 	return z
 }
 
+// generic comma-ok: v is cloned at run time when T has impl Clone
+lookup :: proc(m: ^map[string]$T, key: string) -> T {
+	v, ok := m[key]
+	return v
+}
+
+// a capture of a generic value, returned: checked at run time (fine for int)
+getter :: proc(x: $T) -> closure() -> T {
+	return proc[x]() -> T { return x }
+}
+
 borrows :: proc() {
 	f := File{"log"}
 	run(proc[f]() { fmt.println("captured", f.name) }) // the closure borrows f
@@ -62,7 +73,23 @@ moves :: proc() {
 	keep(k) // moved into the #owned parameter
 	q := Handle{"q", 0}
 	p := pass(q) // generic code clones the borrowed q once
-	fmt.println("end", h.n, p.n)
+	for i in 0..<2 {
+		x := Handle{"x", i}
+		y := x // declared in the loop body: each iteration's x moves
+		fmt.println("y", y.n)
+	}
+	r := Handle{"r", 0}
+	rp := &r
+	s := r // r is addressed: a clone
+	t := Handle{"t", 0}
+	show := proc[&t]() { fmt.println("t", t.n) }
+	u := t // t is captured by reference: a clone
+	show()
+	m: map[string]Handle
+	m["m"] = Handle{"m", 0}
+	l := lookup(&m, "m")
+	get := getter(42)
+	fmt.println("end", h.n, p.n, rp.n, s.n, u.n, l.n, get())
 }
 
 main :: proc() {

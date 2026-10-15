@@ -35,6 +35,8 @@ weak_refs :: proc() {
 		w = rc.downgrade(r)
 		u := rc.upgrade(w)
 		fmt.println("alive", rc.alive(w), "owners", rc.count(r), rc.get(u).name)
+		ws := lib.dup(w) // generic code clones each Weak through vidar:rc's registered procs
+		fmt.println("weak copies alive", rc.alive(ws.a), rc.alive(ws.b))
 	}
 	gone := rc.upgrade(w)
 	fmt.println("alive", rc.alive(w), "upgraded", rc.get(gone) != nil)

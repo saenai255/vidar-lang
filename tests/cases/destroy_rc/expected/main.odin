@@ -35,14 +35,16 @@ weak_refs :: proc() {
 		{ __vidar_old := w; w = rc.downgrade(r); rc.weak_release(&__vidar_old) }
 		u := rc.upgrade(w); defer rc.release(&u)
 		fmt.println("alive", rc.alive(w), "owners", rc.count(r), rc.get(u).name)
+		ws := lib.dup(w); defer __vidar.destroy(&ws) // generic code clones each Weak through vidar:rc's registered procs
+		fmt.println("weak copies alive", rc.alive(ws.a), rc.alive(ws.b))
 	}
 	gone := rc.upgrade(w); defer rc.release(&gone)
 	fmt.println("alive", rc.alive(w), "upgraded", rc.get(gone) != nil)
 	root := rc.new(Node{file = open("root")}); defer rc.release(&root)
 	child := rc.new(Node{file = open("child"), parent = rc.downgrade(root)}); defer rc.release(&child)
-	// move!(child) — main.vidar:43
+	// move!(child) — main.vidar:45
 	append(&rc.get(root).children, __vidar.take(&child))
-	#assert(type_of(rc.get(root).children[0]) != File && type_of(rc.get(root).children[0]) != Node, "main.vidar:44: this copies a value whose type has impl Destroy, and both copies would be destroyed"); kid := __vidar.clone(rc.get(root).children[0]); defer __vidar.destroy(&kid)
+	#assert(type_of(rc.get(root).children[0]) != File && type_of(rc.get(root).children[0]) != Node, "main.vidar:46: this copies a value whose type has impl Destroy, and both copies would be destroyed"); kid := __vidar.clone(rc.get(root).children[0]); defer __vidar.destroy(&kid)
 	up := rc.upgrade(rc.get(kid).parent); defer rc.release(&up)
 	fmt.println("parent of", rc.get(kid).file.name, "is", rc.get(up).file.name)
 }
@@ -60,14 +62,14 @@ main :: proc() {
 	}
 	fmt.println("owners", rc.count(r), rc.get(r).name)
 	f := open("moved"); defer file_destroy(&f)
-	// move!(f) — main.vidar:62
+	// move!(f) — main.vidar:64
 	t := rc.new(__vidar.take(&f)); defer rc.release(&t)
 	fmt.println(rc.get(t).name, f.name == "")
 	o := lib.take_over(open("taken")); defer __vidar.destroy(&o)
 	fmt.println(o.name)
 	b := Box(int){new_clone(42), open("box log")}; defer __Box_destroy(&b)
 	nested := rc.new(rc.new(5)); defer rc.release(&nested)
-	#assert(type_of(rc.get(nested)^) != File && type_of(rc.get(nested)^) != Node, "main.vidar:68: this copies a value whose type has impl Destroy, and both copies would be destroyed"); inner := __vidar.clone(rc.get(nested)^); defer __vidar.destroy(&inner)
+	#assert(type_of(rc.get(nested)^) != File && type_of(rc.get(nested)^) != Node, "main.vidar:70: this copies a value whose type has impl Destroy, and both copies would be destroyed"); inner := __vidar.clone(rc.get(nested)^); defer __vidar.destroy(&inner)
 	fmt.println("nested", rc.get(inner)^, rc.count(inner))
 	empty: rc.Rc(File); defer rc.release(&empty)
 	fmt.println("empty", rc.count(empty))

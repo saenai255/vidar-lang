@@ -1,0 +1,15 @@
+// error: it takes the variable or field that holds it
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+files :: proc() -> [dynamic]File { return nil }
+
+main :: proc() {
+	delete(files())
+}

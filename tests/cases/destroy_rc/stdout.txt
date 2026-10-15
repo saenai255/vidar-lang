@@ -7,6 +7,7 @@ taken
 nested 5 2
 empty 0
 alive true owners 2 watched
+weak copies alive true true
 close watched
 alive false upgraded false
 parent of child is root
