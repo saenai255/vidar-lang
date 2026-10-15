@@ -5,7 +5,7 @@ import { CaptureSym, Ctx, GlobalSym, LocalSym, PackageInfo, PkgSym, Scope, Sym, 
 import { autoOptimize } from "./autoopt";
 import { checkNoAlloc } from "./checks";
 import { checkCallEscapes, checkEscapes, ifaceEscape } from "./escape";
-import { CloneImpl, Destructor, checkDestroys, resolveDestroyImpl } from "./destroy";
+import { CloneImpl, Destructor, OwnershipNote, checkDestroys, resolveDestroyImpl } from "./destroy";
 import { MemoInfo, memoPlan } from "./memo";
 import { OdinPackage, odinPackage, procsOf } from "./odinpkg";
 import { CallSpan, Interp, NotConstant, Val, joinTokens, repeatable, respace, valueToTokens, tokensOf } from "./comptime";
@@ -235,6 +235,10 @@ export class Analyzer {
   readonly clones = new Map<GlobalSym, CloneImpl>();
   /** some value is destroyed or copy-checked through vidar_runtime/destroy.odin, so types register there */
   destroyDispatch = false;
+  /** what destroy.ts decided at each place, for the editor's ownership hints */
+  readonly ownership: OwnershipNote[] = [];
+  /** how and where each destroyed local is destroyed, for hovers */
+  readonly destroyedLocals = new Map<LocalSym, string>();
 
   /** `-opt`: the emitter also rewrites plain Odin where the result is provably the same */
   optimize = false;

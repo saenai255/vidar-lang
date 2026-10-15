@@ -1,8 +1,9 @@
 import type { Token } from "../lexer";
 import { Block, Expr, Node, Param, Stmt, children } from "../ast";
 import { A, AnonFieldType, IfaceMethod, nodeText } from "../analyzer";
+import { type Destructor, type OwnershipNote, cloneName, destructorName, ownedOf } from "../destroy";
 import { Parser } from "../parser";
-import { ATTRIBUTE_DOCS, BUILTIN_PROC_DOCS, BUILTIN_TYPE_DOCS, COMPTIME_BUILTIN_DOCS, CONTEXT_FIELD_DOCS, KEYWORD_DOCS, MACRO_KIND_DOCS, ODIN_CONSTANT_DOCS } from "./docs";
+import { ATTRIBUTE_DOCS, DIRECTIVE_DOCS, BUILTIN_PROC_DOCS, BUILTIN_TYPE_DOCS, COMPTIME_BUILTIN_DOCS, CONTEXT_FIELD_DOCS, KEYWORD_DOCS, MACRO_KIND_DOCS, ODIN_CONSTANT_DOCS } from "./docs";
 import { type Program as Analysis, emitProgram, schedSourcePath } from "../project";
 import { CaptureSym, GlobalSym, LocalSym, Scope, Sym, Ty } from "../scope";
 import { Member, MemberMiss, membersOf, resolveMembers } from "../members";
@@ -48,6 +49,9 @@ export interface Completion {
   kind: CompletionKind;
   detail?: string;
   insertText?: string;
+  /** matched against what is typed, when it isn't the label (`owned` for `#owned`) */
+  filterText?: string;
+  documentation?: string;
 }
 
 const KEYWORDS = [
@@ -678,6 +682,8 @@ export function describe(a: Analysis, sym: Sym): string {
         const found = impls(method.iface).map((i) => `\`${i.methods.get(method.name)!.name}\` (${target(i)})`);
         notes.push(`method of \`${method.iface.name}\``, found.length ? `implemented by ${found.join(", ")}` : "no implementations yet");
       }
+      const dtor = a.analyzer.destructors.get(sym);
+      if (dtor) notes.push(destroyNote(dtor));
       return code(declSnippet(sym)) + "\n\n" + notes.join(" · ");
     }
     case "local": {
@@ -686,11 +692,16 @@ export function describe(a: Analysis, sym: Sym): string {
       if (switchVars.has(sym)) notes.push("in each `case`, it has that case's type");
       if (sym.refCaptured) notes.push("captured by reference");
       if (!sym.ty && !switchVars.has(sym) && !sym.isConst) notes.push("type not known to vidar");
+      const destroyed = a.analyzer.destroyedLocals.get(sym);
+      if (destroyed) notes.push(destroyed);
+      else if (!sym.isConst && (sym.declKind === "param" || sym.declKind === "range") && holdsDestroy(a, sym.ty))
+        notes.push(sym.declKind === "param" ? "borrowed: the caller owns it and destroys it. Declare it `#owned` to take it over" : "borrows each element: the container owns them and destroys them");
       return code(localDecl(a, sym)) + "\n\n" + notes.join(" · ");
     }
     case "capture": {
       const root = canonical(sym) as LocalSym;
-      return code(localDecl(a, { ...root, name: sym.name })) + `\n\n*captured ${sym.byRef ? "by reference" : "by value (a copy made when the closure was created)"}*`;
+      const borrow = !sym.byRef && holdsDestroy(a, root.ty) ? " · borrowed: its owner destroys it, so the closure can't outlive this proc" : "";
+      return code(localDecl(a, { ...root, name: sym.name })) + `\n\n*captured ${sym.byRef ? "by reference" : "by value (a copy made when the closure was created)"}*${borrow}`;
     }
     case "pkg": {
       const head = code(`import ${sym.stmt.alias ? sym.stmt.alias + " " : ""}"${sym.path}"`);
@@ -700,6 +711,25 @@ export function describe(a: Analysis, sym: Sym): string {
       return head + `\n\n*package* \`${sym.target.name}\` · ${members.length} public member(s)${cycle}`;
     }
   }
+}
+
+/** Whether a value of `ty` is destroyed (it has impl Destroy, or holds a value that has). */
+function holdsDestroy(a: Analysis, ty: Ty | undefined): boolean {
+  return a.analyzer.destructors.size > 0 && !!ownedOf(a.analyzer, ty);
+}
+
+/** How a type with a destructor is destroyed and copied. */
+function destroyNote(d: Destructor): string {
+  const fields = d.fields.map((f) => `\`${f.name}\``).join(", ");
+  const destroy = d.proc
+    ? `destroyed by \`${d.proc.name}\` (impl Destroy)${fields ? `, then its fields ${fields}` : ""}`
+    : `destroyed through its fields ${fields} (\`${destructorName(d).name}\`)`;
+  const copy = d.clone
+    ? `copies call \`${cloneName(d).name}\` (impl Clone)`
+    : d.cloneable
+      ? `copies are cloned field by field (\`${cloneName(d).name}\`)`
+      : "move-only: a copy is an error; move it with `move!(x)`, or borrow it with `&x`";
+  return `${destroy} · ${copy}`;
 }
 
 export interface HoverResult {
@@ -844,7 +874,7 @@ const md = (sig: string | undefined, text: string) => (sig ? "```odin\n" + sig +
 function tokenAt(a: Analysis, file: string, p: Position): { f: { toks: Token[]; stmts: Stmt[] }; i: number } | undefined {
   const f = fileOf(a, file)?.file;
   if (!f) return undefined;
-  const i = f.toks.findIndex((t) => t.pos.file === file && (t.kind === "ident" || t.kind === "kw") && contains(tokRange(t), p));
+  const i = f.toks.findIndex((t) => t.pos.file === file && (t.kind === "ident" || t.kind === "kw" || t.kind === "directive") && contains(tokRange(t), p));
   return i < 0 ? undefined : { f, i };
 }
 
@@ -1104,6 +1134,11 @@ function tokenHover(a: Analysis, file: string, p: Position): TokenHover | undefi
   const builtin = builtinHover(tok.text);
   if (builtin) return done(builtin);
 
+  if (tok.kind === "directive") {
+    const doc = own(DIRECTIVE_DOCS, tok.text.slice(1));
+    return done({ markdown: md(tok.text, `*directive*${doc ? ` · ${doc}` : ""}`), weak: !doc });
+  }
+
   if (tok.kind === "ident") return done({ markdown: md(tok.text, "*identifier* · not declared in vidar code, so Odin resolves it"), weak: true });
   return undefined;
 }
@@ -1257,6 +1292,10 @@ export function complete(cur: Analysis, fallback: Analysis | undefined, file: st
     }
   }
 
+  // `#own`: directives; the word being completed starts after the `#`
+  if (/#\w*$/.test(lineText))
+    return Object.entries(DIRECTIVE_DOCS).map(([name, doc]) => ({ label: `#${name}`, kind: "keyword" as const, insertText: name, filterText: name, detail: "directive", documentation: doc }));
+
   const pkgRef = /\b([A-Za-z_]\w*)\.(\w*)$/.exec(lineText);
   const pkg = pkgRef ? a.analyzer.lookup(pkgRef[1], scope, null) : undefined;
   if (pkg?.kind === "pkg") {
@@ -1298,6 +1337,41 @@ export interface OptHint {
   position: Position;
   label: string;
   tooltip?: string;
+}
+
+export interface OwnershipHint extends OptHint {
+  kind: OwnershipNote["kind"];
+  /** the label goes before the code (`move`, `clone`): padded on its right instead of its left */
+  before: boolean;
+}
+
+/**
+ * What impl Destroy does in `file`: `drop b, a` where locals are destroyed (last declared first),
+ * `move` and `clone` before copies, `drops old` after assigned targets, and a note after core's procs
+ * that vidar replaces with ones that destroy what they drop.
+ */
+export function ownershipHints(a: Analysis, file: string): OwnershipHint[] {
+  const out = new Map<string, OwnershipHint>();
+  for (const n of a.analyzer.ownership) {
+    if (n.tok.pos.file !== file) continue;
+    const t = n.tok;
+    const lines = t.text.split("\n");
+    const position =
+      n.side === "before"
+        ? { line: t.pos.line - 1, character: t.pos.col - 1 }
+        : { line: t.pos.line - 2 + lines.length, character: lines.length > 1 ? lines[lines.length - 1].length : t.pos.col - 1 + t.text.length };
+    const key = `${position.line}:${position.character}:${n.kind}`;
+    const prev = out.get(key);
+    // several locals destroyed at one place: the last declared first, as they run
+    if (prev && n.kind === "drop") {
+      prev.label = `drop ${n.label}, ${prev.label.slice(5)}`;
+      prev.tooltip = `${n.tooltip}\n\n${prev.tooltip}`;
+      continue;
+    }
+    if (prev) continue;
+    out.set(key, { kind: n.kind, position, label: n.kind === "drop" ? `drop ${n.label}` : n.label, tooltip: n.tooltip, before: n.side === "before" });
+  }
+  return [...out.values()];
 }
 
 /** The -opt decisions in `file` of an -opt analysis, each after its token; `all` adds the decisions against. */

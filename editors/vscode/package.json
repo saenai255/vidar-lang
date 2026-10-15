@@ -156,6 +156,11 @@
           "default": "on",
           "description": "Inlay hints showing what `-opt` decides, without building with it. Hover a hint for the reason."
         },
+        "vidar.ownershipHints": {
+          "type": "boolean",
+          "default": true,
+          "description": "Inlay hints showing what `impl Destroy` does: `drop a, b` where locals are destroyed, `move` and `clone` before copies, `drops old` on assignments, and core procs that destroy what they drop. Hover a hint for the details."
+        },
         "vidar.optCodeLens": {
           "type": "boolean",
           "default": true,

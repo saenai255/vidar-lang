@@ -1,7 +1,7 @@
 import { Block, Expr, Node, Stmt, children } from "./ast";
 import { A, Analyzer, isStmt, matchType, nodeText, posOf } from "./analyzer";
 import { closureEscape } from "./escape";
-import { CompileError, Token } from "./lexer";
+import { CompileError, ErrorFix, Token } from "./lexer";
 import type { CaptureSym, GlobalSym, LocalSym, PackageInfo, Scope, Sym, Ty } from "./scope";
 
 type ImplBlock = Extract<Stmt, { k: "ImplBlock" }>;
@@ -23,6 +23,20 @@ export interface Destructor {
   zero: "{}" | "nil";
   /** impl Destroy for Box($T): the procs are generic, and so is `__Box_destroy` */
   generic: boolean;
+}
+
+/**
+ * An ownership decision the editor shows as an inlay hint: a local destroyed at the end of its scope
+ * (`drop`, merged per position), a copy that moves or clones, an old value destroyed on assignment,
+ * or one of core's procs replaced by one that destroys what it drops.
+ */
+export interface OwnershipNote {
+  kind: "drop" | "move" | "clone" | "drops-old" | "destroys";
+  /** the hint goes before or after this token */
+  tok: Token;
+  side: "before" | "after";
+  label: string;
+  tooltip: string;
 }
 
 /** `impl Clone for T`, before it is checked against T's destructor. */
@@ -341,6 +355,8 @@ class Checker {
   private raw = false;
   /** the procs being walked, innermost last */
   private procs: Extract<Expr, { k: "ProcLit" }>[] = [];
+  /** the blocks being walked, innermost last: where their locals are destroyed */
+  private blocks: Block[] = [];
   private uses = new Map<Node, Map<Sym, Uses>>();
 
   constructor(
@@ -390,11 +406,34 @@ class Checker {
 
   private withStmt(s: Stmt): void {
     this.stmts.push(s);
+    const block = s.k === "Block" && !s.inline;
+    if (block) this.blocks.push(s);
     try {
       this.stmt(s);
     } finally {
       this.stmts.pop();
+      if (block) this.blocks.pop();
     }
+  }
+
+  /** What a destroy or clone of `how` calls, for hints and hovers. */
+  private named(how: How, what: "destroy" | "clone"): string {
+    if (how.k === "dispatch") return what === "destroy" ? "`__vidar.destroy`, which finds what the type needs at run time" : "`__vidar.clone`, which finds what the type needs at run time";
+    return `\`${(what === "destroy" ? destructorName : cloneName)(how.dtor).name}\``;
+  }
+
+  private note(kind: OwnershipNote["kind"], tok: Token | undefined, side: OwnershipNote["side"], label: string, tooltip: string): void {
+    if (tok && !this.raw) this.an.ownership.push({ kind, tok, side, label, tooltip });
+  }
+
+  /** A local destroyed when the innermost block ends: a `drop` hint after it, and a hover note. */
+  private dropAtEnd(sym: LocalSym, how: How, body?: Block): void {
+    const block = body ?? this.blocks[this.blocks.length - 1];
+    const end = block?.toks[block.end - 1];
+    if (!end) return;
+    const by = this.named(how, "destroy");
+    this.an.destroyedLocals.set(sym, `destroyed at the end of its scope (line ${end.pos.line}), and on every return, break or continue out of it, by ${by}`);
+    this.note("drop", end, "after", sym.name, `'${sym.name}' is destroyed here by ${by}, unless it has moved out (a moved local is zero, and its destroy does nothing)`);
   }
 
   private kids(n: Node): void {
@@ -546,6 +585,7 @@ class Checker {
       if (how.k === "dispatch") this.an.destroyDispatch = true;
       decls.push({ name: sym.name, how });
       out.add(sym);
+      if (e.body) this.dropAtEnd(sym, how, e.body);
     }
     if (decls.length) A(e)._destroyOwned = decls;
     return out;
@@ -555,7 +595,7 @@ class Checker {
   private moved(e: Expr): void {
     const sym: Sym | undefined = e.k === "Ident" ? A(e)._sym : undefined;
     if (sym?.kind === "local" && sym.declKind === "param" && !this.owned.some((o) => o.has(sym)))
-      throw new CompileError(`'${e.k === "Ident" ? e.name : ""}' is a parameter, which is borrowed, so it can't be moved; declare it #owned to take it over`, posOf(e));
+      throw new CompileError(`'${e.k === "Ident" ? e.name : ""}' is a parameter, which is borrowed, so it can't be moved; declare it #owned to take it over`, posOf(e), sym.declTok && { code: "destroy-owned", name: sym.name, at: sym.declTok.pos });
     if (sym?.kind === "capture") throw new CompileError(`a closure can't move '${sym.name}' out of the proc that owns it`, posOf(e));
     if (sym?.kind === "local" && sym.declKind === "range")
       throw new CompileError(`'${sym.name}' is a loop value, which borrows each element, so it can't be moved; loop over pointers and move the element: for &${sym.name} in ..., then move!(${sym.name}^)`, posOf(e));
@@ -629,6 +669,8 @@ class Checker {
   private rewrite(e: Extract<Expr, { k: "Call" }>, proc: string): void {
     A(e.fn)._destroyFn = proc;
     this.an.destroyDispatch = true;
+    const what = proc === "destroy_delete" ? "destroys the elements, frees the memory and leaves it empty" : "destroys what it drops";
+    this.note("destroys", e.toks[e.end - 1], "after", what.split(",")[0], `vidar calls \`__vidar.${proc}\` here, which ${what}`);
   }
 
   /** `pop(&a)`, `pop_front(&a)` or `delete_key(&m, k)` as a statement: what it removes is destroyed. */
@@ -705,7 +747,7 @@ class Checker {
     const sym: Sym | undefined = root.k === "Ident" ? A(root)._sym : undefined;
     const ptr = this.an.normalize(this.typeOf(root))?.t === "ptr";
     if (sym?.kind === "local" && sym.declKind === "param" && !ptr && !this.owned.some((o) => o.has(sym)))
-      throw new CompileError(`'${sym.name}' is a parameter, which is borrowed, so '${nodeText(a0)}' can't be deleted here: its owner destroys it. Declare it #owned to take it over`, posOf(a0));
+      throw new CompileError(`'${sym.name}' is a parameter, which is borrowed, so '${nodeText(a0)}' can't be deleted here: its owner destroys it. Declare it #owned to take it over`, posOf(a0), sym.declTok && { code: "destroy-owned", name: sym.name, at: sym.declTok.pos });
     this.rewrite(e, "destroy_delete");
     A(a0)._destroyAddr = true;
   }
@@ -767,17 +809,22 @@ class Checker {
     if ((o?.clone || (!o && this.unsure(ty) && this.owned.length)) && this.lastUse(p)) {
       A(p)._destroyTake = true;
       this.an.destroyDispatch = true;
+      const sym: LocalSym = A(p.k === "Paren" ? p.x : p)._sym;
+      const was = this.an.destroyedLocals.get(sym);
+      if (was) this.an.destroyedLocals.set(sym, `${was} · its last use moves it out (line ${posOf(p).line}), so that destroy finds it zero`);
+      this.note("move", e.toks[e.start], "before", "move", `the last use of '${nodeText(p)}': its value moves here instead of being cloned, and '${nodeText(p)}' is left zero`);
       return;
     }
     if (o?.clone) {
       // impl Clone: the copy is a clone, which the new owner destroys
       A(e)._destroyClone = o.how;
       if (o.how.k === "dispatch") this.an.destroyDispatch = true;
+      this.note("clone", e.toks[e.start], "before", "clone", `a copy of the ${o.name} in '${nodeText(p)}', made by ${this.named(o.how, "clone")}: '${nodeText(p)}' is read later, so it can't move`);
       return;
     }
     if (o) {
       const text = nodeText(p);
-      throw new CompileError(`'${text}' is a ${o.name}, ${o.why}, and ${why}; both copies would be destroyed. ${fix ?? `Borrow it with &${text}`}`, posOf(e));
+      throw new CompileError(`'${text}' is a ${o.name}, ${o.why}, and ${why}; both copies would be destroyed. ${fix ?? `Borrow it with &${text}`}`, posOf(e), this.moveFix(p));
     }
     if (this.unsure(ty) && this.owned.length && this.check(p)) A(e)._destroyClone = { k: "dispatch" } satisfies How;
   }
@@ -842,6 +889,18 @@ class Checker {
     };
     walk(proc.body!, false);
     return uses;
+  }
+
+  /** The quick fix for a copy of `p`: `move!(p)`, or `#owned` on the borrowed parameter it reads. */
+  private moveFix(p: Expr): ErrorFix | undefined {
+    let root = p;
+    while (root.k === "Paren" || root.k === "Index" || (root.k === "Selector" && !A(root)._pkgMember)) root = root.x;
+    const sym: Sym | undefined = root.k === "Ident" ? A(root)._sym : undefined;
+    if (sym?.kind === "capture" || (sym?.kind === "local" && sym.declKind === "range")) return undefined;
+    if (sym?.kind === "local" && sym.declKind === "param" && !this.owned.some((o) => o.has(sym)))
+      return sym.declTok && root === p ? { code: "destroy-owned", name: sym.name, at: sym.declTok.pos } : undefined;
+    const s = span(p);
+    return s && { code: "destroy-move", ...s };
   }
 
   /** A copy checked when the program runs, and by Odin for the move-only types this file can name. */
@@ -926,6 +985,8 @@ class Checker {
         out.push({ sym, name: s.toks[name.tok], how: { k: "dispatch" }, clone: commaOk && !this.raw ? { k: "dispatch" } : undefined });
         this.owned[this.owned.length - 1].add(sym);
         this.an.destroyDispatch = true;
+        this.dropAtEnd(sym, { k: "dispatch" });
+        if (commaOk && !this.raw) this.note("clone", commaOk.toks[commaOk.start], "before", "clone", `'${name.name}' is a clone of the value in '${nodeText(commaOk)}', made by ${this.named({ k: "dispatch" }, "clone")}`);
         return;
       }
       if (name.name === "_") throw new CompileError(`'_' would throw away a ${o.name} without destroying it; give it a name`, at);
@@ -933,7 +994,10 @@ class Checker {
       if (commaOk && !this.raw) {
         const ok = s.names[1].name;
         if (!o.clone || A(s)._isInit)
-          throw new CompileError(`'${name.name}' would be a copy of the ${o.name} in '${nodeText(commaOk)}', ${o.why}, and both copies would be destroyed; take a pointer: ${name.name}, ${ok} := &${nodeText(commaOk)}`, at);
+          throw new CompileError(`'${name.name}' would be a copy of the ${o.name} in '${nodeText(commaOk)}', ${o.why}, and both copies would be destroyed; take a pointer: ${name.name}, ${ok} := &${nodeText(commaOk)}`, at, {
+            code: "destroy-pointer",
+            at: commaOk.toks[commaOk.start].pos,
+          });
         clone = o.how;
       }
       if (A(s)._isInit) throw new CompileError(`'${name.name}' is a ${o.name}, ${o.why}; declare it before the statement, not in its initializer`, at);
@@ -945,6 +1009,8 @@ class Checker {
       } else this.an.destroyDispatch = true;
       out.push({ sym, name: s.toks[name.tok], how: o.how, clone });
       this.owned[this.owned.length - 1].add(sym);
+      this.dropAtEnd(sym, o.how);
+      if (clone && commaOk) this.note("clone", commaOk.toks[commaOk.start], "before", "clone", `'${name.name}' is a clone of the ${o.name} in '${nodeText(commaOk)}', made by ${this.named(clone, "clone")}`);
     });
     if (out.length) A(s)._destroyDecl = out;
   }
@@ -1004,6 +1070,7 @@ class Checker {
     if (!simple(l)) throw new CompileError(`'${nodeText(l)}' is a ${o.name}, ${o.why}; assigning to it is supported for variables, fields, p^ and elements indexed by a name or constant: assign through a variable first`, posOf(l));
     if (o.how.k === "dispatch") this.an.destroyDispatch = true;
     A(s)._destroyAssign = o.how;
+    this.note("drops-old", l.toks[l.end - 1], "after", "drops old", `the old value of '${nodeText(l)}' is destroyed by ${this.named(o.how, "destroy")} once the new one is stored`);
   }
 
   private ret(s: Extract<Stmt, { k: "Return" }>): void {
@@ -1017,6 +1084,7 @@ class Checker {
       if (sym?.kind === "local" && owned?.has(sym)) {
         const o = ownedOf(this.an, sym.ty);
         moved.push({ x, zero: o?.how.k === "call" ? o.how.dtor.zero : "" });
+        this.note("move", x.toks[x.start], "before", "move", `'${sym.name}' moves out to the caller, which destroys it; it is left zero here`);
         continue;
       }
       if (sym && results?.has(sym)) continue;
@@ -1024,6 +1092,15 @@ class Checker {
     }
     if (moved.length) A(s)._destroyMove = moved;
   }
+}
+
+/** Where `e`'s source starts and ends, when it is all in one file. */
+function span(e: Expr): { start: Token["pos"]; end: Token["pos"] } | undefined {
+  const toks = e.toks.slice(e.start, e.end);
+  const first = toks[0], last = toks[toks.length - 1];
+  if (!first || toks.some((t) => t.pos.file !== first.pos.file)) return undefined;
+  const lines = last.text.split("\n");
+  return { start: first.pos, end: { file: last.pos.file, line: last.pos.line + lines.length - 1, col: (lines.length > 1 ? 1 : last.pos.col) + lines[lines.length - 1].length } };
 }
 
 /** The variable `move!(x)` moves out of: its expansion is `__vidar.take(&x)`. */

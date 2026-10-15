@@ -1,0 +1,21 @@
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+
+open :: proc(name: string) -> File { return File{name} }
+
+close_all :: proc(files: [dynamic]File) {
+	delete(files)
+}
+
+main :: proc() {
+	a := open("a")
+	b := a
+	m: map[string]File
+	v, ok := m["k"]
+	fmt.println(b.name, v.name, ok)
+}

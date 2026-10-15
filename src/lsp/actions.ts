@@ -291,6 +291,22 @@ function quickFixes(req: ActionRequest, range: Range): CodeAction[] {
       const cap = lspPos(fix.at);
       if (!overlaps(range, at.line, at.line) && !overlaps(range, cap.line, cap.line)) continue;
       out.push(action(`Capture '${fix.name}' by reference (&${fix.name})`, [TextEdit.insert(cap, "&")], true, diags));
+    } else if (fix.code === "destroy-move") {
+      if (fix.start.file !== file) continue;
+      const span = { start: lspPos(fix.start), end: lspPos(fix.end) };
+      if (!overlaps(range, span.start.line, span.end.line) && !overlaps(range, at.line, at.line)) continue;
+      // not preferred: it leaves the variable zero, which later code may not expect
+      out.push(action(`Move it instead (move!(${slice(text, span)}))`, [TextEdit.insert(span.start, "move!("), TextEdit.insert(span.end, ")")], false, diags));
+    } else if (fix.code === "destroy-pointer") {
+      if (fix.at.file !== file) continue;
+      const p = lspPos(fix.at);
+      if (!overlaps(range, at.line, at.line) && !overlaps(range, p.line, p.line)) continue;
+      out.push(action("Take a pointer to it instead (&)", [TextEdit.insert(p, "&")], false, diags));
+    } else if (fix.code === "destroy-owned") {
+      if (fix.at.file !== file) continue;
+      const p = lspPos(fix.at);
+      if (!overlaps(range, at.line, at.line) && !overlaps(range, p.line, p.line)) continue;
+      out.push(action(`Take '${fix.name}' over (#owned ${fix.name})`, [TextEdit.insert(p, "#owned ")], false, diags));
     }
   }
 
