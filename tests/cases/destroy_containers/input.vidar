@@ -1,0 +1,135 @@
+package main
+
+import "core:fmt"
+import "core:strings"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { if f.name != "" do fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+// cloneable: a copy is a clone, named with a '
+Handle :: struct { name: string }
+handle_destroy :: proc(h: ^Handle) {
+	if h.name != "" do fmt.println("drop", h.name)
+	delete(h.name)
+}
+handle_clone :: proc(h: Handle) -> Handle { return Handle{strings.concatenate({h.name, "'"})} }
+impl Destroy for Handle { destroy = handle_destroy }
+impl Clone for Handle { clone = handle_clone }
+handle :: proc(name: string) -> Handle { return Handle{strings.clone(name)} }
+
+// a dynamic array field: destroyed with the Dir, and moved out with it
+Dir :: struct {
+	name:  string,
+	files: [dynamic]File,
+}
+
+make_dir :: proc() -> Dir {
+	d := Dir{name = "d"}
+	append(&d.files, open("d1"))
+	append(&d.files, open("d2"))
+	return d
+}
+
+// borrowed: the caller still owns the array
+count :: proc(files: [dynamic]File) -> int { return len(files) }
+
+// generic code: what it drops is destroyed when T needs it
+Stack :: struct($T: typeid) { items: [dynamic]T }
+push :: proc(s: ^Stack($T), #owned x: T) { append(&s.items, move!(x)) }
+drop_top :: proc(s: ^Stack($T)) { pop(&s.items) }
+reset :: proc(s: ^Stack($T)) { clear(&s.items) }
+
+U :: union { Handle, int }
+
+dynamic_arrays :: proc() {
+	files: [dynamic]File
+	append(&files, open("a"))
+	append(&files, open("b"), open("c"), open("d"), open("e"))
+	f := open("f")
+	append(&files, move!(f))
+	fmt.println("count", count(files))
+	ordered_remove(&files, 0)
+	unordered_remove(&files, 0)
+	fmt.println("removed 2")
+	pop(&files)
+	g := pop(&files)
+	fmt.println("popped", g.name)
+	files[0] = open("x")
+	for &file in files do fmt.println("in array", file.name)
+	remove_range(&files, 0, 1)
+	inject_at(&files, 0, open("y"))
+	resize(&files, 1)
+	fmt.println("resized", len(files))
+}
+
+deletes :: proc() {
+	files := make([dynamic]File)
+	defer delete(files)
+	append(&files, open("p"))
+	clear(&files)
+	fmt.println("cleared")
+	append(&files, open("q"))
+}
+
+maps :: proc() {
+	m: map[string]File
+	m["one"] = open("1")
+	m["one"] = open("1b")
+	m["two"] = open("2")
+	delete_key(&m, "two")
+	for k, &v in m do fmt.println("in map", k, v.name)
+	if p, ok := &m["one"]; ok do fmt.println("found", p.name)
+	gone, f := delete_key(&m, "one")
+	fmt.println("took", gone, f.name)
+	m["three"] = open("3")
+	nested: map[string][dynamic]File
+	list: [dynamic]File
+	append(&list, open("n1"), open("n2"))
+	nested["list"] = move!(list)
+	fmt.println("end of maps")
+}
+
+clones :: proc() {
+	a: [dynamic]Handle
+	append(&a, handle("a"), handle("b"))
+	b := a
+	fmt.println("cloned", len(b), b[0].name, b[1].name)
+	m: map[string]Handle
+	m["k"] = handle("v")
+	v, ok := m["k"]
+	fmt.println("comma ok", v.name, ok)
+	u: U = handle("u")
+	w, ok2 := u.(Handle)
+	fmt.println("comma ok", w.name, ok2)
+}
+
+main :: proc() {
+	dynamic_arrays()
+	fmt.println("--- delete")
+	deletes()
+	fmt.println("--- maps")
+	maps()
+	fmt.println("--- dir")
+	{
+		d := make_dir()
+		fmt.println(d.name, len(d.files))
+	}
+	fmt.println("--- clones")
+	clones()
+	fmt.println("--- generic")
+	{
+		s: Stack(Handle)
+		push(&s, handle("s1"))
+		push(&s, handle("s2"))
+		push(&s, handle("s3"))
+		drop_top(&s)
+		fmt.println(len(s.items))
+		t: Stack(Handle)
+		push(&t, handle("t1"))
+		reset(&t)
+		fmt.println(len(t.items))
+	}
+	fmt.println("done")
+}

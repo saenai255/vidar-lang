@@ -1,4 +1,4 @@
-// error: a slice can't hold a File yet
+// error: take a pointer: f, ok := &m["a"]
 package main
 
 import "core:fmt"
@@ -6,9 +6,10 @@ import "core:fmt"
 File :: struct { name: string }
 file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
 impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
 
-Batch :: struct {
-	files: []File,
+main :: proc() {
+	m: map[string]File
+	f, ok := m["a"]
+	fmt.println(f.name, ok)
 }
-
-main :: proc() {}

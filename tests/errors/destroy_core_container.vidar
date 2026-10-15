@@ -1,0 +1,15 @@
+// error: copy and drop values without destroying them
+package main
+
+import "core:fmt"
+import "core:container/queue"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	q: queue.Queue(File)
+	fmt.println(queue.len(q))
+}

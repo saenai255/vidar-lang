@@ -1,0 +1,14 @@
+// error: in this slice literal
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	files := []File{open("a"), open("b")}
+	fmt.println(len(files))
+}

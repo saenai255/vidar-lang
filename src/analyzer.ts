@@ -939,6 +939,11 @@ export class Analyzer {
   fieldOf(ty: Ty | undefined, name: string): Ty | undefined {
     let n = this.normalize(ty);
     if (n?.t === "ptr") n = this.normalize(n.elem);
+    // an instance, Stack(int): the field as the struct declares it, in terms of its parameters
+    if (n?.t === "node" && n.node.k === "Call" && (n.node.fn.k === "Ident" || n.node.fn.k === "Selector")) {
+      const st = this.typeDeclOf(this.resolveName(n.node.fn, n.scope, null));
+      if (st?.t === "node" && st.node.k === "StructType" && st.node.polyParams) n = st;
+    }
     if (n?.t !== "node" || n.node.k !== "StructType") return undefined;
     for (const f of n.node.fields) if (f.type && f.names.some((x) => x.name === name)) return { t: "node", node: f.type, scope: n.scope };
     return undefined;

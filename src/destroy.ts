@@ -48,6 +48,8 @@ export interface DestroyDecl {
   sym: LocalSym;
   name: Token;
   how: How;
+  /** `v, ok := m[k]` or `v, ok := u.(T)`: v is a copy, made a clone right after */
+  clone?: How;
 }
 
 /** A returned local, set to its zero value once the result is copied, so its defer destroys nothing. */
@@ -211,7 +213,14 @@ export function ownedOf(an: Analyzer, ty: Ty | undefined, depth = 0): Owned | un
     case "UnionType":
       return n.polyParams ? undefined : dispatch(n.variants);
     case "TypeExpr":
-      return (n.what === "array" || n.what === "inferred") && n.parts[1] ? dispatch([n.parts[1]]) : undefined;
+      if ((n.what === "array" || n.what === "inferred") && n.parts[1]) return dispatch([n.parts[1]]);
+      // a dynamic array or a map owns its elements: destroying it destroys them and frees its memory
+      if (n.what === "dynamic" && !n.parts[0] && n.parts[1]) return dispatch([n.parts[1]]);
+      if (n.what === "map" && n.parts[0] && n.parts[1]) {
+        const o = dispatch([n.parts[0], n.parts[1]]);
+        return o && { ...o, clone: false };
+      }
+      return undefined;
     case "Call": {
       // an instance of a parametric type with impl Destroy: its generic procs take every instance
       const head = n.fn.k === "Ident" || n.fn.k === "Selector" ? symOf(an, n.fn, scope) : undefined;
@@ -280,12 +289,36 @@ export function checkDestroys(an: Analyzer, guard: (f: () => void) => void): voi
 
 /** Types that hold their elements by value but can't hold destructible ones yet. */
 const CONTAINERS: Record<string, string> = {
-  slice: "a slice",
-  dynamic: "a dynamic array",
-  map: "a map",
   matrix: "a matrix",
   distinct: "a distinct type",
 };
+
+/** Core's procs on dynamic arrays and maps that drop elements: rewritten to `__vidar.destroy_<name>`, which destroys them first. */
+const DROPPING = new Set(["clear", "resize", "ordered_remove", "unordered_remove", "remove_range"]);
+/** ...and the ones that return what they remove: rewritten the same way when the result is thrown away. */
+const REMOVING = new Set(["pop", "pop_front", "delete_key"]);
+/** Core's procs that move values into a dynamic array. */
+const ADDING = new Set(["append", "append_elem", "append_elems", "non_zero_append", "inject_at", "inject_at_elem", "inject_at_elems"]);
+/** Core's procs that overwrite or copy elements without destroying the old ones, and what to write instead. */
+const OVERWRITING: Record<string, string> = {
+  assign_at: "a[i] = v (after resize, if the array is too short)",
+  assign_at_elem: "a[i] = v (after resize, if the array is too short)",
+  assign_at_elems: "a[i] = v for each value",
+  map_insert: "m[k] = v",
+  map_upsert: "m[k] = v",
+  map_entry: "m[k] = v",
+  non_zero_resize: "resize, which leaves the new elements zero",
+  copy: "a loop that assigns a clone of each element, or move!s it",
+  copy_slice: "a loop that assigns a clone of each element, or move!s it",
+};
+
+/** A dynamic array, map or slice, the type of its elements, and its keys' for a map. */
+interface Container {
+  kind: "dynamic" | "map" | "slice";
+  elem: Ty;
+  key?: Ty;
+  name: string;
+}
 
 class Checker {
   /** owned locals of each proc being walked, innermost last */
@@ -392,6 +425,14 @@ class Checker {
   }
 
   private rangeFor(s: Extract<Stmt, { k: "RangeFor" }>): void {
+    // a map gives its key first, then its value (keys never need destroying: see mapKey)
+    const c = this.containerOf(this.typeOf(s.x));
+    if (c?.kind === "map") {
+      const v = s.vals[1];
+      const o = v && !v.byRef ? ownedOf(this.an, c.elem) : undefined;
+      if (o) throw new CompileError(`'${v.name}' would be a copy of each ${o.name}, ${o.why}; loop over pointers: for ${s.vals[0].name}, &${v.name} in ...`, s.toks[v.tok].pos);
+      return;
+    }
     // an iterator proc: `for x in next(&it)` gets a new value each time round
     const iter = s.x.k === "Call" ? this.ownedOf(s.x) : undefined;
     if (iter) throw new CompileError(`each ${iter.name} that ${nodeText(s.x.k === "Call" ? s.x.fn : s.x)}() returns to this loop would never be destroyed; loop with for { x, ok := ...; if !ok do break } instead`, posOf(s.x));
@@ -411,6 +452,7 @@ class Checker {
   private dropped(e: Expr): void {
     while (e.k === "Paren" || e.k === "Postfix") e = e.x;
     if (e.k !== "Call") return;
+    if (this.removed(e)) return;
     const scope: Scope | undefined = A(e)._scope;
     const ft = scope && this.an.normalize(this.an.typeOf(e.fn, scope));
     if (ft?.t !== "sig") return;
@@ -463,14 +505,19 @@ class Checker {
         return;
       }
       case "TypeExpr": {
-        const what = CONTAINERS[e.what];
+        const what = CONTAINERS[e.what] ?? (e.what === "dynamic" && e.parts[0] ? "a fixed-capacity dynamic array" : undefined);
         if (what) for (const p of e.parts) if (p) this.contained(p, what);
+        if (e.what === "map" && e.parts[0]) this.mapKey(e.parts[0]);
         break;
       }
+      case "Directive":
+        if (e.name === "#soa" && e.x?.k === "TypeExpr" && e.x.parts[1]) this.contained(e.x.parts[1], "an #soa array");
+        break;
       case "Call":
         this.call(e);
         break;
       case "CompoundLit":
+        if (e.elems.length) this.sliceLit(e);
         // the elements move into the literal: a fresh value is fine, a copy of a variable is not
         for (const el of e.elems) {
           const v = el.k === "FieldValue" ? el.value : el;
@@ -535,12 +582,152 @@ class Checker {
     if (o) throw new CompileError(`${what} can't hold a ${o.name} yet, since it has impl Destroy; hold a pointer (^${o.name})`, posOf(t));
   }
 
-  private call(e: Extract<Expr, { k: "Call" }>): void {
-    if (e.fn.k === "Ident" && !A(e.fn)._sym && e.fn.name === "new_clone" && e.args[0]) {
-      this.copied(e.args[0], "new_clone would copy it");
-      this.consumed.add(e.args[0]);
+  /** A map keyed by a destructible type: its keys are copied to compare with, so they can't be. */
+  private mapKey(t: Expr): void {
+    const scope: Scope | undefined = A(t)._scope;
+    const o = scope && ownedOf(this.an, { t: "node", node: t, scope });
+    if (o) throw new CompileError(`a map key can't be a ${o.name}, ${o.why}: the map compares copies of its keys. Key it by a plain value, such as a name or an id`, posOf(t));
+  }
+
+  /** `[]File{...}`: a slice is a view, so nothing would destroy the elements. */
+  private sliceLit(e: Extract<Expr, { k: "CompoundLit" }>): void {
+    const s = this.stmts[this.stmts.length - 1];
+    const declared = s?.k === "ValueDecl" && s.type && s.values.includes(e) ? s.type : undefined;
+    const t = e.type ?? declared;
+    const scope: Scope | undefined = t && (A(t)._scope ?? A(e)._scope);
+    const c = scope ? this.containerOf({ t: "node", node: t!, scope }) : undefined;
+    const o = c?.kind === "slice" ? ownedOf(this.an, c.elem) : undefined;
+    if (o) throw new CompileError(`nothing would destroy the ${o.name} values in this slice literal: a slice is a view, which doesn't own its elements. Use a fixed array, [?]${nodeText(c!.elem.t === "node" ? c!.elem.node : e)}{...}, or a dynamic array`, posOf(e));
+  }
+
+  /** The dynamic array, map or slice `ty` is (or points to). */
+  private containerOf(ty: Ty | undefined): Container | undefined {
+    let n = this.an.normalize(ty);
+    if (n?.t === "ptr") n = this.an.normalize(n.elem);
+    if (n?.t !== "node" || n.node.k !== "TypeExpr") return undefined;
+    const t = n.node;
+    const scope = n.scope;
+    const at = (x: Expr): Ty => ({ t: "node", node: x, scope: A(x)._scope ?? scope });
+    if (((t.what === "dynamic" && !t.parts[0]) || t.what === "slice") && t.parts[1]) return { kind: t.what as "dynamic" | "slice", elem: at(t.parts[1]), name: nodeText(t) };
+    if (t.what === "map" && t.parts[0] && t.parts[1]) return { kind: "map", key: at(t.parts[0]), elem: at(t.parts[1]), name: nodeText(t) };
+    return undefined;
+  }
+
+  /** What destroying the container's elements takes: a known destroy, one found at run time, or nothing. */
+  private holds(c: Container): { o?: Owned; unsure: boolean } | undefined {
+    const tys = c.key ? [c.elem, c.key] : [c.elem];
+    const o = tys.map((t) => ownedOf(this.an, t)).find(Boolean);
+    if (o) return { o, unsure: false };
+    return tys.some((t) => mentionsPoly(this.an, t)) ? { unsure: true } : undefined;
+  }
+
+  /** A call to core's proc becomes a call to `__vidar.<proc>`, which destroys what the original drops. */
+  private rewrite(e: Extract<Expr, { k: "Call" }>, proc: string): void {
+    A(e.fn)._destroyFn = proc;
+    this.an.destroyDispatch = true;
+  }
+
+  /** `pop(&a)`, `pop_front(&a)` or `delete_key(&m, k)` as a statement: what it removes is destroyed. */
+  private removed(e: Extract<Expr, { k: "Call" }>): boolean {
+    if (e.fn.k !== "Ident" || A(e.fn)._sym || !e.args[0]) return false;
+    const name = e.fn.name;
+    const safe = name === "pop_safe" || name === "pop_front_safe";
+    if (!REMOVING.has(name) && !safe) return false;
+    const c = this.containerOf(this.typeOf(e.args[0]));
+    const h = c && c.kind !== "slice" ? this.holds(c) : undefined;
+    if (!h) return false;
+    if (safe) {
+      if (h.o) throw new CompileError(`the ${h.o.name} that ${name}() returns is thrown away, so it would never be destroyed; keep it: x, ok := ${nodeText(e)}, or call ${name.replace("_safe", "")}`, posOf(e));
+      return false;
+    }
+    this.rewrite(e, `destroy_${name}`);
+    this.consumed.add(e);
+    return true;
+  }
+
+  /** Core's procs on dynamic arrays, maps and slices of destructible values. */
+  private builtin(e: Extract<Expr, { k: "Call" }>, name: string): void {
+    const a0 = e.args[0];
+    if (!a0 || a0.k === "FieldValue") return;
+    if (name === "new_clone") {
+      this.copied(a0, "new_clone would copy it");
+      this.consumed.add(a0);
       return;
     }
+    if (name === "make") {
+      const scope: Scope | undefined = A(a0)._scope ?? A(e)._scope;
+      const c = scope ? this.containerOf({ t: "node", node: a0, scope }) : undefined;
+      const o = c?.kind === "slice" ? ownedOf(this.an, c.elem) : undefined;
+      if (o) throw new CompileError(`nothing would destroy the ${o.name} values this makes: a slice is a view, which doesn't own its elements. Make a dynamic array, which does: make([dynamic]${c!.elem.t === "node" ? nodeText(c!.elem.node) : o.name}, n)`, posOf(e));
+      return;
+    }
+    const c = this.containerOf(this.typeOf(a0));
+    if (!c) return;
+    if (ADDING.has(name)) {
+      if (c.kind !== "dynamic") return;
+      for (const a of e.args.slice(1)) {
+        if (a.k === "Spread") {
+          const o = ownedOf(this.an, c.elem);
+          if (o && !this.raw)
+            throw new CompileError(`${name} would copy each ${o.name} in '${nodeText(a.x)}', ${o.why}, and both copies would be destroyed; ${name} them one at a time, each a new value, a clone or move!(x)`, posOf(a));
+          continue;
+        }
+        const v = a.k === "FieldValue" ? a.value : a;
+        this.copied(v, `${name} would copy it`, `Move it there with move!(${nodeText(v)}), or ${name} a new value`);
+        this.consume(v);
+      }
+      return;
+    }
+    const h = this.holds(c);
+    if (!h) return;
+    const fix = OVERWRITING[name];
+    if (fix && h.o && !this.raw) throw new CompileError(`${name} would overwrite or copy ${h.o.name} values without destroying the old ones, and ${h.o.name} ${h.o.why.replace("which ", "")}; write ${fix}`, posOf(e));
+    if (name === "delete") return this.deleted(e, c, h);
+    if (DROPPING.has(name) && c.kind !== "slice") this.rewrite(e, `destroy_${name}`);
+  }
+
+  /** `delete(x)` of a dynamic array or map destroys its elements too, and leaves x empty for its own destroy. */
+  private deleted(e: Extract<Expr, { k: "Call" }>, c: Container, h: { o?: Owned; unsure: boolean }): void {
+    const a0 = e.args[0];
+    if (c.kind === "slice") {
+      if (h.o)
+        throw new CompileError(`'${nodeText(a0)}' is a ${c.name}, a view that doesn't own its elements, so delete would free ${h.o.name} values without destroying them. Keep them in a dynamic array, which destroys them`, posOf(e));
+      return;
+    }
+    const p = this.place(a0);
+    if (!p) throw new CompileError(`delete destroys a ${c.name}'s elements and leaves it empty, so it takes the variable or field that holds it: '${nodeText(a0)}' is a value`, posOf(a0));
+    let root = p;
+    while (root.k === "Paren" || (root.k === "Selector" && !A(root)._pkgMember)) root = root.x;
+    const sym: Sym | undefined = root.k === "Ident" ? A(root)._sym : undefined;
+    const ptr = this.an.normalize(this.typeOf(root))?.t === "ptr";
+    if (sym?.kind === "local" && sym.declKind === "param" && !ptr && !this.owned.some((o) => o.has(sym)))
+      throw new CompileError(`'${sym.name}' is a parameter, which is borrowed, so '${nodeText(a0)}' can't be deleted here: its owner destroys it. Declare it #owned to take it over`, posOf(a0));
+    this.rewrite(e, "destroy_delete");
+    A(a0)._destroyAddr = true;
+  }
+
+  /**
+   * `queue.Queue(File)`: an instance of a type from an Odin package (by convention, its types are
+   * capitalized). Its procs copy and drop values without destroying them, and its buffer can keep
+   * stale copies, so it can't hold destructible ones.
+   */
+  private odinInstance(e: Extract<Expr, { k: "Call" }>): void {
+    const fn = e.fn;
+    if (fn.k !== "Selector" || fn.x.k !== "Ident" || !/^[A-Z]/.test(fn.name)) return;
+    const scope: Scope | undefined = A(e)._scope;
+    const pkg = A(fn.x)._sym ?? (scope && this.an.lookup(fn.x.name, scope, null));
+    if (pkg?.kind !== "pkg" || pkg.target) return;
+    for (const a of e.args) {
+      const t = a.k === "FieldValue" ? a.value : a;
+      const o = scope && ownedOf(this.an, { t: "node", node: t, scope: A(t)._scope ?? scope });
+      if (o)
+        throw new CompileError(`${nodeText(e)} can't hold a ${o.name}, ${o.why}: the procs of "${pkg.path}" copy and drop values without destroying them. Hold pointers (^${o.name}), or keep the values in a dynamic array`, posOf(e));
+    }
+  }
+
+  private call(e: Extract<Expr, { k: "Call" }>): void {
+    if (e.fn.k === "Ident" && !A(e.fn)._sym) return this.builtin(e, e.fn.name);
+    this.odinInstance(e);
     // an `#owned` parameter takes over a new value, or a clone (a copy of a move-only one is an error)
     const scope: Scope | undefined = A(e)._scope;
     let ft: Ty | undefined;
@@ -648,22 +835,35 @@ class Checker {
   private localDecl(s: ValueDecl): void {
     const syms: LocalSym[] = A(s)._syms ?? [];
     const out: DestroyDecl[] = [];
+    // `v, ok := m[k]`, `v, ok := u.(T)`: v copies the element or variant, and ok is a bool
+    let commaOk: Expr | undefined = s.names.length === 2 && s.values.length === 1 ? s.values[0] : undefined;
+    while (commaOk?.k === "Paren") commaOk = commaOk.x;
+    if (commaOk && !(commaOk.k === "TypeAssert" || (commaOk.k === "Index" && !commaOk.slice))) commaOk = undefined;
     syms.forEach((sym, i) => {
+      if (commaOk && i === 1) return;
       const name = s.names[i];
       const at = s.toks[name.tok].pos;
       const v = s.values.length === s.names.length ? s.values[i] : undefined;
-      const o = ownedOf(this.an, sym.ty);
+      const ty = sym.ty ?? (commaOk && this.typeOf(commaOk));
+      const o = ownedOf(this.an, ty);
       if (!o) {
-        if (!this.unsure(sym.ty) || name.name === "_") return;
+        if (!this.unsure(ty) || name.name === "_") return;
         // only known at run time: destroyed through __vidar.destroy, which does nothing for most types
         if (A(s)._isInit) return this.unknownInit(name.name, s.values.length === s.names.length ? s.values[i] : s.values[0], at);
         if (v) this.copied(v, "");
-        out.push({ sym, name: s.toks[name.tok], how: { k: "dispatch" } });
+        out.push({ sym, name: s.toks[name.tok], how: { k: "dispatch" }, clone: commaOk && !this.raw ? { k: "dispatch" } : undefined });
         this.owned[this.owned.length - 1].add(sym);
         this.an.destroyDispatch = true;
         return;
       }
       if (name.name === "_") throw new CompileError(`'_' would throw away a ${o.name} without destroying it; give it a name`, at);
+      let clone: How | undefined;
+      if (commaOk && !this.raw) {
+        const ok = s.names[1].name;
+        if (!o.clone || A(s)._isInit)
+          throw new CompileError(`'${name.name}' would be a copy of the ${o.name} in '${nodeText(commaOk)}', ${o.why}, and both copies would be destroyed; take a pointer: ${name.name}, ${ok} := &${nodeText(commaOk)}`, at);
+        clone = o.how;
+      }
       if (A(s)._isInit) throw new CompileError(`'${name.name}' is a ${o.name}, ${o.why}; declare it before the statement, not in its initializer`, at);
       if (v) this.copied(v, `'${name.name} := ${nodeText(v)}' would copy it`);
       if (o.how.k === "call") {
@@ -671,7 +871,7 @@ class Checker {
         if (!reaches(sym.scope, owner))
           throw new CompileError(`'${name.name}' is a ${o.name}, destroyed by '${destructorName(o.how.dtor).name}' in package '${owner.pkg.name}'; import that package in this file so the cleanup can call it`, at);
       } else this.an.destroyDispatch = true;
-      out.push({ sym, name: s.toks[name.tok], how: o.how });
+      out.push({ sym, name: s.toks[name.tok], how: o.how, clone });
       this.owned[this.owned.length - 1].add(sym);
     });
     if (out.length) A(s)._destroyDecl = out;
@@ -778,7 +978,8 @@ function symTy(sym: LocalSym | CaptureSym): Ty | undefined {
 /** `vidar_runtime/destroy.odin`, written when some value is destroyed or copy-checked at run time. */
 export const DESTROY_RUNTIME = `// Generated by vidar: impl Destroy for generic code, and for values whose type vidar can't tell.
 // Each package registers its types with impl Destroy at startup; any other type's plan is read from
-// its type info (fields, array elements, union variants) the first time a value of it is destroyed.
+// its type info (fields, array elements, union variants, what a dynamic array or map holds) the first
+// time a value of it is destroyed.
 package vidar_runtime
 
 import "base:intrinsics"
@@ -796,7 +997,16 @@ Destroy_Plan :: struct {
 	tag_size:  int,
 	tag_off:   uintptr,
 	no_nil:    bool,
+	// a dynamic array or a map: its elements (a map's values) and a map's keys are destroyed, then its memory freed
+	container:  Destroy_Container,
+	elem:       ^Destroy_Plan,
+	key:        ^Destroy_Plan,
+	elem_size:  uintptr,
+	elem_align: int,
+	map_info:   ^runtime.Map_Info,
 }
+
+Destroy_Container :: enum u8 { None, Dynamic, Map }
 
 Destroy_Part :: struct {
 	plan:   ^Destroy_Plan,
@@ -817,6 +1027,8 @@ Generic_Destroy :: struct {
 @(private="file") generic_destroys: [dynamic]Generic_Destroy
 @(private="file") destroy_lock: sync.Mutex
 @(private="file") nothing_to_destroy: Destroy_Plan
+// a plan being made: a type that holds itself (through a dynamic array or map) contributes nothing to its own
+@(private="file") plan_in_progress: Destroy_Plan
 
 // a type with impl Destroy and no impl Clone: copies stop the program
 register_destroy :: proc "contextless" ($T: typeid, $destroy: proc(^T)) {
@@ -854,7 +1066,8 @@ register_generic :: proc "contextless" (file, name: string, destroy: proc(rawptr
 // nil when a value of the type holds nothing to destroy
 @(private="file")
 plan_for :: proc(ti: ^runtime.Type_Info) -> ^Destroy_Plan {
-	if p, ok := destroy_plans[ti.id]; ok do return nil if p == &nothing_to_destroy else p
+	if p, ok := destroy_plans[ti.id]; ok do return nil if p == &nothing_to_destroy || p == &plan_in_progress else p
+	destroy_plans[ti.id] = &plan_in_progress
 	plan := new(Destroy_Plan)
 	parts: [dynamic]Destroy_Part
 	#partial switch v in ti.variant {
@@ -903,8 +1116,18 @@ plan_for :: proc(ti: ^runtime.Type_Info) -> ^Destroy_Plan {
 		if some {
 			plan.variants, plan.tag_size, plan.tag_off, plan.no_nil = variants, v.tag_type.size, v.tag_offset, v.no_nil
 		} else do delete(variants)
+	case runtime.Type_Info_Dynamic_Array:
+		if p := plan_for(v.elem); p != nil {
+			plan.container, plan.elem, plan.elem_size, plan.elem_align, plan.move_only = .Dynamic, p, uintptr(v.elem_size), v.elem.align, p.move_only
+		}
+	case runtime.Type_Info_Map:
+		k, val := plan_for(v.key), plan_for(v.value)
+		if k != nil || val != nil {
+			// a map is never cloned
+			plan.container, plan.key, plan.elem, plan.map_info, plan.move_only = .Map, k, val, v.map_info, true
+		}
 	}
-	if len(parts) == 0 && plan.variants == nil {
+	if len(parts) == 0 && plan.variants == nil && plan.container == .None {
 		delete(parts)
 		free(plan)
 		destroy_plans[ti.id] = &nothing_to_destroy
@@ -955,6 +1178,25 @@ run_plan :: proc(plan: ^Destroy_Plan, p: rawptr) {
 		i := tag if plan.no_nil else tag - 1
 		if i >= 0 && i < len(plan.variants) && plan.variants[i] != nil do run_plan(plan.variants[i], p)
 	}
+	switch plan.container {
+	case .None:
+	case .Dynamic:
+		a := (^runtime.Raw_Dynamic_Array)(p)
+		for i := a.len - 1; i >= 0; i -= 1 do run_plan(plan.elem, rawptr(uintptr(a.data) + uintptr(i) * plan.elem_size))
+		_ = runtime.mem_free_with_size(a.data, a.cap * int(plan.elem_size), a.allocator)
+		a.data, a.len, a.cap = nil, 0, 0
+	case .Map:
+		m := (^runtime.Raw_Map)(p)
+		if runtime.map_data(m^) == 0 do return
+		ks, vs, hs, _, _ := runtime.map_kvh_data_dynamic(m^, plan.map_info)
+		for i in 0..<uintptr(runtime.map_cap(m^)) {
+			if !runtime.map_hash_is_valid(hs[i]) do continue
+			if plan.elem != nil do run_plan(plan.elem, rawptr(runtime.map_cell_index_dynamic(vs, plan.map_info.vs, i)))
+			if plan.key != nil do run_plan(plan.key, rawptr(runtime.map_cell_index_dynamic(ks, plan.map_info.ks, i)))
+		}
+		_ = runtime.map_free_dynamic(m^, plan.map_info)
+		m.data, m.len = 0, 0
+	}
 }
 
 @(private="file")
@@ -981,6 +1223,20 @@ clone_plan :: proc(plan: ^Destroy_Plan, dst, src: rawptr) {
 		i := tag if plan.no_nil else tag - 1
 		if i >= 0 && i < len(plan.variants) && plan.variants[i] != nil do clone_plan(plan.variants[i], dst, src)
 	}
+	// a dynamic array: new memory from the same allocator, each element a clone (a map is move-only)
+	if plan.container == .Dynamic {
+		s, d := (^runtime.Raw_Dynamic_Array)(src), (^runtime.Raw_Dynamic_Array)(dst)
+		d^ = {allocator = s.allocator}
+		if s.len == 0 do return
+		bytes, err := runtime.mem_alloc_bytes(s.len * int(plan.elem_size), plan.elem_align, s.allocator)
+		if err != nil do panic("vidar: out of memory cloning a dynamic array")
+		d.data, d.len, d.cap = raw_data(bytes), s.len, s.len
+		for i in 0..<uintptr(s.len) {
+			at, from := rawptr(uintptr(d.data) + i * plan.elem_size), rawptr(uintptr(s.data) + i * plan.elem_size)
+			intrinsics.mem_copy_non_overlapping(at, from, plan.elem_size)
+			clone_plan(plan.elem, at, from)
+		}
+	}
 }
 
 @(private="file", cold)
@@ -993,14 +1249,14 @@ generic_unknown :: proc "contextless" (ti: ^runtime.Type_Info) -> ! {
 
 // destroys a value whose type the code can't name
 destroy :: #force_inline proc(p: ^$T) {
-	when intrinsics.type_is_struct(T) || intrinsics.type_is_union(T) || intrinsics.type_is_array(T) || intrinsics.type_is_enumerated_array(T) {
+	when intrinsics.type_is_struct(T) || intrinsics.type_is_union(T) || intrinsics.type_is_array(T) || intrinsics.type_is_enumerated_array(T) || intrinsics.type_is_dynamic_array(T) || intrinsics.type_is_map(T) {
 		if plan := plan_of(T); plan != nil do run_plan(plan, p)
 	}
 }
 
 // a copy of a value whose type the code can't name: stops the program when the type can't be copied
 check_copy :: #force_inline proc "contextless" ($T: typeid, loc := #caller_location) {
-	when intrinsics.type_is_struct(T) || intrinsics.type_is_union(T) || intrinsics.type_is_array(T) || intrinsics.type_is_enumerated_array(T) {
+	when intrinsics.type_is_struct(T) || intrinsics.type_is_union(T) || intrinsics.type_is_array(T) || intrinsics.type_is_enumerated_array(T) || intrinsics.type_is_dynamic_array(T) || intrinsics.type_is_map(T) {
 		if plan := plan_of(T); plan != nil && plan.move_only do copied(type_info_of(T), loc)
 	}
 }
@@ -1016,7 +1272,7 @@ copied :: proc "contextless" (ti: ^runtime.Type_Info, loc: runtime.Source_Code_L
 
 // a copy of a value whose type the code can't name: a clone, or a stop when the type can't be copied
 clone :: #force_inline proc(x: $T, loc := #caller_location) -> T {
-	when intrinsics.type_is_struct(T) || intrinsics.type_is_union(T) || intrinsics.type_is_array(T) || intrinsics.type_is_enumerated_array(T) {
+	when intrinsics.type_is_struct(T) || intrinsics.type_is_union(T) || intrinsics.type_is_array(T) || intrinsics.type_is_enumerated_array(T) || intrinsics.type_is_dynamic_array(T) || intrinsics.type_is_map(T) {
 		if plan := plan_of(T); plan != nil {
 			if plan.move_only do copied(type_info_of(T), loc)
 			src, dst := x, x
@@ -1025,6 +1281,79 @@ clone :: #force_inline proc(x: $T, loc := #caller_location) -> T {
 		}
 	}
 	return x
+}
+
+// core's procs on dynamic arrays and maps, destroying the elements they drop
+destroy_delete :: proc{destroy_delete_dynamic, destroy_delete_map}
+
+// delete(a): destroys the elements, frees the memory and leaves a empty, so its own destroy does nothing
+destroy_delete_dynamic :: proc(a: ^$A/[dynamic]$E, loc := #caller_location) {
+	destroy(a)
+	delete(a^, loc)
+	r := (^runtime.Raw_Dynamic_Array)(a)
+	r.data, r.len, r.cap = nil, 0, 0
+}
+
+destroy_delete_map :: proc(m: ^$M/map[$K]$V, loc := #caller_location) {
+	destroy(m)
+	delete(m^, loc)
+	r := (^runtime.Raw_Map)(m)
+	r.data, r.len = 0, 0
+}
+
+destroy_clear :: proc{destroy_clear_dynamic, destroy_clear_map}
+
+destroy_clear_dynamic :: proc(a: ^$A/[dynamic]$E) {
+	for i := len(a) - 1; i >= 0; i -= 1 do destroy(&a[i])
+	clear(a)
+}
+
+destroy_clear_map :: proc(m: ^$M/map[$K]$V) {
+	for k, &v in m {
+		destroy(&v)
+		key := k
+		destroy(&key)
+	}
+	clear(m)
+}
+
+destroy_resize :: proc(a: ^$A/[dynamic]$E, #any_int length: int, loc := #caller_location) -> runtime.Allocator_Error {
+	for i := len(a) - 1; i >= max(length, 0); i -= 1 do destroy(&a[i])
+	return resize(a, length, loc)
+}
+
+destroy_ordered_remove :: proc(a: ^$A/[dynamic]$E, #any_int index: int, loc := #caller_location) {
+	runtime.bounds_check_error_loc(loc, index, len(a))
+	destroy(&a[index])
+	ordered_remove(a, index, loc)
+}
+
+destroy_unordered_remove :: proc(a: ^$A/[dynamic]$E, #any_int index: int, loc := #caller_location) {
+	runtime.bounds_check_error_loc(loc, index, len(a))
+	destroy(&a[index])
+	unordered_remove(a, index, loc)
+}
+
+destroy_remove_range :: proc(a: ^$A/[dynamic]$E, #any_int lo, hi: int, loc := #caller_location) {
+	runtime.slice_expr_error_lo_hi_loc(loc, lo, hi, len(a))
+	for i := hi - 1; i >= lo; i -= 1 do destroy(&a[i])
+	remove_range(a, lo, hi, loc)
+}
+
+destroy_pop :: proc(a: ^$A/[dynamic]$E, loc := #caller_location) {
+	v := pop(a, loc)
+	destroy(&v)
+}
+
+destroy_pop_front :: proc(a: ^$A/[dynamic]$E, loc := #caller_location) {
+	v := pop_front(a, loc)
+	destroy(&v)
+}
+
+destroy_delete_key :: proc(m: ^$M/map[$K]$V, key: K) {
+	k, v := delete_key(m, key)
+	destroy(&v)
+	destroy(&k)
 }
 
 // move!(x): x's value, leaving x zero

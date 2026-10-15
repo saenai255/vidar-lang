@@ -1,4 +1,4 @@
-// error: a dynamic array can't hold a File yet
+// error: which is borrowed, so 'files' can't be deleted here
 package main
 
 import "core:fmt"
@@ -8,7 +8,8 @@ file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
 impl Destroy for File { destroy = file_destroy }
 open :: proc(name: string) -> File { return File{name} }
 
-main :: proc() {
-	files: [dynamic]File
-	fmt.println(len(files))
+close_all :: proc(files: [dynamic]File) {
+	delete(files)
 }
+
+main :: proc() {}

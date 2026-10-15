@@ -1,0 +1,53 @@
+count 6
+close a
+close b
+removed 2
+close e
+popped d
+close f
+in array x
+in array c
+close x
+close c
+resized 1
+close d
+close y
+--- delete
+close p
+cleared
+close q
+--- maps
+close 1
+close 2
+in map one 1b
+found 1b
+took one 1b
+end of maps
+close n2
+close n1
+close 1b
+close 3
+--- dir
+d 2
+close d2
+close d1
+--- clones
+cloned 2 a' b'
+comma ok v' true
+comma ok u' true
+drop u'
+drop u
+drop v'
+drop v
+drop b'
+drop a'
+drop b
+drop a
+--- generic
+drop s3
+2
+drop t1
+0
+drop s2
+drop s1
+done

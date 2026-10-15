@@ -588,7 +588,10 @@ export class Emitter {
     const vi: ValueIface | undefined = A(n)._valueIface;
     if (vi) return `[dynamic]${this.valueUnion(vi)}`;
     const iface: GlobalSym | undefined = A(n)._wrapIface;
-    let text: string = A(n)._emitAs ?? this.emitNode(n);
+    // impl Destroy (destroy.ts): core's proc on a dynamic array or map that drops elements, replaced by one that destroys them
+    const destroyFn: string | undefined = A(n)._destroyFn;
+    let text: string = destroyFn ? `${this.runtimeRef()}.${destroyFn}` : (A(n)._emitAs ?? this.emitNode(n));
+    if (A(n)._destroyAddr) text = `&${text}`;
     if (iface) text = `${this.qualify(iface, fromName(iface))}(${text})`;
     const up: { from: GlobalSym; to: GlobalSym } | undefined = A(n)._upcast;
     if (up) text = `${this.qualify(up.from, upcastName(up.from, up.to), `convert '${up.from.name}' to '${up.to.name}'`)}(${text})`;
@@ -604,7 +607,10 @@ export class Emitter {
     // impl Destroy (destroy.ts): a local is destroyed when its scope ends, the old value when it is assigned,
     // and a local that is returned is left zero for its defer
     const destroyDecl: DestroyDecl[] | undefined = A(n)._destroyDecl;
-    if (destroyDecl) text += destroyDecl.map((d) => `; defer ${this.destroyRef(d.how, this.tok(d.name))}(&${this.tok(d.name)})`).join("");
+    if (destroyDecl)
+      text += destroyDecl
+        .map((d) => `${d.clone ? `; ${this.tok(d.name)} = ${this.cloneRef(d.clone)}(${this.tok(d.name)})` : ""}; defer ${this.destroyRef(d.how, this.tok(d.name))}(&${this.tok(d.name)})`)
+        .join("");
     const destroyAssign: How | undefined = A(n)._destroyAssign;
     if (destroyAssign && n.k === "Assign") {
       const lhs = this.emit(n.lhs[0]);

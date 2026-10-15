@@ -1,5 +1,6 @@
 import { Block, Expr, Node, Stmt } from "./ast";
 import { A, Analyzer, nodeText, posOf } from "./analyzer";
+import { ownedOf } from "./destroy";
 import { kids } from "./optimize";
 import { schedSourcePath } from "./project";
 import type { LocalSym, Sym, Ty } from "./scope";
@@ -100,7 +101,10 @@ function candidate(s: ValueDecl, an: Analyzer): Candidate | undefined {
   }
   const elem = type?.k === "TypeExpr" ? type.parts[1] : null;
   if (!elem) return undefined;
-  const shape = structShape(an, { t: "node", node: elem, scope: A(elem)._scope ?? sym.scope });
+  const elemTy: Ty = { t: "node", node: elem, scope: A(elem)._scope ?? sym.scope };
+  // impl Destroy finds a dynamic array's elements by their type info, which #soa changes
+  if (an.destructors.size && ownedOf(an, elemTy)) return undefined;
+  const shape = structShape(an, elemTy);
   if (!shape) return undefined;
   return { sym, decl: s, type: type as TypeExpr, made: also as TypeExpr | undefined, struct: elem.toks.slice(elem.start, elem.end).map((t) => t.text).join(""), ...shape, loops: new Map() };
 }
