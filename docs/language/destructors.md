@@ -30,7 +30,7 @@ A type without `impl Destroy` is unaffected, and a program without any `impl Des
 - **A local** of a type with `impl Destroy` is destroyed when its scope ends: at the closing `}`, on `return`, `break` or `continue`, and on every `or_return`. A loop body destroys its locals on each iteration. Locals are destroyed in reverse order of declaration, after any `defer` written later in the same scope.
 - **Types that hold one are destroyed too.** A struct with a `File` field gets a destructor of its own, `__Log_destroy`, which destroys its fields last first. If the struct also has `impl Destroy`, its proc runs first, while the fields are still there. Fixed arrays (`[4]File`, `[Color]File`) destroy their elements last first, a union or `Maybe(File)` destroys the variant it holds, and so does an instance of a parametric type (`Pair(File)`).
 - **The zero value is destroyed too.** `f: File` declares a zero `File`, and it is destroyed like any other. A local that was returned is left zero. A proc that fails returns a zero value along with its error, and that value is destroyed as well. So **a destroy proc must accept the zero value** and do nothing with it.
-- **Assigning** to a local, a field, an element (`files[i]`, with a name or constant index) or through a pointer (`p^ = ...`) destroys the old value after the new one is stored.
+- **Assigning** to a local, a field, an element (`files[i]`, with a name or constant index) or through a pointer (`p^ = ...`) destroys the old value after the new one is stored. The new value is made first, so `f = reopen(move!(f))` hands the old value over and leaves nothing behind to destroy.
 - **Returning** a local moves it out: the caller owns the value and destroys it, and this proc doesn't.
 - **Parameters are borrowed.** A proc that takes a `File` by value can read it but doesn't destroy it, and can't return or store it. An [`#owned` parameter](#moving-values) takes the value over instead.
 - **Closures and loops borrow too.** A closure that captures `f` by value, and `for f in files`, hold a copy that is never destroyed: they read the value its owner keeps. Both are read-only, as in Odin. A closure that borrows a destructible value can't outlive the proc, by the same rules as one that captures `&f` (see [Closures](closures.md)).
@@ -222,7 +222,7 @@ Every rewrite stays on its source line:
 
 ```odin
 f := open("a"); defer file_destroy(&f)                                   // f := open("a")
-{ __vidar_old := f; f = open("b"); file_destroy(&__vidar_old) }          // f = open("b")
+{ __vidar_new: type_of(f) = open("b"); __vidar_old := f; f = __vidar_new; file_destroy(&__vidar_old) } // f = open("b")
 { defer f = {}; return f }                                               // return f
 h2 := handle_clone(h); defer handle_destroy(&h2)                         // h2 := h, with impl Clone
 g := __vidar.take(&f); defer file_destroy(&g)                            // g := move!(f), or g := h on h's last use

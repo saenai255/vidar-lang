@@ -58,7 +58,7 @@ dynamic_arrays :: proc() {
 	__vidar.destroy_pop(&files)
 	g := pop(&files); defer __vidar.destroy(&g)
 	fmt.println("popped", g.name)
-	{ __vidar_old := files[0]; files[0] = open("x"); file_destroy(&__vidar_old) }
+	{ __vidar_new: type_of(files[0]) = open("x"); __vidar_old := files[0]; files[0] = __vidar_new; file_destroy(&__vidar_old) }
 	for &file in files do fmt.println("in array", file.name)
 	__vidar.destroy_remove_range(&files, 0, 1)
 	inject_at(&files, 0, open("y"))
@@ -77,20 +77,21 @@ deletes :: proc() {
 
 maps :: proc() {
 	m: map[string]File; defer __vidar.destroy(&m)
-	{ __vidar_old := m["one"]; m["one"] = open("1"); file_destroy(&__vidar_old) }
-	{ __vidar_old := m["one"]; m["one"] = open("1b"); file_destroy(&__vidar_old) }
-	{ __vidar_old := m["two"]; m["two"] = open("2"); file_destroy(&__vidar_old) }
+	{ __vidar_new: type_of(m["one"]) = open("1"); __vidar_old := m["one"]; m["one"] = __vidar_new; file_destroy(&__vidar_old) }
+	{ __vidar_new: type_of(m["one"]) = open("1b"); __vidar_old := m["one"]; m["one"] = __vidar_new; file_destroy(&__vidar_old) }
+	{ __vidar_new: type_of(m["two"]) = open("2"); __vidar_old := m["two"]; m["two"] = __vidar_new; file_destroy(&__vidar_old) }
 	__vidar.destroy_delete_key(&m, "two")
 	for k, &v in m do fmt.println("in map", k, v.name)
 	if p, ok := &m["one"]; ok do fmt.println("found", p.name)
 	gone, f := delete_key(&m, "one"); defer __vidar.destroy(&gone); defer __vidar.destroy(&f)
 	fmt.println("took", gone, f.name)
-	{ __vidar_old := m["three"]; m["three"] = open("3"); file_destroy(&__vidar_old) }
+	{ __vidar_new: type_of(m["three"]) = open("3"); __vidar_old := m["three"]; m["three"] = __vidar_new; file_destroy(&__vidar_old) }
 	nested: map[string][dynamic]File; defer __vidar.destroy(&nested)
 	list: [dynamic]File; defer __vidar.destroy(&list)
 	append(&list, open("n1"), open("n2"))
 	// move!(list) — input.vidar:90
-	{ __vidar_old := nested["list"]; nested["list"] = __vidar.take(&list); __vidar.destroy(&__vidar_old) }
+	// move!(list) — input.vidar:90
+	{ __vidar_new: type_of(nested["list"]) = __vidar.take(&list); __vidar_old := nested["list"]; nested["list"] = __vidar_new; __vidar.destroy(&__vidar_old) }
 	fmt.println("end of maps")
 }
 
@@ -100,7 +101,7 @@ clones :: proc() {
 	b := __vidar.clone(a); defer __vidar.destroy(&b)
 	fmt.println("cloned", len(b), b[0].name, b[1].name)
 	m: map[string]Handle; defer __vidar.destroy(&m)
-	{ __vidar_old := m["k"]; m["k"] = handle("v"); handle_destroy(&__vidar_old) }
+	{ __vidar_new: type_of(m["k"]) = handle("v"); __vidar_old := m["k"]; m["k"] = __vidar_new; handle_destroy(&__vidar_old) }
 	v, ok := m["k"]; v = handle_clone(v); defer handle_destroy(&v)
 	fmt.println("comma ok", v.name, ok)
 	u: U = handle("u"); defer __vidar.destroy(&u)

@@ -34,7 +34,7 @@ main :: proc() {
 	fmt.println("size", size(f))
 	{
 		g := open("inner"); defer file_destroy(&g)
-		{ __vidar_old := g; g = open("inner2"); file_destroy(&__vidar_old) } // the old value is destroyed
+		{ __vidar_new: type_of(g) = open("inner2"); __vidar_old := g; g = __vidar_new; file_destroy(&__vidar_old) } // the old value is destroyed
 		fmt.println("in block", g.name)
 	}
 	x := pick(true); defer file_destroy(&x)
@@ -44,9 +44,9 @@ main :: proc() {
 	a, b := open("first"), open("second"); defer file_destroy(&a); defer file_destroy(&b)
 	fmt.println(a.name, b.name)
 	p := &a
-	{ __vidar_old := p^; p^ = open("through a pointer"); file_destroy(&__vidar_old) }
+	{ __vidar_new: type_of(p^) = open("through a pointer"); __vidar_old := p^; p^ = __vidar_new; file_destroy(&__vidar_old) }
 	z: File; defer file_destroy(&z) // the zero value is destroyed too, so destroy must accept it
-	{ __vidar_old := z; z = open("late"); file_destroy(&__vidar_old) }
+	{ __vidar_new: type_of(z) = open("late"); __vidar_old := z; z = __vidar_new; file_destroy(&__vidar_old) }
 	count := 0
 	bump := __closure_0(&z, &count)
 	bump.call(bump.env)

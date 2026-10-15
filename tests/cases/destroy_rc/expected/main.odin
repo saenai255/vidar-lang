@@ -32,7 +32,7 @@ weak_refs :: proc() {
 	w: rc.Weak(File); defer rc.weak_release(&w)
 	{
 		r := rc.new(open("watched")); defer rc.release(&r)
-		{ __vidar_old := w; w = rc.downgrade(r); rc.weak_release(&__vidar_old) }
+		{ __vidar_new: type_of(w) = rc.downgrade(r); __vidar_old := w; w = __vidar_new; rc.weak_release(&__vidar_old) }
 		u := rc.upgrade(w); defer rc.release(&u)
 		fmt.println("alive", rc.alive(w), "owners", rc.count(r), rc.get(u).name)
 		ws := lib.dup(w); defer __vidar.destroy(&ws) // generic code clones each Weak through vidar:rc's registered procs

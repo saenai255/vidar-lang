@@ -52,7 +52,7 @@ main :: proc() {
 	fmt.println("-- impl and fields")
 	{
 		s := Server{name = "s", log = make_log("s"), spare = {open("spare0"), open("spare1")}}; defer __Server_destroy(&s)
-		{ __vidar_old := s.extra; s.extra = open("extra"); __vidar.destroy(&__vidar_old) }
+		{ __vidar_new: type_of(s.extra) = open("extra"); __vidar_old := s.extra; s.extra = __vidar_new; __vidar.destroy(&__vidar_old) }
 	}
 	fmt.println("-- array, Maybe, union")
 	{

@@ -191,7 +191,7 @@ open :: proc(name: string) -> File {
 }
 main :: proc() {
 	f := open("a"); defer file_destroy(&f)
-	{ __vidar_old := f; f = open("b"); file_destroy(&__vidar_old) }
+	{ __vidar_new: type_of(f) = open("b"); __vidar_old := f; f = __vidar_new; file_destroy(&__vidar_old) }
 	l := Log{out = open("log")}; defer __Log_destroy(&l)
 	fmt.println(f.name, l.level)
 }

@@ -18,6 +18,6 @@ open :: proc(name: string) -> (File, Error) {
 }
 
 open_named :: proc(name: string) -> (f: File, err: Error) {
-	{ __vidar_old := f; f = File{name}; file_destroy(&__vidar_old) }
+	{ __vidar_new: type_of(f) = File{name}; __vidar_old := f; f = __vidar_new; file_destroy(&__vidar_old) }
 	return
 }

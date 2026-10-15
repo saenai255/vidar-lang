@@ -59,7 +59,7 @@ borrows :: proc() {
 	append(&files, File{"a"}, File{"b"})
 	for file in files do fmt.println("loop", file.name)
 	m: map[string]File; defer __vidar.destroy(&m)
-	{ __vidar_old := m["k"]; m["k"] = File{"v"}; file_destroy(&__vidar_old) }
+	{ __vidar_new: type_of(m["k"]) = File{"v"}; __vidar_old := m["k"]; m["k"] = __vidar_new; file_destroy(&__vidar_old) }
 	for name in m do fmt.println("key", name)
 	for name, file in m do fmt.println("value", name, file.name)
 	each(files[:], __vidar.Closure(proc(__vidar.Env, File)){call = proc(__env_raw: __vidar.Env, x: File) { fmt.println("each", x.name) }})
@@ -97,7 +97,7 @@ moves :: proc() {
 	u := handle_clone(t); defer handle_destroy(&u) // t is captured by reference: a clone
 	show.call(show.env)
 	m: map[string]Handle; defer __vidar.destroy(&m)
-	{ __vidar_old := m["m"]; m["m"] = Handle{"m", 0}; handle_destroy(&__vidar_old) }
+	{ __vidar_new: type_of(m["m"]) = Handle{"m", 0}; __vidar_old := m["m"]; m["m"] = __vidar_new; handle_destroy(&__vidar_old) }
 	l := lookup(&m, "m"); defer __vidar.destroy(&l)
 	get := getter(42); defer __vidar.destroy(&get)
 	fmt.println("end", h.n, p.n, rp.n, s.n, u.n, l.n, get.call(get.env))

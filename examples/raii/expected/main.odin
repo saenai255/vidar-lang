@@ -142,15 +142,15 @@ main :: proc() {
 	fmt.println("server:")
 	{
 		s := Server{name = "main"}; defer __Server_destroy(&s)
-		{ __vidar_old := s.listener; s.listener = connect("0.0.0.0") or_else Conn{}; conn_destroy(&__vidar_old) }
+		{ __vidar_new: type_of(s.listener) = connect("0.0.0.0") or_else Conn{}; __vidar_old := s.listener; s.listener = __vidar_new; conn_destroy(&__vidar_old) }
 		for peer in ([]string{"alice", "bob", "carol"}) {
 			c := connect(peer) or_else Conn{}; defer conn_destroy(&c)
 			// move!(c) — main.vidar:145
 			accept(&s, __vidar.take(&c))
 		}
 		__vidar.destroy_ordered_remove(&s.clients, 1) // bob's connection is closed here
-		{ __vidar_old := s.by_peer["dave"]; s.by_peer["dave"] = connect("dave") or_else Conn{}; conn_destroy(&__vidar_old) }
-		{ __vidar_old := s.by_peer["dave"]; s.by_peer["dave"] = connect("dave again") or_else Conn{}; conn_destroy(&__vidar_old) } // the old one is closed
+		{ __vidar_new: type_of(s.by_peer["dave"]) = connect("dave") or_else Conn{}; __vidar_old := s.by_peer["dave"]; s.by_peer["dave"] = __vidar_new; conn_destroy(&__vidar_old) }
+		{ __vidar_new: type_of(s.by_peer["dave"]) = connect("dave again") or_else Conn{}; __vidar_old := s.by_peer["dave"]; s.by_peer["dave"] = __vidar_new; conn_destroy(&__vidar_old) } // the old one is closed
 		// a closure that borrows the server: it can't outlive this proc
 		each := __closure_0(&s)
 		each.call(each.env, __vidar.Closure(proc(__vidar.Env, ^Conn)){call = proc(__env_raw: __vidar.Env, c: ^Conn) { fmt.printfln("  client %s", c.peer) }})

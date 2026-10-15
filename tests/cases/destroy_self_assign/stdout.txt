@@ -1,0 +1,9 @@
+r 1
+drop 1
+r 2
+r 2
+drop 2
+r 20
+h 5
+drop 5
+drop 20

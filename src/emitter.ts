@@ -614,7 +614,14 @@ export class Emitter {
     const destroyAssign: How | undefined = A(n)._destroyAssign;
     if (destroyAssign && n.k === "Assign") {
       const lhs = this.emit(n.lhs[0]);
-      text = `{ __vidar_old := ${lhs}; ${text}; ${this.destroyRef(destroyAssign, lhs)}(&__vidar_old) }`;
+      const destroy = `${this.destroyRef(destroyAssign, lhs)}(&__vidar_old)`;
+      // the new value first: it may move the old one out (`x = f(move!(x))`), which leaves the target zero
+      if (A(n)._orReturn) text = `{ __vidar_old := ${lhs}; ${text}; ${destroy} }`;
+      else {
+        const rhs = this.emit(n.rhs[0]);
+        const lines = (text.match(/\n/g)?.length ?? 0) - (rhs.match(/\n/g)?.length ?? 0);
+        text = `{ __vidar_new: type_of(${lhs}) = ${rhs}; __vidar_old := ${lhs}; ${lhs} = __vidar_new; ${destroy} }` + "\n".repeat(Math.max(0, lines));
+      }
     }
     const destroyMove: DestroyMove[] | undefined = A(n)._destroyMove;
     if (destroyMove) text = `{ ${destroyMove.map((m) => `defer ${m.zero ? `${this.emit(m.x)} = ${m.zero}` : `${this.runtimeRef()}.forget(&${this.emit(m.x)})`}; `).join("")}${text} }`;

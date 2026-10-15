@@ -34,7 +34,8 @@ keep :: proc( f: File) -> File { f := f; defer file_destroy(&f); { defer f = {};
 
 store :: proc(dst: ^File, f: File) { f := f; defer file_destroy(&f);
 	// move!(f) — input.vidar:36
-	{ __vidar_old := dst^; dst^ = __vidar.take(&f); file_destroy(&__vidar_old) }
+	// move!(f) — input.vidar:36
+	{ __vidar_new: type_of(dst^) = __vidar.take(&f); __vidar_old := dst^; dst^ = __vidar_new; file_destroy(&__vidar_old) }
 }
 
 consume :: proc( h: Handle) { h := h; defer handle_destroy(&h);
@@ -53,7 +54,7 @@ main :: proc() {
 		fmt.println("refs", refs)
 		q := __Pair_clone(p); defer __Pair_destroy(&q)                 // cloned field by field: p is read below
 		fmt.println("refs", refs, q.n, p.n)
-		{ __vidar_old := q.a; q.a = handle_clone(h); handle_destroy(&__vidar_old) }
+		{ __vidar_new: type_of(q.a) = handle_clone(h); __vidar_old := q.a; q.a = __vidar_new; handle_destroy(&__vidar_old) }
 		fmt.println("refs", refs)
 	}
 	fmt.println("refs", refs)
