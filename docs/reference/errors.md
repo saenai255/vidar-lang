@@ -13,7 +13,7 @@ Every program here is a test in `tests/errors/` and `tests/errors_pkg/` that mus
 - [Interfaces](#interfaces): 42 errors
 - [Optimization attributes](#optimization-attributes): 17 errors
 - [Packages and imports](#packages-and-imports): 7 errors
-- [Other](#other): 37 errors
+- [Other](#other): 41 errors
 
 ## `do!` blocks
 
@@ -3081,6 +3081,38 @@ logger :: proc() -> closure() {
 main :: proc() { logger()() }
 ```
 
+### destroy capture escape call
+
+The message contains:
+
+```text
+this closure borrows 'f', a File that has impl Destroy, and is passed to remember
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+callbacks: [dynamic]closure()
+
+remember :: proc(cb: closure()) { append(&callbacks, cb) }
+
+setup :: proc() {
+	f := open("log")
+	remember(proc[f]() { fmt.println(f.name) })
+}
+
+main :: proc() { setup() }
+```
+
 ### destroy clone alone
 
 The message contains:
@@ -3348,6 +3380,33 @@ close_all :: proc(files: []File) {
 main :: proc() {}
 ```
 
+### destroy delete value
+
+The message contains:
+
+```text
+it takes the variable or field that holds it
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+files :: proc() -> [dynamic]File { return nil }
+
+main :: proc() {
+	delete(files())
+}
+```
+
 ### destroy dropped
 
 The message contains:
@@ -3370,6 +3429,32 @@ open :: proc(name: string) -> File { return File{name} }
 
 main :: proc() {
 	open("a")
+}
+```
+
+### destroy fixed dynamic
+
+The message contains:
+
+```text
+a fixed-capacity dynamic array can't hold a File
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	files: [dynamic; 4]File
+	fmt.println(len(files))
 }
 ```
 
@@ -3586,6 +3671,32 @@ main :: proc() {
 	m: map[string]File
 	n := m
 	fmt.println(len(n))
+}
+```
+
+### destroy map insert
+
+The message contains:
+
+```text
+map_insert would overwrite or copy File values without destroying the old ones
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	m: map[string]File
+	map_insert(&m, "a", open("a"))
 }
 ```
 

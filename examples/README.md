@@ -12,6 +12,7 @@ Each example is its own directory, and the directory is the program. Run one wit
 | [macros/](macros) | comptime procs (`name :: proc!`): `Expr(T)`, `Stmt`, `Type` and `Ident` parameters, `quote` and splicing, hygiene, trailing blocks, defaults, reflection, `compile_error` |
 | [comptime/](comptime) | `name!(...)` and `comptime! { ... }`: running procs at compile time, strings, lookup tables and structs, static assertions, integer wrap-around |
 | [builtins/](builtins) | the built-in macros `do!`, `dbg!`, `check!`, `with_allocator!`, `locked!`, `timed!`, `track!`, `todo!`, `unimplemented!` |
+| [raii/](raii) | `impl Destroy` and `impl Clone`: cleanup on every error path, a lock guard, a struct of connections destroyed field by field, `#owned` and `move!`, deep-copied buffers and last-use moves, an `Rc`/`Weak` tree, a generic stack |
 | [scoped/](scoped) | the built-in `scoped! { ... }` / `scoped!(allocator) { ... }`: a block with its own temp allocator, freed when the block ends |
 | [fanout/](fanout) | *Disabled for now (needs `VIDAR_GOROUTINES=1`).* CPU-bound goroutines, for timing `-define:VIDAR_THREADS=N`; the checksum is the same at any thread count |
 | [goroutines/](goroutines) | *Disabled for now (needs `VIDAR_GOROUTINES=1`).* `import "vidar:sched"`: goroutines from closures, channels, `select` with a timeout, `try_select`, wait groups, and a TCP echo server over `core:nbio` |

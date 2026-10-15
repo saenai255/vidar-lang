@@ -25,9 +25,10 @@ The server analyzes the program rooted at the open file's package: that package 
 
 | Feature | Details |
 |---|---|
-| **Hover** | Signature and kind for procs, types, interfaces (with their impls), interface methods (with their interface and the procs implementing them), macros, imports, locals, struct fields and enum members (also at their uses: `x.field`, `Enum.Member`, `.Member`). Also shows the generated Odin name (when a cycle prefixes it) and whether a variable is captured through a pointer (`&x`). On a macro call's name: the code it expands to, as the emitter writes it, with statements it runs first (`do!`); cut after 40 lines. |
+| **Hover** | Signature and kind for procs, types, interfaces (with their impls), interface methods (with their interface and the procs implementing them), macros, imports, locals, struct fields and enum members (also at their uses: `x.field`, `Enum.Member`, `.Member`). Also shows the generated Odin name (when a cycle prefixes it) and whether a variable is captured through a pointer (`&x`). On a macro call's name: the code it expands to, as the emitter writes it, with statements it runs first (`do!`); cut after 40 lines. With [`impl Destroy`](../language/destructors.md): on a type, how it is destroyed and copied (its procs, its fields, move-only or cloneable); on a local, where and by what it is destroyed, and whether its last use moves it; on a parameter, loop value or capture, that it is borrowed. On a directive (`#owned`, `#partial`, ...), what it does. |
 | **Outline** | Procs, macros, structs (fields), interfaces (methods), impl blocks (bindings). |
-| **Inlay hints** | What `-opt` would decide, without building with it. See [Inlay hints](#inlay-hints-and-code-lens). |
+| **Inlay hints** | Where values are destroyed, moved and cloned, and what `-opt` would decide, without building with it. See [Inlay hints](#inlay-hints-and-code-lens). |
+| **Completion** | Names in scope, keywords, package members (`rc.`), struct fields, and directives after `#`, each with its documentation. |
 | **Semantic tokens** | Names colored by what they are rather than how they look. See [Semantic tokens](#semantic-tokens). |
 
 ### Navigation
@@ -91,11 +92,38 @@ Uses are resolved through the analyzer's types. Hover, definition, references, r
 - The packages are every directory of `core/`, `base/` and `vendor/` under `odin root` (read once, with the `odinPath` setting), by their last path part, plus `vidar:sched`. Without `odin`, a fixed table of about 40 common ones is used.
 - When several packages share the name (`noise` is `core:crypto/noise` and `core:math/noise`), each gets an action. One is preferred only when it is the common one from the table, or the only one outside `vendor:`.
 
+**`impl Destroy` errors.** None of these fixes is preferred, since each changes what the code means; "fix all" leaves them alone:
+
+- **A copy of a destructible value** (`b := a`, `append(&files, f)`): "Move it instead (`move!(a)`)", which leaves `a` zero.
+- **A borrowed parameter used as an owned one** (`delete(files)`, `move!(f)`, passing it to an `#owned` parameter): "Take 'files' over (`#owned files`)". Callers then have to pass a new value, a clone or `move!(x)`.
+- **`v, ok := m[k]` copying a map value or union variant**: "Take a pointer to it instead (`&`)", giving `v, ok := &m[k]`.
+
 **An `-opt` decision you want undone** (an automatic table, specialization or memo, a stack buffer, a perfect-hash switch): add its opt-out attribute (`@(no_table)`, `@(no_specialize)`, ...) to the proc.
 
 ### Inlay hints and code lens
 
-**Inlay hints** show what `-opt` would decide, without building with it:
+**Ownership hints** show what [`impl Destroy`](../language/destructors.md) does, which the source doesn't spell out:
+
+The hints are shown here between `‹›`:
+
+```odin
+main :: proc() {
+	a := open("a")
+	a ‹drops old› = open("c")
+	g := ‹clone› h                  // h is read later: a clone, by handle_clone
+	k := ‹move› h                   // h's last use: moved, no clone
+	clear(&files) ‹destroys what it drops›
+} ‹drop k, g, h, a›                 // destroyed here, last declared first
+```
+
+- `drop a, b` after the end of a block (or proc, for `#owned` parameters): the locals destroyed there, in the order they are destroyed. The tooltip names each one's destroy proc.
+- `move` before a copy that moves (the last use of a local, or a returned local), and `clone` before one that clones, with the clone proc in the tooltip.
+- `drops old` after an assignment's target, whose old value is destroyed.
+- After `clear`, `resize`, `ordered_remove` and the other core procs vidar replaces: what the replacement destroys.
+
+Borrows (by-value parameters, loop values, captures) get no hint. They come from the ordinary analysis, so they cost nothing extra. Turn them off with the `ownershipHints` setting (`false`).
+
+**`-opt` hints** show what `-opt` would decide, without building with it:
 
 - `table` / `specialized ×2` after a proc's name;
 - `unchecked` after a statement whose indexes are proven in bounds;
@@ -255,5 +283,6 @@ LSP `initializationOptions`:
 | `ols` | `true` | forward to ols |
 | `olsPath` | `"ols"` | the ols binary |
 | `optHints` | `"on"` | `"on"`, `"all"` (also decisions against), or `"off"` |
+| `ownershipHints` | `true` | show where values are destroyed, moved and cloned |
 | `optCodeLens` | `true` | show the code lens |
 | `indexWorkspace` | `true` | analyze every program in the workspace folders |

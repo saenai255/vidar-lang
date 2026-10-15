@@ -1,0 +1,185 @@
+package main
+
+import "core:fmt"
+import "core:strings"
+import "vidar:rc"
+
+// ---- a resource: a connection that must be closed ----
+
+Conn :: struct {
+	id:   int,
+	peer: string,
+}
+
+conn_destroy :: proc(c: ^Conn) {
+	if c.id == 0 do return // the zero value: nothing to close
+	fmt.printfln("  close conn %d (%s)", c.id, c.peer)
+}
+
+impl Destroy for Conn { destroy = conn_destroy }
+
+next_id := 0
+
+Error :: enum { None, Refused }
+
+connect :: proc(peer: string) -> (Conn, Error) {
+	if peer == "" do return {}, .Refused
+	next_id += 1
+	return Conn{next_id, peer}, nil
+}
+
+// every early return closes what is open so far
+handshake :: proc(a, b: string) -> Error {
+	first := connect(a) or_return
+	second := connect(b) or_return // on failure, first is closed here
+	fmt.printfln("  handshake %s <-> %s", first.peer, second.peer)
+	return nil
+}
+
+// ---- a guard: unlocks when its scope ends ----
+
+Lock :: struct { held: bool }
+
+Guard :: struct { lock: ^Lock }
+
+guard_destroy :: proc(g: ^Guard) {
+	if g.lock == nil do return
+	g.lock.held = false
+	fmt.println("  unlocked")
+}
+
+impl Destroy for Guard { destroy = guard_destroy }
+
+acquire :: proc(l: ^Lock) -> Guard {
+	l.held = true
+	fmt.println("  locked")
+	return Guard{l}
+}
+
+// ---- composition: a struct of resources is destroyed field by field ----
+
+Server :: struct {
+	name:      string,
+	listener:  Conn,
+	clients:   [dynamic]Conn,
+	by_peer:   map[string]Conn,
+}
+
+// #owned: the server takes the connection over
+accept :: proc(s: ^Server, #owned c: Conn) {
+	append(&s.clients, move!(c))
+}
+
+// ---- a cloneable value: copies are deep ----
+
+Buffer :: struct { data: [dynamic]u8 }
+
+buffer_destroy :: proc(b: ^Buffer) { delete(b.data) }
+
+buffer_clone :: proc(b: Buffer) -> Buffer {
+	out := Buffer{make([dynamic]u8, len(b.data))}
+	copy(out.data[:], b.data[:])
+	return out
+}
+
+impl Destroy for Buffer { destroy = buffer_destroy }
+impl Clone for Buffer { clone = buffer_clone }
+
+buffer :: proc(text: string) -> Buffer {
+	b: Buffer
+	append(&b.data, text)
+	return b
+}
+
+text :: proc(b: Buffer) -> string { return string(b.data[:]) }
+
+// ---- shared ownership: a tree whose children point back with a Weak ----
+
+Node :: struct {
+	name:     string,
+	conn:     Conn,
+	parent:   rc.Weak(Node),
+	children: [dynamic]rc.Rc(Node),
+}
+
+add_child :: proc(parent: rc.Rc(Node), name: string) -> rc.Rc(Node) {
+	c := connect(name) or_else Conn{}
+	child := rc.new(Node{name = name, conn = move!(c), parent = rc.downgrade(parent)})
+	append(&rc.get(parent).children, child) // a second owner: the Rc is cloned
+	return child
+}
+
+path :: proc(n: rc.Rc(Node)) -> string {
+	up := rc.upgrade(rc.get(n).parent)
+	if rc.get(up) == nil do return rc.get(n).name
+	return strings.concatenate({path(up), "/", rc.get(n).name}, context.temp_allocator)
+}
+
+// ---- generic code: destroys whatever its T needs ----
+
+Stack :: struct($T: typeid) { items: [dynamic]T }
+
+push :: proc(s: ^Stack($T), #owned x: T) { append(&s.items, move!(x)) }
+
+drop_top :: proc(s: ^Stack($T)) { pop(&s.items) }
+
+main :: proc() {
+	fmt.println("errors:")
+	fmt.println("  result:", handshake("db", "cache"))
+	fmt.println("  result:", handshake("db", ""))
+
+	fmt.println("guard:")
+	lock: Lock
+	{
+		g := acquire(&lock)
+		fmt.println("  held:", lock.held)
+	}
+	fmt.println("  held:", lock.held)
+
+	fmt.println("server:")
+	{
+		s := Server{name = "main"}
+		s.listener = connect("0.0.0.0") or_else Conn{}
+		for peer in ([]string{"alice", "bob", "carol"}) {
+			c := connect(peer) or_else Conn{}
+			accept(&s, move!(c))
+		}
+		ordered_remove(&s.clients, 1) // bob's connection is closed here
+		s.by_peer["dave"] = connect("dave") or_else Conn{}
+		s.by_peer["dave"] = connect("dave again") or_else Conn{} // the old one is closed
+		// a closure that borrows the server: it can't outlive this proc
+		each := proc[&s](visit: closure(c: ^Conn)) { for &c in s.clients do visit(&c) }
+		each(proc[](c: ^Conn) { fmt.printfln("  client %s", c.peer) })
+		fmt.println("  shutting down")
+	}
+
+	fmt.println("buffers:")
+	{
+		a := buffer("hello")
+		b := a                 // a clone: a is read below
+		append(&b.data, '!')
+		c := b                 // b's last use: moved, no clone
+		fmt.println(" ", text(a), text(c))
+	}
+
+	fmt.println("tree:")
+	{
+		c := connect("root") or_else Conn{}
+		root := rc.new(Node{name = "root", conn = move!(c)})
+		usr := add_child(root, "usr")
+		bin := add_child(usr, "bin")
+		fmt.println(" ", path(bin), "owners of usr:", rc.count(usr))
+	}
+
+	fmt.println("stack:")
+	{
+		s: Stack(Conn)
+		for peer in ([]string{"x", "y", "z"}) {
+			c := connect(peer) or_else Conn{}
+			push(&s, move!(c))
+		}
+		drop_top(&s)
+		fmt.println("  left:", len(s.items))
+	}
+	fmt.println("done")
+}

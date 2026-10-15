@@ -23,7 +23,7 @@ checksum :: proc(n: int) -> (sum: int, err: Error) {
 }
 ```
 
-A type without `impl Destroy` is unaffected, and a program without any `impl Destroy` is transpiled exactly as before. A type with `impl Destroy` can't be copied, unless it also has [`impl Clone`](#clone), which turns each copy into a call to its clone proc. [`vidar:rc`](#shared-values-vidarrc) uses both for `Rc(T)`, a value shared by several owners. Dynamic arrays and maps [own their elements](#containers).
+A type without `impl Destroy` is unaffected, and a program without any `impl Destroy` is transpiled exactly as before. A type with `impl Destroy` can't be copied, unless it also has [`impl Clone`](#clone), which turns each copy into a call to its clone proc. [`vidar:rc`](#shared-values-vidarrc) uses both for `Rc(T)`, a value shared by several owners. Dynamic arrays and maps [own their elements](#containers). [examples/raii](../../examples/raii) puts it all together, the [cookbook](#cookbook) has the common patterns, and [pitfalls](#pitfalls) lists what it doesn't protect you from.
 
 ## What gets destroyed, and when
 
@@ -236,6 +236,139 @@ v, ok := m["k"]; v = handle_clone(v); defer handle_destroy(&v)           // v, o
 ```
 
 `__Log_destroy` (and `__Pair_clone`) is written at the end of the file that declares the type. When anything is destroyed, cloned or checked at run time, the program also gets `vidar_runtime/destroy.odin`, and each file declaring a destructible type registers it in an `@(init)` proc.
+
+## In the editor
+
+The [language server](../tools/language-server.md#inlay-hints-and-code-lens) shows what the source doesn't spell out, as inlay hints: `drop b, a` after the block where locals are destroyed, `move` or `clone` before each copy, `drops old` on assignments, and a note after core procs that destroy what they drop. Hovers say how a type is destroyed and copied, and where a local is destroyed. Copies, borrowed parameters and comma-ok copies have quick fixes (`move!(x)`, `#owned`, `&m[k]`).
+
+## Cookbook
+
+**A guard: run code when a scope ends.** A struct whose destroy proc undoes what making it did. Unlike `defer`, the guard can be returned and stored:
+
+```odin
+Guard :: struct { lock: ^Lock }
+guard_destroy :: proc(g: ^Guard) {
+	if g.lock != nil do unlock(g.lock)
+}
+impl Destroy for Guard { destroy = guard_destroy }
+
+acquire :: proc(l: ^Lock) -> Guard {
+	lock(l)
+	return Guard{l}
+}
+
+update :: proc(l: ^Lock) -> Error {
+	g := acquire(l)
+	step() or_return       // unlocked on this return too
+	return nil
+}
+```
+
+**Cleanup on every error path.** Each value made so far is destroyed on the `or_return` that fails, and nothing else is:
+
+```odin
+handshake :: proc(a, b: string) -> Error {
+	first := connect(a) or_return
+	second := connect(b) or_return     // on failure: first is closed
+	exchange(&first, &second) or_return
+	return nil                         // second, then first, are closed
+}
+```
+
+**A struct of resources.** No destroy proc to write: a struct holding destructible fields is destroyed field by field, last first. Give it an `impl Destroy` only for what the fields can't do themselves; it runs before them:
+
+```odin
+Server :: struct {
+	listener: Conn,
+	clients:  [dynamic]Conn,       // each Conn is closed, then the array freed
+	by_name:  map[string]Conn,
+}
+```
+
+**Handing a value over.** Make the parameter `#owned`, and move the value in:
+
+```odin
+accept :: proc(s: ^Server, #owned c: Conn) {
+	append(&s.clients, move!(c))
+}
+
+c := connect("alice") or_return
+accept(&s, move!(c))            // c is zero now
+accept(&s, connect("bob") or_return)   // a new value needs no move!
+```
+
+**Building and returning.** A local that is returned moves out, so constructors are ordinary procs:
+
+```odin
+make_server :: proc() -> (s: Server, err: Error) {
+	s.listener = listen() or_return     // on failure, s goes back with the error, and the caller destroys what it holds
+	return
+}
+```
+
+**Values with heap memory: write a clone.** Copies of a type with `impl Clone` are deep, and a copy on the variable's last use moves instead:
+
+```odin
+Buffer :: struct { data: [dynamic]u8 }
+buffer_destroy :: proc(b: ^Buffer) { delete(b.data) }
+buffer_clone :: proc(b: Buffer) -> Buffer {
+	out := Buffer{make([dynamic]u8, len(b.data))}
+	copy(out.data[:], b.data[:])
+	return out
+}
+impl Destroy for Buffer { destroy = buffer_destroy }
+impl Clone for Buffer { clone = buffer_clone }
+
+b := a       // a clone, if a is read later; a move otherwise
+```
+
+**Shared values and back pointers.** `Rc` for owners, `Weak` for pointers that must not keep the value alive, such as a child's pointer to its parent:
+
+```odin
+Node :: struct {
+	parent:   rc.Weak(Node),
+	children: [dynamic]rc.Rc(Node),
+}
+
+child := rc.new(Node{parent = rc.downgrade(root)})
+append(&rc.get(root).children, child)    // a second owner
+up := rc.upgrade(rc.get(child).parent)   // the zero Rc once the parent is gone
+if p := rc.get(up); p != nil do visit(p)
+```
+
+**Generic containers.** Write them over `[dynamic]T` with core's procs; they destroy what they drop whatever `T` is:
+
+```odin
+Stack :: struct($T: typeid) { items: [dynamic]T }
+push :: proc(s: ^Stack($T), #owned x: T) { append(&s.items, move!(x)) }
+drop_top :: proc(s: ^Stack($T)) { pop(&s.items) }   // destroys the top when T needs it
+```
+
+**Taking a value out of a container.** `pop` and `delete_key` give you the value; `move!` through a pointer leaves a zero element behind:
+
+```odin
+last := pop(&files)                  // last owns it now
+_, f := delete_key(&by_name, "bob")  // so does f
+p := &files[0]
+mine := move!(p^)                    // files[0] is a zero File now
+```
+
+## Pitfalls
+
+What vidar doesn't check, or does differently from what you might expect:
+
+- **Destroy procs get zero values.** A local declared without a value, a moved-from local, the value returned along with an error, and the elements `resize` adds are all destroyed. Check for the zero value and return.
+- **Pointers outlive what they point to.** `p := &f` is a plain pointer. Nothing stops it from being stored somewhere that outlives `f`, as with any Odin pointer. The same goes for `files[:]` after `files` is destroyed or `append` reallocates it, and for `&m[k]` after the map grows.
+- **A borrowing closure is checked against the proc, not the block.** A closure that captures `f` by value can't be returned or stored outside the proc, but inside it nothing stops it from being called after `f`'s block has ended. Captures of `&f` have the same gap.
+- **`move!` leaves zero behind.** Reading a moved-from variable gives the zero value, not an error. vidar catches nothing here; keep moves at the end of a variable's use.
+- **Clone procs don't run on a last use.** A copy that ends a local's use moves it instead. Don't count copies by counting clone calls, or make a clone proc do anything besides copying.
+- **Destruction order is reverse declaration order,** after any `defer` written later in the same block. A `defer` that reads a destroyed local runs before its destroy, but a `defer` in an outer block runs after the inner block's locals are gone.
+- **Heap values are yours.** `new(File)` and `new_clone(f)` give pointers, and `free` doesn't destroy. Destroy first (`file_destroy(p)`), then free, or use an `Rc`.
+- **`os.exit`, `panic` and `runtime.trap` skip destroys,** as they skip `defer`.
+- **The order a map is destroyed in is unspecified,** as is its iteration order.
+- **Core procs that copy elements aren't checked.** `slice.clone`, `slice.concatenate` and the like copy each element as plain bytes, so both copies get destroyed. Copy in a loop instead, with clones or `move!`.
+- **`Rc` counts are atomic only with `-define:VIDAR_THREADS=N` (N > 1).** At one thread, which is the default, sharing an `Rc` between threads you start yourself (not goroutines) races.
+- **A user-declared `Destroy` interface turns all of this off.** With `Destroy :: interface { ... }` in scope, `impl Destroy for T` is an ordinary interface impl, and nothing is destroyed automatically.
 
 ## Not supported yet
 
