@@ -23,8 +23,10 @@ What the compiler doesn't do yet, grouped by feature.
 ## Destructors
 
 - **No containers yet.** A type with `impl Destroy` can't be held in a slice, dynamic array, map or `distinct` type, or in a package-level variable; each is a compile error. Heap values (`new`, `free`) are never destroyed.
-- **No parametric impls.** `impl Destroy for Box($T)` isn't supported (a `Box(File)` is still destroyed through its fields).
-- **Generic code is checked at run time.** A copy of `T` in generic code fails Odin's `#assert` only where the file can name the type, and stops the program otherwise. Parameters are borrowed, so a generic proc that returns or stores its parameter can't be used with a destructible type. Temporaries of type `T` in generic code are never destroyed.
+- **Parametric impls cover every instance.** `impl Destroy for Box($T)` works, `impl Destroy for Box(int)` doesn't. Generic code that holds a `Box(int)` as a plain `T` stops the program when it destroys or copies it, since the impl's procs exist only per instance; `vidar:rc`'s `Rc` is the exception.
+- **Generic code is checked at run time.** A copy of a move-only `T` in generic code fails Odin's `#assert` only where the file can name the type, and stops the program otherwise. Parameters are borrowed unless `#owned`, so a generic proc that returns or stores a borrowed parameter clones it, and stops for a move-only type. Temporaries of type `T` in generic code are never destroyed.
+- **No closures.** A closure can't capture a destructible value by value, even one with `impl Clone`.
+- **`Rc` cycles leak.** There is no weak reference yet.
 - **Destroy procs see zero values.** Declarations without a value, returned locals and the results that come with an error are destroyed too.
 
 See [Destructors](language/destructors.md).

@@ -1,0 +1,35 @@
+package main
+
+import "core:fmt"
+
+Handle :: struct { id: int, refs: ^int }
+
+handle_destroy :: proc(h: ^Handle) {
+	if h.refs != nil do h.refs^ -= 1
+}
+
+handle_clone :: proc(h: Handle) -> Handle {
+	if h.refs != nil do h.refs^ += 1
+	return h
+}
+
+impl Destroy for Handle { destroy = handle_destroy }
+impl Clone for Handle { clone = handle_clone }
+
+Pair :: struct { a, b: Handle }
+
+consume :: proc(#owned h: Handle) {
+	fmt.println(h.id)
+}
+
+main :: proc() {
+	refs := 1
+	h := Handle{1, &refs}
+	g := h
+	p := Pair{h, g}
+	consume(move!(g))
+	fmt.println(refs, p.a.id)
+}
+
+// title: `impl Clone`, `#owned` and `move!`
+// about: Each copy of a `Handle` becomes a call to its clone proc, and a struct of them gets `__Pair_clone`. An `#owned` parameter is copied into a local on entry and destroyed there, and `move!(g)` takes `g`'s value and leaves it zero.

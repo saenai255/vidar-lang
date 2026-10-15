@@ -13,7 +13,7 @@ Every program here is a test in `tests/errors/` and `tests/errors_pkg/` that mus
 - [Interfaces](#interfaces): 42 errors
 - [Optimization attributes](#optimization-attributes): 17 errors
 - [Packages and imports](#packages-and-imports): 7 errors
-- [Other](#other): 20 errors
+- [Other](#other): 26 errors
 
 ## `do!` blocks
 
@@ -3001,6 +3001,73 @@ main :: proc() {
 }
 ```
 
+### destroy capture clone
+
+The message contains:
+
+```text
+'h' is a Handle, which has impl Destroy; a closure can't hold a copy of it. Capture &h
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+Handle :: struct { id: int }
+handle_destroy :: proc(h: ^Handle) {}
+handle_clone :: proc(h: Handle) -> Handle { return h }
+impl Destroy for Handle { destroy = handle_destroy }
+impl Clone for Handle { clone = handle_clone }
+
+main :: proc() {
+	h := Handle{1}
+	f := proc[h]() -> int { return h.id }
+}
+```
+
+### destroy clone alone
+
+The message contains:
+
+```text
+impl Clone for 'Point' needs impl Destroy for it too
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+Point :: struct { x, y: int }
+point_clone :: proc(p: Point) -> Point { return p }
+impl Clone for Point { clone = point_clone }
+
+main :: proc() {}
+```
+
+### destroy clone signature
+
+The message contains:
+
+```text
+must take one parameter of type Handle and return the copy to implement clone
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+Handle :: struct { id: int }
+handle_destroy :: proc(h: ^Handle) {}
+handle_clone :: proc(h: ^Handle) -> Handle { return h^ }
+impl Destroy for Handle { destroy = handle_destroy }
+impl Clone for Handle { clone = handle_clone }
+
+main :: proc() {}
+```
+
 ### destroy copy
 
 The message contains:
@@ -3221,6 +3288,26 @@ main :: proc() {
 }
 ```
 
+### destroy impl instance
+
+The message contains:
+
+```text
+impl Destroy for one instance of a parametric type is not supported
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+Box :: struct($T: typeid) { value: T }
+box_free :: proc(b: ^Box(int)) {}
+impl Destroy for Box(int) { destroy = box_free }
+
+main :: proc() {}
+```
+
 ### destroy impl not struct
 
 The message contains:
@@ -3237,26 +3324,6 @@ package main
 Handle :: distinct int
 handle_close :: proc(h: ^Handle) {}
 impl Destroy for Handle { destroy = handle_close }
-
-main :: proc() {}
-```
-
-### destroy impl parametric
-
-The message contains:
-
-```text
-impl Destroy for a parametric type is not supported yet
-```
-
-This program fails to compile:
-
-```odin
-package main
-
-Box :: struct($T: typeid) { value: T }
-box_free :: proc(b: ^Box($T)) {}
-impl Destroy for Box($T) { destroy = box_free }
 
 main :: proc() {}
 ```
@@ -3332,6 +3399,54 @@ main :: proc() {
 }
 ```
 
+### destroy move param
+
+The message contains:
+
+```text
+'f' is a parameter, which is borrowed, so it can't be moved; declare it #owned
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) {}
+impl Destroy for File { destroy = file_destroy }
+
+keep :: proc(f: File) -> File {
+	return move!(f)
+}
+
+main :: proc() {}
+```
+
+### destroy move value
+
+The message contains:
+
+```text
+move! takes a variable, field or element, which it leaves zero
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) {}
+impl Destroy for File { destroy = file_destroy }
+
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	f := move!(open("a"))
+}
+```
+
 ### destroy multi assign
 
 The message contains:
@@ -3356,6 +3471,31 @@ main :: proc() {
 	f := open("a")
 	g := open("b")
 	f, g = open("c"), open("d")
+}
+```
+
+### destroy owned copy
+
+The message contains:
+
+```text
+'f' is a File, which has impl Destroy, and passing it to #owned parameter 'x' would copy it; both copies would be destroyed. Move it there with move!(f)
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) {}
+impl Destroy for File { destroy = file_destroy }
+
+consume :: proc(#owned x: File) {}
+
+main :: proc() {
+	f := File{"a"}
+	consume(f)
 }
 ```
 

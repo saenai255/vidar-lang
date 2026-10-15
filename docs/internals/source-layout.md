@@ -21,7 +21,8 @@ For how these files fit together, read [Architecture](architecture.md) first.
 | `src/printers.ts` | `-opt`: generated `%v` / `%#v` printers |
 | `src/strswitch.ts` | `-opt`: perfect hashes for string switches |
 | `src/stackbuf.ts` | `-opt`: which constant-size `make`s go on the stack |
-| `src/destroy.ts` | `impl Destroy`: derived destructors for structs, which locals get a `defer` (a direct call, or `__vidar.destroy` for arrays, unions, generic code and types vidar can't tell), moves on `return`, copy errors and run-time copy checks, and the source of `vidar_runtime/destroy.odin` (the registry and plans read from type info) |
+| `src/destroy.ts` | `impl Destroy` and `impl Clone`: derived destructors and clones for structs, which locals and `#owned` parameters get a `defer` (a direct call, or `__vidar.destroy` for arrays, unions, generic code and types vidar can't tell), moves on `return` and by `move!`, clones or errors at copies, run-time copy checks, and the source of `vidar_runtime/destroy.odin` (the registry, plans read from type info, and parametric types found by their declaring file) |
+| `src/rc.ts` | the bundled `vidar:rc` package: `Rc(T)`, built on `impl Destroy` and `impl Clone` |
 | `src/escape.ts` | the error for a closure holding `&x` that outlives `x`, through locals and calls (per-proc parameter summaries) |
 | `src/autoopt.ts` | `-opt` after analysis: which procs become tables or specialized copies, and the `-opt-report` notes |
 | `src/members.ts` | field and enum-member uses, resolved through the analyzer's types after analysis, for the language server (never run by the compiler) |
