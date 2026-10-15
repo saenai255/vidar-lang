@@ -1,0 +1,21 @@
+size 4
+close inner
+in block inner2
+close inner2
+close a
+picked a b
+close loop 0
+close loop 1
+first second
+close first
+count 4
+a user defer runs first: case
+close case
+in scoped scoped
+close scoped
+close late
+close second
+close through a pointer
+close b
+close a
+close main

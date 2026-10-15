@@ -12,6 +12,7 @@ They are written in Vidar itself ([src/prelude.vidar](../../src/prelude.vidar)),
 | `scoped!(allocator) { ... }` | the same, with the arena's memory taken from `allocator` instead of `context.allocator` |
 | `with_allocator!(a) { ... }` | makes `a` the block's `context.allocator` |
 | `locked!(&mutex) { ... }` | holds the lock for the block and releases it on every exit (any `core:sync` lock type) |
+| `move!(x)` | evaluates to `x`'s value and leaves `x` zero, to give a value with `impl Destroy` a new owner (see [Destructors](destructors.md#moving-values)) |
 
 ```odin
 scoped! {

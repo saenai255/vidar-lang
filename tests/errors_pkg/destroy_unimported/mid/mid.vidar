@@ -1,0 +1,5 @@
+package mid
+
+import "../files"
+
+get :: proc() -> files.File { return files.File{"mid"} }

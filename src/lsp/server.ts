@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import {
-  CodeActionKind, CompletionItem, DidChangeWatchedFilesNotification, CompletionItemKind, Diagnostic, DiagnosticSeverity, DocumentSymbol, InitializeResult, ProposedFeatures,
+  CodeActionKind, CompletionItem, DidChangeWatchedFilesNotification, CompletionItemKind, Diagnostic, DiagnosticSeverity, DocumentSymbol, InitializeResult, InlayHint, InlayHintKind, ProposedFeatures,
   SymbolKind as LspSymbolKind, TextDocumentSyncKind, TextDocuments, TextEdit, createConnection,
 } from "vscode-languageserver/node";
 import { TextDocument } from "vscode-languageserver-textdocument";
@@ -49,7 +49,7 @@ interface PackageState {
 
 const packages = new Map<string, PackageState>();
 const timers = new Map<string, NodeJS.Timeout>();
-let settings = { odinCheckOnSave: true, odinPath: "odin", ols: true, olsPath: "ols", optHints: "on" as string | boolean, optCodeLens: true, indexWorkspace: true };
+let settings = { odinCheckOnSave: true, odinPath: "odin", ols: true, olsPath: "ols", optHints: "on" as string | boolean, ownershipHints: true, optCodeLens: true, indexWorkspace: true };
 /** workspace folders, for the workspace index; `folderEvents`: the client sends folder changes */
 let workspaceRoots: string[] = [];
 let folderEvents = false;
@@ -247,7 +247,7 @@ connection.onInitialize((params): InitializeResult => {
       referencesProvider: true,
       renameProvider: true,
       documentSymbolProvider: true,
-      completionProvider: { triggerCharacters: [":", ".", ">"] },
+      completionProvider: { triggerCharacters: [":", ".", ">", "#"] },
       signatureHelpProvider: { triggerCharacters: ["(", ","], retriggerCharacters: [","] },
       inlayHintProvider: true,
       workspaceSymbolProvider: true,
@@ -393,7 +393,8 @@ connection.onCompletion(async ({ textDocument, position }) => {
   if (!state.current || !doc) return [];
   const lineText = doc.getText({ start: { line: position.line, character: 0 }, end: position });
   const items: CompletionItem[] = F.complete(state.current, state.lastGood, path, position, lineText).map((c) => ({
-    label: c.label, kind: COMPLETION_KINDS[c.kind], detail: c.detail, insertText: c.insertText, sortText: `0${c.label}`,
+    label: c.label, kind: COMPLETION_KINDS[c.kind], detail: c.detail, insertText: c.insertText, filterText: c.filterText, sortText: `0${c.label}`,
+    ...(c.documentation ? { documentation: { kind: "markdown" as const, value: c.documentation } } : {}),
   }));
   const seen = new Set(items.map((i) => i.label));
   for (const i of (await ols?.completion(dirname(path), path, doc.getText(), position)) ?? []) {
@@ -407,8 +408,9 @@ connection.onCompletion(async ({ textDocument, position }) => {
 connection.onDidChangeConfiguration(({ settings: s }) => {
   if (s?.vidar?.optCodeLens !== undefined) settings.optCodeLens = s.vidar.optCodeLens;
   if (lensRefresh && (s?.vidar?.optCodeLens !== undefined || s?.vidar?.optHints !== undefined)) connection.sendRequest("workspace/codeLens/refresh").catch(() => {});
-  if (s?.vidar?.optHints === undefined) return;
-  settings.optHints = s.vidar.optHints;
+  if (s?.vidar?.ownershipHints !== undefined) settings.ownershipHints = s.vidar.ownershipHints;
+  if (s?.vidar?.optHints !== undefined) settings.optHints = s.vidar.optHints;
+  if (s?.vidar?.optHints === undefined && s?.vidar?.ownershipHints === undefined) return;
   if (hintRefresh) connection.languages.inlayHint.refresh().catch(() => {});
 });
 
@@ -426,17 +428,23 @@ function optAnalysis(state: PackageState, dir: string): Analysis | undefined {
   }
 }
 
-/** What -opt decided, shown after the names and code it is about. */
+/**
+ * What -opt decided, shown after the names and code it is about, and what impl Destroy does: where
+ * locals are destroyed, which copies move or clone (ownershipHints).
+ */
 connection.languages.inlayHint.on(({ textDocument, range }) => {
-  if (settings.optHints === "off" || settings.optHints === false) return [];
   const { state, path } = stateFor(textDocument.uri);
   if (!state.current) return [];
-  const program = optAnalysis(state, dirname(path));
-  if (!program) return [];
   const inRange = (p: F.Position) => (p.line > range.start.line || (p.line === range.start.line && p.character >= range.start.character)) && (p.line < range.end.line || (p.line === range.end.line && p.character <= range.end.character));
-  return F.optHints(program, path, settings.optHints === "all")
-    .filter((h) => inRange(h.position))
-    .map((h) => ({ position: h.position, label: h.label, tooltip: h.tooltip, paddingLeft: true }));
+  const out: InlayHint[] = [];
+  if (settings.ownershipHints !== false)
+    for (const h of F.ownershipHints(state.current, path))
+      if (inRange(h.position)) out.push({ position: h.position, label: h.label, tooltip: { kind: "markdown", value: h.tooltip ?? "" }, kind: InlayHintKind.Type, ...(h.before ? { paddingRight: true } : { paddingLeft: true }) });
+  if (settings.optHints === "off" || settings.optHints === false) return out;
+  const program = optAnalysis(state, dirname(path));
+  if (!program) return out;
+  for (const h of F.optHints(program, path, settings.optHints === "all")) if (inRange(h.position)) out.push({ position: h.position, label: h.label, tooltip: h.tooltip, paddingLeft: true });
+  return out;
 });
 
 /** Custom request: every -opt decision, grouped by file and enclosing proc; `uri` limits it to one file. */

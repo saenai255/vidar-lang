@@ -1,0 +1,27 @@
+package main
+
+import "core:fmt"
+
+// a proc type can take a parameter #owned too: a proc stored as one must agree with it
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { if f.name != "" do fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+
+consume :: proc(#owned f: File) { fmt.println("consumed", f.name) }
+show :: proc(f: File) { fmt.println("show", f.name) }
+
+Sink :: proc(#owned f: File)
+
+run :: proc(sink: Sink, #owned f: File) { sink(move!(f)) }
+look :: proc(use: proc(File), f: File) { use(f) }
+
+main :: proc() {
+	sink: proc(#owned f: File) = consume
+	a := File{"a"}
+	sink(move!(a))
+	b := File{"b"}
+	run(consume, move!(b))
+	c := File{"c"}
+	look(show, c)
+	fmt.println("end")
+}

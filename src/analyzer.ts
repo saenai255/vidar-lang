@@ -5,6 +5,7 @@ import { CaptureSym, Ctx, GlobalSym, LocalSym, PackageInfo, PkgSym, Scope, Sym, 
 import { autoOptimize } from "./autoopt";
 import { checkNoAlloc } from "./checks";
 import { checkCallEscapes, checkEscapes, ifaceEscape } from "./escape";
+import { CloneImpl, Destructor, OwnershipNote, checkDestroys, resolveDestroyImpl } from "./destroy";
 import { MemoInfo, memoPlan } from "./memo";
 import { OdinPackage, odinPackage, procsOf } from "./odinpkg";
 import { CallSpan, Interp, NotConstant, Val, joinTokens, repeatable, respace, valueToTokens, tokensOf } from "./comptime";
@@ -228,6 +229,16 @@ export class Analyzer {
   /** method declaration -> its interface method */
   readonly ifaceMethods = new Map<GlobalSym, IfaceMethod>();
   readonly ifaceSyms: GlobalSym[] = [];
+  /** impl Destroy (destroy.ts), by type */
+  readonly destructors = new Map<GlobalSym, Destructor>();
+  /** impl Clone (destroy.ts), by type; merged into `destructors` once every impl is resolved */
+  readonly clones = new Map<GlobalSym, CloneImpl>();
+  /** some value is destroyed or copy-checked through vidar_runtime/destroy.odin, so types register there */
+  destroyDispatch = false;
+  /** what destroy.ts decided at each place, for the editor's ownership hints */
+  readonly ownership: OwnershipNote[] = [];
+  /** how and where each destroyed local is destroyed, for hovers */
+  readonly destroyedLocals = new Map<LocalSym, string>();
 
   /** `-opt`: the emitter also rewrites plain Odin where the result is provably the same */
   optimize = false;
@@ -273,6 +284,7 @@ export class Analyzer {
       }
     }
     checkCallEscapes(this, (f) => this.guard(f));
+    if (this.destructors.size || this.clones.size) checkDestroys(this, (f) => this.guard(f));
     this.checkFrameValues();
     for (const p of this.closureCalls) this.guard(() => this.specializeClosures(p.e, p.sym, p.info, p.consts));
     if (this.optimize) this.guard(() => autoOptimize(this));
@@ -516,10 +528,17 @@ export class Analyzer {
           this.stmt(s.body, inner);
           return;
         }
+        // a map gives its key, then its value; anything else its element, then the index
+        const map = this.normalize(iterTy);
+        const kv = map?.t === "node" && map.node.k === "TypeExpr" && map.node.what === "map" && map.node.parts[0] && map.node.parts[1] ? map.node.parts : undefined;
         A(s)._syms = s.vals.map((v, i) =>
           this.declareLocal(v.name, inner, {
             declKind: "range",
-            ty: i === 0 ? (rangeTy ?? (iterTy && this.elemOf(iterTy))) : { t: "node", node: synthIdent("int", posOf(s)), scope: this.global },
+            ty: kv
+              ? { t: "node", node: kv[i === 0 ? 0 : 1]!, scope: (map as { scope: Scope }).scope }
+              : i === 0
+                ? (rangeTy ?? (iterTy && this.elemOf(iterTy)))
+                : { t: "node", node: synthIdent("int", posOf(s)), scope: this.global },
             declTok: s.toks[v.tok],
           }),
         );
@@ -627,7 +646,8 @@ export class Analyzer {
         return;
       case "ProcType":
       case "ClosureType":
-        this.sig(e.sig, new Scope(scope), false);
+        // the tokens, so `#owned` (destroy.ts) is removed from proc types too
+        this.sig(e.sig, new Scope(scope), false, e.toks);
         return;
       case "StructType":
       case "UnionType": {
@@ -832,6 +852,8 @@ export class Analyzer {
       }
       if (p.value) this.expr(p.value, scope);
       for (const n of p.names) {
+        // `#owned x: T` (destroy.ts): Odin has no such directive
+        if (n.prefix === "#owned" && toks?.[n.tok - 1]?.text === "#owned") this.tokText.set(toks[n.tok - 1], "");
         if (n.prefix?.includes("$")) {
           const sym = this.declareLocal(n.name, scope, { isConst: true, declKind: "param", declTok: toks?.[n.tok] });
           if (p.type && nodeText(p.type) === "typeid") this.polyTypes.add(sym);
@@ -929,6 +951,11 @@ export class Analyzer {
   fieldOf(ty: Ty | undefined, name: string): Ty | undefined {
     let n = this.normalize(ty);
     if (n?.t === "ptr") n = this.normalize(n.elem);
+    // an instance, Stack(int): the field as the struct declares it, in terms of its parameters
+    if (n?.t === "node" && n.node.k === "Call" && (n.node.fn.k === "Ident" || n.node.fn.k === "Selector")) {
+      const st = this.typeDeclOf(this.resolveName(n.node.fn, n.scope, null));
+      if (st?.t === "node" && st.node.k === "StructType" && st.node.polyParams) n = st;
+    }
     if (n?.t !== "node" || n.node.k !== "StructType") return undefined;
     for (const f of n.node.fields) if (f.type && f.names.some((x) => x.name === name)) return { t: "node", node: f.type, scope: n.scope };
     return undefined;
@@ -1008,12 +1035,17 @@ export class Analyzer {
       case "Directive": {
         // `#force_inline proc(...)`, `#force_no_inline proc(...)`: the proc's own type
         const lit = unwrapProc(e);
-        return lit ? this.typeOf(lit, scope, depth + 1) : undefined;
+        if (lit) return this.typeOf(lit, scope, depth + 1);
+        // `#force_inline f(x)`, `#partial [E]T{...}`: the value's own type
+        return e.x && /^#(force_inline|force_no_inline|partial)$/.test(e.name) ? this.typeOf(e.x, scope, depth + 1) : undefined;
       }
       case "MacroCall":
         return A(e)._expansion ? this.typeOf(A(e)._expansion, scope, depth + 1) : undefined;
       case "Call": {
         const fn = e.fn;
+        // move!(x), from the prelude: `__vidar.take(&x)` gives x's value
+        if (fn.k === "Selector" && fn.name === "take" && fn.x.k === "Ident" && fn.x.name === "__vidar" && !A(fn.x)._sym && e.args[0]?.k === "Unary" && e.args[0].op === "&")
+          return this.typeOf(e.args[0].x, scope, depth + 1);
         if (fn.k === "Ident") {
           const sym = A(fn)._sym ?? this.lookup(fn.name, scope, null);
           if (!sym && (fn.name === "new" || fn.name === "make") && e.args[0]) {
@@ -2050,6 +2082,8 @@ export class Analyzer {
   private resolveImpl(s: ImplBlock, scope: Scope, pkg: PackageInfo): void {
     const pos = posOf(s);
     if (s.iface.k !== "Ident" && s.iface.k !== "Selector") throw new CompileError(`'${nodeText(s.iface)}' is not an interface`, posOf(s.iface));
+    // the built-in Destroy and Clone, unless the program declares its own
+    if (s.iface.k === "Ident" && (s.iface.name === "Destroy" || s.iface.name === "Clone") && !this.lookup(s.iface.name, scope, null)) return resolveDestroyImpl(this, s, scope, pkg, s.iface.name);
     this.expr(s.iface, scope);
     const ifaceSym = this.resolveName(s.iface, scope, null);
     const ifaceNode = ifaceSym?.kind === "global" ? ifaceSym.decl.values[ifaceSym.index] : undefined;

@@ -78,6 +78,8 @@ export const BUILTIN_TYPE_DOCS: Record<string, string> = {
   any: "Any value, as a pointer to its data and its `typeid`.",
   complex64: "Complex number of two `f32`.", complex128: "Complex number of two `f64`.",
   quaternion256: "Quaternion of four `f64`.",
+  Destroy: "Vidar: `impl Destroy for T { destroy = t_destroy }`, with `t_destroy :: proc(x: ^T)`, destroys each local of type `T` when its scope ends, the old value on assignment, and never a local that is returned (it moves out). Structs, arrays, unions and `Maybe`s holding a `T` are destroyed too, and so are generic code's values (found at run time). Dynamic arrays and maps own their elements: destroyed with them, and by `clear`, `pop`, `delete_key` and the like; slices are views. `impl Destroy for Box($T)` covers every instance. Copies are compile errors unless `T` has `impl Clone`; borrow with `&x`, or move with `move!(x)`. Built in unless the program declares its own `Destroy`.",
+  Clone: "Vidar: `impl Clone for T { clone = t_clone }`, with `t_clone :: proc(x: T) -> T`, turns every copy of a `T` (which needs `impl Destroy`) into a call to `t_clone`, so each copy has its own owner, as with a C++ copy constructor. Structs whose destroyed fields can all be cloned are cloned field by field. The last use of a local moves it instead of cloning. `vidar:rc`'s `Rc(T)` is built on it. Built in unless the program declares its own `Clone`.",
   Pool: "Vidar: `Pool(I)` holds values of every implementation of interface `I`, one array per type. `for s in pool` loops over each type in turn with `s: ^T`, so method calls are direct. Supports `append` (values), `len`, `clear` and `delete`.",
 };
 
@@ -175,6 +177,49 @@ export const CONTEXT_FIELD_DOCS: Record<string, Doc> = {
   assertion_failure_proc: b("assertion_failure_proc: runtime.Assertion_Failure_Proc", "Called when an assertion fails."),
   user_ptr: b("user_ptr: rawptr", "Free for the program's own use."),
   user_index: b("user_index: int", "Free for the program's own use."),
+};
+
+/** `#name` directives: vidar's own, and the Odin ones code uses most. */
+export const DIRECTIVE_DOCS: Record<string, string> = {
+  owned: "Vidar: an `#owned` parameter takes over the value it is passed, instead of borrowing it: the proc destroys it when it returns, unless it returns it or moves it (`move!`). Callers pass a new value, `move!(x)`, or a clone. Removed from the Odin output.",
+  partial: "A `switch` that doesn't list every enum value or union variant: `#partial switch x { ... }`.",
+  no_bounds_check: "Turns off bounds checks in the statement or block that follows.",
+  bounds_check: "Turns bounds checks back on in the statement or block that follows.",
+  force_inline: "`#force_inline proc(...)`, or before a call: always inline it.",
+  force_no_inline: "`#force_no_inline proc(...)`, or before a call: never inline it.",
+  soa: "`#soa[N]T`, `#soa[]T`, `#soa[dynamic]T`: a structure of arrays, one array per field of `T`.",
+  raw_union: "`struct #raw_union { ... }`: every field at offset 0, as a C union.",
+  packed: "`struct #packed { ... }`: no padding between fields.",
+  align: "`struct #align(N) { ... }`: the struct's alignment.",
+  type: "`#type proc(...)`: marks a proc type (rather than a literal) where it could be read as either.",
+  caller_location: "A parameter default, `loc := #caller_location`: the location of the call.",
+  location: "`#location()`: this source location, or `#location(x)` that of a declaration.",
+  assert: "`#assert(cond)`: a compile-time assertion.",
+  panic: "`#panic(message)`: a compile-time error.",
+  config: "`#config(NAME, default)`: a value set with `-define:NAME=value`.",
+  defined: "`#defined(x)`: whether `x` is declared.",
+  exists: "`#exists(path)`: whether the file exists, at compile time.",
+  load: "`#load(path)`: the file's contents as `[]u8` (or a string type), at compile time.",
+  load_directory: "`#load_directory(path)`: every file in a directory, at compile time.",
+  load_hash: "`#load_hash(path, algo)`: a hash of the file, at compile time.",
+  file: "`#file`: this file's path.",
+  line: "`#line`: this line number.",
+  procedure: "`#procedure`: the name of the enclosing proc.",
+  directory: "`#directory`: this file's directory.",
+  hash: '`#hash(text, "fnv32a")`: a hash of a constant string.',
+  any_int: "On a parameter: any integer type converts to it implicitly.",
+  c_vararg: "On a variadic parameter of a foreign proc: C varargs.",
+  by_ptr: "On a parameter of a foreign proc: passed by pointer.",
+  no_alias: "On a pointer parameter: no other pointer aliases it.",
+  optional_ok: "On a proc whose last result is a `bool`: callers may ignore it.",
+  no_nil: "`union #no_nil { ... }`: no nil state; the first variant is the zero value.",
+  shared_nil: "`union #shared_nil { ... }`: the variants' nil values are the union's nil.",
+  unroll: "`#unroll for ...`: unrolls a loop over a constant range.",
+  reverse: "`#reverse for x in xs`: loops from the last element to the first.",
+  sparse: "`#sparse[Enum]T`: an enumerated array over an enum with gaps.",
+  simd: "`#simd[N]T`: a SIMD vector.",
+  row_major: "`#row_major matrix[R, C]T`: a matrix stored by rows.",
+  subtype: "On a struct field: `using` it for conversion only, without bringing its fields into scope.",
 };
 
 export const ATTRIBUTE_DOCS: Record<string, string> = {

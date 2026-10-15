@@ -1,0 +1,15 @@
+// error: which is borrowed, so 'files' can't be deleted here
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+close_all :: proc(files: [dynamic]File) {
+	delete(files)
+}
+
+main :: proc() {}

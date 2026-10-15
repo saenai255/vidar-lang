@@ -24,7 +24,13 @@ export type ErrorFix =
    */
   | { code: "iface-value"; start: Pos; end: Pos; addressable: boolean; why?: string; dangles?: string }
   /** A by-value capture that should be by reference: `&` goes before the capture's name at `at`. */
-  | { code: "capture-by-value"; name: string; at: Pos };
+  | { code: "capture-by-value"; name: string; at: Pos }
+  /** impl Destroy: a copy of a variable, field or element (`start`..`end`) that `move!(...)` around it fixes */
+  | { code: "destroy-move"; start: Pos; end: Pos }
+  /** impl Destroy: `v, ok := m[k]` copies; `&` goes before the value at `at` */
+  | { code: "destroy-pointer"; at: Pos }
+  /** impl Destroy: a borrowed parameter used as an owned one; `#owned ` goes before its name at `at` */
+  | { code: "destroy-owned"; name: string; at: Pos };
 
 export class CompileError extends Error {
   constructor(message: string, public pos?: Pos, public fix?: ErrorFix) {

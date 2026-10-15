@@ -1,0 +1,11 @@
+built
+drop 4
+drop 3
+drop 2
+drop 1
+copy 11 12 2
+release 12
+release 11
+release 2
+release 1
+plain 1

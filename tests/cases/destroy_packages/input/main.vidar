@@ -1,0 +1,20 @@
+package main
+
+import "core:fmt"
+import "files"
+
+// a File from another package is destroyed with that package's proc
+first :: proc(name: string) -> (n: int, err: files.Error) {
+	f := files.open(name) or_return // on the error path, the defer isn't reached yet
+	fmt.println("opened", f.name)
+	return len(f.name), .None
+}
+
+main :: proc() {
+	n, err := first("one")
+	fmt.println(n, err)
+	n, err = first("missing")
+	fmt.println(n, err)
+	g, gerr := files.open_named("named")
+	fmt.println(g.name, gerr)
+}

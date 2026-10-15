@@ -1,0 +1,7 @@
+consumed a
+close a
+consumed b
+close b
+show c
+end
+close c

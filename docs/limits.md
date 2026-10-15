@@ -20,6 +20,18 @@ What the compiler doesn't do yet, grouped by feature.
 - A generic impl's vtables are made per instance by Odin, so dispatchers can't name them. Calls on such values always go through the vtable (the `-opt` hint says so), and `Pool(I)` and inline interface arrays refuse interfaces with an impl for a parametric type.
 - Method names are package-level names, so two interfaces in one package can't share a method name (`writer_write`, `stream_write`).
 
+## Destructors
+
+- **Dynamic arrays and maps own their elements; slices don't.** Making a slice that would own destructible values (`make([]T, n)`, `[]T{...}`) is a compile error, and so are `#soa` and fixed-capacity dynamic arrays of them, `distinct` types, map keys, Odin packages' container types (`queue.Queue(T)`) and package-level variables. Maps can't be cloned. A container whose type vidar can't tell at all is left to Odin's `clear`, `delete` and the like, and procs such as `slice.clone` that copy elements aren't checked. Heap values (`new`, `free`) are never destroyed.
+- **Parametric impls cover every instance.** `impl Destroy for Box($T)` works, `impl Destroy for Box(int)` doesn't. Generic code that holds a `Box(int)` as a plain `T` stops the program when it destroys or copies it, since the impl's procs exist only per instance; `vidar:rc`'s `Rc` is the exception.
+- **Generic code is checked at run time.** A copy of a move-only `T` in generic code fails Odin's `#assert` only where the file can name the type, and stops the program otherwise. Parameters are borrowed unless `#owned`, so a generic proc that returns or stores a borrowed parameter clones it, and stops for a move-only type. Temporaries of type `T` in generic code are never destroyed, and neither is the old value of an element at a computed index (`a[i + 1] = v`).
+- **Closures borrow.** A closure that captures a destructible value by value borrows it, so it can't outlive the proc (as with `&x`); like `&x` captures, outliving the value's block within the proc isn't caught.
+- **`Rc` cycles leak** unless one direction is an `rc.Weak`.
+- **Last-use moves are conservative.** A copy moves only when the local is plainly never read again; a local read in a `defer` or a closure, addressed with `&`, or copied in a loop it was declared outside of, is cloned.
+- **Destroy procs see zero values.** Declarations without a value, returned locals and the results that come with an error are destroyed too.
+
+See [Destructors](language/destructors.md).
+
 ## Packages
 
 - **Import cycles merge packages.** Odin sees one package for the whole cycle.

@@ -1,0 +1,99 @@
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { if f.name != "" do fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+
+// prints each clone, so a move shows as a missing one
+Handle :: struct { name: string, n: int }
+handle_destroy :: proc(h: ^Handle) { if h.name != "" do fmt.println("drop", h.name, h.n) }
+handle_clone :: proc(h: Handle) -> Handle {
+	fmt.println("clone", h.name)
+	return Handle{h.name, h.n + 1}
+}
+impl Destroy for Handle { destroy = handle_destroy }
+impl Clone for Handle { clone = handle_clone }
+
+run :: proc(cb: closure()) { cb() }
+
+each :: proc(xs: []$T, cb: closure(x: T)) {
+	for x in xs do cb(x) // borrowed, whatever T is
+}
+
+keep :: proc(#owned h: Handle) { fmt.println("keep", h.name, h.n) }
+
+pass :: proc(x: $T) -> T {
+	y := x       // a clone: x is borrowed
+	z := y       // y's last use: moved
+	return z
+}
+
+// generic comma-ok: v is cloned at run time when T has impl Clone
+lookup :: proc(m: ^map[string]$T, key: string) -> T {
+	v, ok := m[key]
+	return v
+}
+
+// a capture of a generic value, returned: checked at run time (fine for int)
+getter :: proc(x: $T) -> closure() -> T {
+	return proc[x]() -> T { return x }
+}
+
+borrows :: proc() {
+	f := File{"log"}
+	run(proc[f]() { fmt.println("captured", f.name) }) // the closure borrows f
+	files: [dynamic]File
+	append(&files, File{"a"}, File{"b"})
+	for file in files do fmt.println("loop", file.name)
+	m: map[string]File
+	m["k"] = File{"v"}
+	for name in m do fmt.println("key", name)
+	for name, file in m do fmt.println("value", name, file.name)
+	each(files[:], proc[](x: File) { fmt.println("each", x.name) })
+}
+
+moves :: proc() {
+	a := Handle{"a", 0}
+	b := a // a's last use: moved
+	fmt.println("b", b.n)
+	c := Handle{"c", 0}
+	d := c // cloned: c is read below
+	fmt.println("c", c.n, "d", d.n)
+	e := Handle{"e", 0}
+	for _ in 0..<2 {
+		f := e // cloned: the loop reads e again
+		fmt.println("f", f.n)
+	}
+	g := Handle{"g", 0}
+	defer fmt.println("deferred", g.name)
+	h := g // cloned: the defer reads g later
+	k := Handle{"k", 0}
+	keep(k) // moved into the #owned parameter
+	q := Handle{"q", 0}
+	p := pass(q) // generic code clones the borrowed q once
+	for i in 0..<2 {
+		x := Handle{"x", i}
+		y := x // declared in the loop body: each iteration's x moves
+		fmt.println("y", y.n)
+	}
+	r := Handle{"r", 0}
+	rp := &r
+	s := r // r is addressed: a clone
+	t := Handle{"t", 0}
+	show := proc[&t]() { fmt.println("t", t.n) }
+	u := t // t is captured by reference: a clone
+	show()
+	m: map[string]Handle
+	m["m"] = Handle{"m", 0}
+	l := lookup(&m, "m")
+	get := getter(42)
+	fmt.println("end", h.n, p.n, rp.n, s.n, u.n, l.n, get())
+}
+
+main :: proc() {
+	borrows()
+	fmt.println("---")
+	moves()
+}

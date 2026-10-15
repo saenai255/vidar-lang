@@ -1,0 +1,8 @@
+// error: impl Destroy for one instance of a parametric type is not supported
+package main
+
+Box :: struct($T: typeid) { value: T }
+box_free :: proc(b: ^Box(int)) {}
+impl Destroy for Box(int) { destroy = box_free }
+
+main :: proc() {}

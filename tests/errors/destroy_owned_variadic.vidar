@@ -1,0 +1,16 @@
+// error: 'fs' can't be #owned: a variadic parameter is a slice
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+
+close_all :: proc(#owned fs: ..File) {
+	fmt.println(len(fs))
+}
+
+main :: proc() {
+	close_all(File{"a"})
+}

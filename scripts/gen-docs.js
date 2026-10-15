@@ -149,7 +149,7 @@ sched.forEach((line, i) => {
 const schedBody = schedItems.map((s) => `### \`${s.name}\`\n\n${fence("odin", `${s.name} :: ${s.sig}`)}${s.doc ? "\n" + s.doc.replace(/[<>{}]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "{": "&#123;", "}": "&#125;" })[c]) + "\n" : ""}`).join("\n");
 
 // ---- generated Odin for the lowering page, from docs/snippets/lowering ----
-const lowerOrder = ["closure", "closure_ref", "interface", "error_handling", "do_block", "anon_struct", "macro", "goroutine"];
+const lowerOrder = ["closure", "closure_ref", "interface", "destroy", "clone", "error_handling", "do_block", "anon_struct", "macro", "goroutine"];
 const lowering = lowerOrder.map((name) => {
   const file = path.join(root, "docs", "snippets", "lowering", `${name}.vidar`);
   const src = fs.readFileSync(file, "utf8").split("\n");

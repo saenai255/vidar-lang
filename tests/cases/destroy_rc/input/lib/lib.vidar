@@ -1,0 +1,15 @@
+package lib
+
+// generic code that knows nothing about Rc or File
+Pair :: struct($T: typeid) { a, b: T }
+
+// copies of x are clones: an Rc is shared, a type without impl Clone stops the program
+dup :: proc(x: $T) -> Pair(T) {
+	p := Pair(T){x, x}
+	return p
+}
+
+keep :: proc(x: $T) -> T { return x }
+
+// takes x over, so it works for move-only types too
+take_over :: proc(#owned x: $T) -> T { return x }

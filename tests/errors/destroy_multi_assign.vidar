@@ -1,0 +1,15 @@
+// error: assigning several values at once
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	f := open("a")
+	g := open("b")
+	f, g = open("c"), open("d")
+}

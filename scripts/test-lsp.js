@@ -682,6 +682,126 @@ function change(text) {
   ls = await lenses();
   check("optCodeLens: true brings them back", ls.length > 0, "");
 
+  // ---- impl Destroy: ownership hints, hovers, directives (tests/lsp/destroy) ----
+  {
+    const dDir = realpathSync(mkdtempSync(join(tmpdir(), "vidar-lsp-destroy-")));
+    cpSync("tests/lsp/destroy", dDir, { recursive: true });
+    const dUri = pathToFileURL(join(dDir, "main.vidar")).toString();
+    const dText = readFileSync(join(dDir, "main.vidar"), "utf8");
+    const dLines = dText.split("\n");
+    /** the position of `needle` (or just past it, with `after`) on the first line containing `lineHas` */
+    const dAt = (lineHas, needle = lineHas, after = false, from = 0) => {
+      const line = dLines.findIndex((l) => l.includes(lineHas));
+      const col = dLines[line].indexOf(needle, from);
+      return { line, character: col + (after ? needle.length : 0) };
+    };
+    const dDiag = nextDiagnostics((d) => d.uri === dUri);
+    notify("textDocument/didOpen", { textDocument: { uri: dUri, languageId: "vidar", version: 1, text: dText } });
+    check("destroy fixture has no errors", (await dDiag).diagnostics.length === 0, "");
+    notify("workspace/didChangeConfiguration", { settings: { vidar: { optHints: "off" } } });
+    const dHints = async () =>
+      (await request("textDocument/inlayHint", { textDocument: { uri: dUri }, range: { start: { line: 0, character: 0 }, end: { line: dLines.length, character: 0 } } })).result ?? [];
+    let dh = await dHints();
+    const dhs = JSON.stringify(dh.map((h) => [h.label, h.position.line, h.position.character]));
+    const hintAt = (pos, label) => dh.find((h) => h.position.line === pos.line && h.position.character === pos.character && (label === undefined || h.label === label));
+    const mainEnd = dLines.lastIndexOf("}");
+    const drops = dh.find((h) => h.position.line === mainEnd && h.label.startsWith("drop "));
+    check("a drop hint after the closing brace lists the block's locals, last declared first", drops?.label === "drop w, shared, files, k, g, h, b, a" && drops.paddingLeft, dhs);
+    check("the drop hint's tooltip names each destroy proc", drops?.tooltip?.value?.includes("'a' is destroyed here by `file_destroy`") && drops.tooltip.value.includes("`__vidar.destroy`"), JSON.stringify(drops?.tooltip));
+    check("an #owned parameter is dropped at the end of its proc, and moves out when returned", hintAt(dAt("keep :: proc", "}"), undefined) === undefined && dh.some((h) => h.label === "drop f" && h.position.line === dAt("keep :: proc").line) && hintAt(dAt("keep :: proc", "f }"), "move")?.paddingRight, dhs);
+    check("assigning destroys the old value: drops old after the target", hintAt(dAt('a = open("c")', "a", true), "drops old")?.tooltip?.value.includes("file_destroy"), dhs);
+    check("a copy read later is a clone, naming the clone proc", hintAt(dAt("g := h", "h"), "clone")?.tooltip?.value.includes("handle_clone"), dhs);
+    check("a copy on the last use moves instead", hintAt(dAt("k := h", "h"), "move")?.tooltip?.value.includes("last use of 'h'"), dhs);
+    check("a core proc that destroys what it drops says so", hintAt(dAt("clear(&files)", "clear(&files)", true), "destroys what it drops")?.tooltip?.value.includes("__vidar.destroy_clear"), dhs);
+    check("borrows get no hints", !dh.some((h) => h.position.line === dAt("show(a)").line || h.position.line === dAt("for f in files").line), dhs);
+    notify("workspace/didChangeConfiguration", { settings: { vidar: { ownershipHints: false } } });
+    check("ownershipHints: false turns them off", (await dHints()).length === 0, "");
+    notify("workspace/didChangeConfiguration", { settings: { vidar: { ownershipHints: true, optHints: "on" } } });
+    dh = await dHints();
+    check("ownershipHints come back, alongside the -opt hints", dh.some((h) => h.label === "fmt inlined") && dh.some((h) => h.label === "drops old"), JSON.stringify(dh.map((h) => h.label)));
+
+    const dHover = async (pos) => (await request("textDocument/hover", { textDocument: { uri: dUri }, position: pos })).result?.contents?.value ?? "";
+    let hv = await dHover(dAt('a := open("a")', "a"));
+    check("hover on a destroyed local says where and by what", hv.includes(`destroyed at the end of its scope (line ${mainEnd + 1})`) && hv.includes("by `file_destroy`"), hv);
+    hv = await dHover(dAt("h := Handle{1}", "h"));
+    check("hover on a local that moves on its last use says so", hv.includes(`its last use moves it out (line ${dAt("k := h").line + 1})`), hv);
+    hv = await dHover(dAt("File :: struct", "File"));
+    check("hover on a type with impl Destroy: its proc, and that it is move-only", hv.includes("destroyed by `file_destroy` (impl Destroy)") && hv.includes("move-only"), hv);
+    hv = await dHover(dAt("Handle :: struct", "Handle"));
+    check("hover on a type with impl Clone names its clone proc", hv.includes("copies call `handle_clone` (impl Clone)"), hv);
+    hv = await dHover(dAt("Log :: struct", "Log"));
+    check("hover on a struct holding destructible fields lists them, last first", hv.includes("destroyed through its fields `err`, `out` (`__Log_destroy`)"), hv);
+    hv = await dHover(dAt("show :: proc", "f", false, dLines[dAt("show :: proc").line].indexOf("(")));
+    check("hover on a by-value parameter: borrowed", hv.includes("borrowed: the caller owns it"), hv);
+    hv = await dHover(dAt("for f in files", "f", false, 4));
+    check("hover on a loop value: borrows each element", hv.includes("borrows each element"), hv);
+    hv = await dHover(dAt("keep :: proc", "#owned", false));
+    check("hover on #owned explains it", hv.includes("*directive*") && hv.includes("takes over the value"), hv);
+    hv = await dHover(dAt("keep :: proc", "f:"));
+    check("hover on an #owned parameter: destroyed at the end of the proc", hv.includes("destroyed at the end of its scope"), hv);
+
+    const dComplete = async (lineHas, text) => {
+      const line = dAt(lineHas).line;
+      const edited = dLines.map((l, i) => (i === line ? text : l)).join("\n");
+      notify("textDocument/didChange", { textDocument: { uri: dUri, version: 2 }, contentChanges: [{ text: edited }] });
+      const items = (await request("textDocument/completion", { textDocument: { uri: dUri }, position: { line, character: text.length } })).result ?? [];
+      notify("textDocument/didChange", { textDocument: { uri: dUri, version: 3 }, contentChanges: [{ text: dText }] });
+      return items;
+    };
+    let items = await dComplete("show(a)", "\tx := #ow");
+    const owned = items.find((i) => i.label === "#owned");
+    check("completion after # offers directives, #owned with its docs", owned?.insertText === "owned" && owned.filterText === "owned" && owned.documentation?.value.includes("takes over") && items.some((i) => i.label === "#partial"), JSON.stringify(items.slice(0, 5)));
+    items = await dComplete("show(a)", "\tx := 1 // see #ow");
+    check("no directives after # in a comment", !items.some((i) => i.label === "#owned"), JSON.stringify(items.slice(0, 5)));
+    items = await dComplete("show(a)", '\ts := "#ow');
+    check("no directives after # in a string", !items.some((i) => i.label === "#owned"), JSON.stringify(items.slice(0, 5)));
+    items = await dComplete("show(a)", '\ts := "a // b"; x := #ow');
+    check("directives after a string that holds //", items.some((i) => i.label === "#owned"), JSON.stringify(items.slice(0, 5)));
+    items = await dComplete("show(a)", "\trc.");
+    check("completion on rc. offers Weak, downgrade, upgrade and alive", ["Rc", "Weak", "new", "get", "count", "downgrade", "upgrade", "alive"].every((n) => items.some((i) => i.label === n)), JSON.stringify(items.map((i) => i.label)));
+    notify("workspace/didChangeConfiguration", { settings: { vidar: { optHints: "on" } } });
+  }
+
+  // ---- impl Destroy: quick fixes for its errors (tests/lsp/destroy_errors) ----
+  {
+    const eDir = realpathSync(mkdtempSync(join(tmpdir(), "vidar-lsp-destroy-errors-")));
+    cpSync("tests/lsp/destroy_errors", eDir, { recursive: true });
+    const eUri = pathToFileURL(join(eDir, "main.vidar")).toString();
+    const eText = readFileSync(join(eDir, "main.vidar"), "utf8");
+    const eLines = eText.split("\n");
+    const eLine = (has) => eLines.findIndex((l) => l.includes(has));
+    const eDiag = nextDiagnostics((d) => d.uri === eUri);
+    notify("textDocument/didOpen", { textDocument: { uri: eUri, languageId: "vidar", version: 1, text: eText } });
+    const ed = (await eDiag).diagnostics;
+    const eds = JSON.stringify(ed.map((d) => [d.code, d.range.start.line]));
+    const on = (has, code) => ed.find((d) => d.code === code && d.range.start.line === eLine(has));
+    check("destroy errors carry codes for their fixes", on("delete(files)", "destroy-owned") && on("b := a", "destroy-move") && on('v, ok := m["k"]', "destroy-pointer"), eds);
+    const offset = (text, pos) => text.split("\n").slice(0, pos.line).reduce((n, l) => n + l.length + 1, 0) + pos.character;
+    const apply = (text, edits) => [...edits].sort((x, y) => offset(text, y.range.start) - offset(text, x.range.start)).reduce((t, e) => t.slice(0, offset(t, e.range.start)) + e.newText + t.slice(offset(t, e.range.end)), text);
+    const fixesOn = async (has) => {
+      const line = eLine(has);
+      return (await request("textDocument/codeAction", { textDocument: { uri: eUri }, range: { start: { line, character: 0 }, end: { line, character: eLines[line].length } }, context: { diagnostics: ed.filter((d) => d.range.start.line === line) } })).result ?? [];
+    };
+    let fixed = eText;
+    for (const [has, title, want] of [
+      ["delete(files)", "Take 'files' over (#owned files)", "close_all :: proc(#owned files: [dynamic]File) {"],
+      ["b := a", "Move it instead (move!(a))", "\tb := move!(a)\n"],
+      ['v, ok := m["k"]', "Take a pointer to it instead (&)", '\tv, ok := &m["k"]\n'],
+    ]) {
+      const acts = await fixesOn(has);
+      const act = acts.find((x) => x.title === title);
+      const after = act && apply(eText, act.edit.changes[eUri]);
+      check(`quick fix: ${title}`, !!after?.includes(want) && act.kind === "quickfix" && act.isPreferred === false, JSON.stringify(acts.map((x) => x.title)));
+      if (act) fixed = apply(fixed, act.edit.changes[eUri]);
+    }
+    const all = (await request("textDocument/codeAction", { textDocument: { uri: eUri }, range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }, context: { diagnostics: ed, only: ["source.fixAll"] } })).result ?? [];
+    check("fix all leaves destroy fixes alone: each changes what the code means", !all.some((x) => JSON.stringify(x.edit).match(/move!|#owned|"&"/)), JSON.stringify(all));
+    const eFixed = nextDiagnostics((d) => d.uri === eUri);
+    notify("textDocument/didChange", { textDocument: { uri: eUri, version: 2 }, contentChanges: [{ text: fixed }] });
+    const efd = (await eFixed).diagnostics;
+    check("after the destroy fixes the file has no errors", efd.length === 0, JSON.stringify(efd.map((d) => d.message)));
+  }
+
   const shifted = nextDiagnostics((d) => d.uri === oUri);
   notify("textDocument/didChange", { textDocument: { uri: oUri, version: 2 }, contentChanges: [{ text: "\n" + oText }] });
   await shifted;

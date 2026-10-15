@@ -1,0 +1,41 @@
+package main
+
+import "core:fmt"
+
+// generic code destroys the old value on assignment, through __vidar.destroy, which does nothing
+// for a type that holds nothing to destroy
+R :: struct { id: int }
+r_destroy :: proc(r: ^R) { if r.id != 0 do fmt.println("drop", r.id) }
+impl Destroy for R { destroy = r_destroy }
+mk :: proc(i: int) -> R { return R{i} }
+num :: proc(i: int) -> int { return i }
+
+Stack :: struct($T: typeid) { items: [dynamic]T, top: T }
+
+twice :: proc(f: proc(int) -> $T) {
+	x := f(1)
+	x = f(2)
+	fmt.println("twice end")
+}
+
+put :: proc(s: ^Stack($T), #owned v: T, #owned w: T) {
+	s.items[0] = move!(v)
+	s.top = move!(w)
+}
+
+set :: proc(p: ^$T, #owned v: T) { p^ = move!(v) }
+
+main :: proc() {
+	twice(mk)
+	twice(num)
+	s: Stack(R)
+	append(&s.items, R{10})
+	s.top = R{11}
+	put(&s, R{12}, R{13})
+	fmt.println("put", s.items[0].id, s.top.id)
+	a := R{20}
+	set(&a, R{21})
+	n := 1
+	set(&n, 2)
+	fmt.println("end", a.id, n)
+}

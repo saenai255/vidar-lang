@@ -1,0 +1,19 @@
+// error: returns to this loop would never be destroyed
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+next :: proc(n: ^int) -> (File, bool) {
+	n^ += 1
+	return File{"x"}, n^ < 3
+}
+
+main :: proc() {
+	n := 0
+	for f in next(&n) do fmt.println(f.name)
+}

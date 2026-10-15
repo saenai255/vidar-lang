@@ -1,0 +1,20 @@
+// error: 'a' is a Log, which holds a value with impl Destroy, and 'b := a' would copy it
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+
+// Log has no impl of its own, but holds a File, so it is destroyed (and can't be copied) too
+Log :: struct {
+	out:   File,
+	level: int,
+}
+
+main :: proc() {
+	a := Log{out = File{"log"}}
+	b := a
+	fmt.println(b.level)
+}

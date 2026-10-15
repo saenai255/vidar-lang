@@ -1,0 +1,39 @@
+package main
+
+import "core:fmt"
+
+// a parametric type that holds itself is destroyed all the way down, and cloned all the way down
+R :: struct { id: int }
+r_destroy :: proc(r: ^R) { if r.id != 0 do fmt.println("drop", r.id) }
+impl Destroy for R { destroy = r_destroy }
+
+H :: struct { id: int }
+h_destroy :: proc(h: ^H) { if h.id != 0 do fmt.println("release", h.id) }
+h_clone :: proc(h: H) -> H { return H{h.id + 10} }
+impl Destroy for H { destroy = h_destroy }
+impl Clone for H { clone = h_clone }
+
+Tree :: struct($T: typeid) { v: T, kids: [dynamic]Tree(T) }
+
+// holds itself, but nothing to destroy: its memory is left to the program
+Plain :: struct($T: typeid) { v: T, kids: [dynamic]Plain(T) }
+
+main :: proc() {
+	{
+		root := Tree(R){v = R{1}}
+		append(&root.kids, Tree(R){v = R{2}})
+		append(&root.kids[0].kids, Tree(R){v = R{3}})
+		append(&root.kids[0].kids[0].kids, Tree(R){v = R{4}})
+		fmt.println("built")
+	}
+	{
+		root := Tree(H){v = H{1}}
+		append(&root.kids, Tree(H){v = H{2}})
+		copy := root
+		fmt.println("copy", copy.v.id, copy.kids[0].v.id, root.kids[0].v.id)
+	}
+	p := Plain(int){v = 1}
+	append(&p.kids, Plain(int){v = 2})
+	fmt.println("plain", len(p.kids))
+	delete(p.kids)
+}

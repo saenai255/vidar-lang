@@ -1,0 +1,14 @@
+// error: append would copy each File
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	a, b: [dynamic]File
+	append(&a, ..b[:])
+}

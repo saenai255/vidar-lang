@@ -1,0 +1,35 @@
+errors:
+  handshake db <-> cache
+  close conn 2 (cache)
+  close conn 1 (db)
+  result: None
+  close conn 3 (db)
+  result: Refused
+guard:
+  locked
+  held: true
+  unlocked
+  held: false
+server:
+  close conn 6 (bob)
+  close conn 8 (dave)
+  client alice
+  client carol
+  shutting down
+  close conn 9 (dave again)
+  close conn 7 (carol)
+  close conn 5 (alice)
+  close conn 4 (0.0.0.0)
+buffers:
+  hello hello!
+tree:
+  root/usr/bin owners of usr: 2
+  close conn 12 (bin)
+  close conn 11 (usr)
+  close conn 10 (root)
+stack:
+  close conn 15 (z)
+  left: 2
+  close conn 14 (y)
+  close conn 13 (x)
+done

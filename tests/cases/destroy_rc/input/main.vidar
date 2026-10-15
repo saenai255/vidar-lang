@@ -1,0 +1,76 @@
+package main
+
+import "core:fmt"
+import "vidar:rc"
+import "lib"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { if f.name != "" do fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+
+open :: proc(name: string) -> File { return File{name} }
+
+// impl Destroy for every instance of a parametric type, run before its fields are destroyed
+Box :: struct($T: typeid) { v: ^T, log: File }
+box_destroy :: proc(b: ^Box($T)) {
+	if b.v == nil do return
+	fmt.println("free box of", b.v^)
+	free(b.v)
+}
+impl Destroy for Box($T) { destroy = box_destroy }
+
+Holder :: struct { file: rc.Rc(File), tag: int }
+
+// a tree whose children point back with a Weak: the cycle is still destroyed
+Node :: struct {
+	file:     File,
+	parent:   rc.Weak(Node),
+	children: [dynamic]rc.Rc(Node),
+}
+
+weak_refs :: proc() {
+	w: rc.Weak(File)
+	{
+		r := rc.new(open("watched"))
+		w = rc.downgrade(r)
+		u := rc.upgrade(w)
+		fmt.println("alive", rc.alive(w), "owners", rc.count(r), rc.get(u).name)
+		ws := lib.dup(w) // generic code clones each Weak through vidar:rc's registered procs
+		fmt.println("weak copies alive", rc.alive(ws.a), rc.alive(ws.b))
+	}
+	gone := rc.upgrade(w)
+	fmt.println("alive", rc.alive(w), "upgraded", rc.get(gone) != nil)
+	root := rc.new(Node{file = open("root")})
+	child := rc.new(Node{file = open("child"), parent = rc.downgrade(root)})
+	append(&rc.get(root).children, move!(child))
+	kid := rc.get(root).children[0]
+	up := rc.upgrade(rc.get(kid).parent)
+	fmt.println("parent of", rc.get(kid).file.name, "is", rc.get(up).file.name)
+}
+
+main :: proc() {
+	r := rc.new(open("shared"))
+	{
+		s := r
+		fmt.println("owners", rc.count(r))
+		h := Holder{r, 1}
+		fmt.println("owners", rc.count(r))
+		p := lib.dup(r)
+		k := lib.keep(r)
+		fmt.println("owners", rc.count(r))
+	}
+	fmt.println("owners", rc.count(r), rc.get(r).name)
+	f := open("moved")
+	t := rc.new(move!(f))
+	fmt.println(rc.get(t).name, f.name == "")
+	o := lib.take_over(open("taken"))
+	fmt.println(o.name)
+	b := Box(int){new_clone(42), open("box log")}
+	nested := rc.new(rc.new(5))
+	inner := rc.get(nested)^
+	fmt.println("nested", rc.get(inner)^, rc.count(inner))
+	empty: rc.Rc(File)
+	fmt.println("empty", rc.count(empty))
+	weak_refs()
+	fmt.println("end of main")
+}

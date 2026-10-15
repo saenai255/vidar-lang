@@ -1,0 +1,15 @@
+// error: 'n := m' would copy it
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	m: map[string]File
+	n := m
+	fmt.println(len(n))
+}

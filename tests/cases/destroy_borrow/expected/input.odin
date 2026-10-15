@@ -1,0 +1,143 @@
+package main; import __vidar "vidar_runtime"
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { if f.name != "" do fmt.println("close", f.name) }
+
+
+// prints each clone, so a move shows as a missing one
+Handle :: struct { name: string, n: int }
+handle_destroy :: proc(h: ^Handle) { if h.name != "" do fmt.println("drop", h.name, h.n) }
+handle_clone :: proc(h: Handle) -> Handle {
+	fmt.println("clone", h.name)
+	return Handle{h.name, h.n + 1}
+}
+
+
+
+run :: proc(cb: __vidar.Closure(proc(__vidar.Env))) { __cb_call := cb.call; __cb_call(cb.env) }
+
+each :: proc(xs: []$T, cb: __vidar.Closure(proc(__vidar.Env, T))) { __cb_call := cb.call;
+	for x in xs do __cb_call(cb.env, x) // borrowed, whatever T is
+}
+
+keep :: proc( h: Handle) { h := h; defer handle_destroy(&h); fmt.println("keep", h.name, h.n) }
+
+pass :: proc(x: $T) -> T {
+	#assert(type_of(x) != File, "input.vidar:28: this copies a value whose type has impl Destroy, and both copies would be destroyed"); y := __vidar.clone(x); defer __vidar.destroy(&y)       // a clone: x is borrowed
+	z := __vidar.take(&y); defer __vidar.destroy(&z)       // y's last use: moved
+	{ defer __vidar.forget(&z); return z }
+}
+
+// generic comma-ok: v is cloned at run time when T has impl Clone
+lookup :: proc(m: ^map[string]$T, key: string) -> T {
+	v, ok := m[key]; v = __vidar.clone(v); defer __vidar.destroy(&v)
+	{ defer __vidar.forget(&v); return v }
+}
+
+// a capture of a generic value, returned: checked at run time (fine for int)
+getter :: proc(x: $T) -> __vidar.Closure(proc(__vidar.Env) -> T) {
+	__closure_0 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env) -> T) {
+		__Caps :: struct {
+			x: T0,
+		}
+		#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at input.vidar:41: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+		__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
+		return __vidar.Closure(proc(__vidar.Env) -> T){
+			call = proc(__env_raw: __vidar.Env) -> T { __env := transmute(__Env)__env_raw; #assert(type_of(__env.x) != File, "input.vidar:41: this copies a value whose type has impl Destroy, and both copies would be destroyed"); return __vidar.clone(__env.x) },
+			env = transmute(__vidar.Env)__Env{__caps = {__c0}},
+		}
+	}
+	#assert(type_of(x) != File, "this copies a value whose type has impl Destroy, and both copies would be destroyed"); __vidar.check_copy(type_of(x)); return __closure_0(x)
+}
+
+borrows :: proc() {
+	f := File{"log"}; defer file_destroy(&f)
+	run(__closure_1(f)) // the closure borrows f
+	files: [dynamic]File; defer __vidar.destroy(&files)
+	append(&files, File{"a"}, File{"b"})
+	for file in files do fmt.println("loop", file.name)
+	m: map[string]File; defer __vidar.destroy(&m)
+	{ __vidar_new: type_of(m["k"]) = File{"v"}; __vidar_old := m["k"]; m["k"] = __vidar_new; file_destroy(&__vidar_old) }
+	for name in m do fmt.println("key", name)
+	for name, file in m do fmt.println("value", name, file.name)
+	each(files[:], __vidar.Closure(proc(__vidar.Env, File)){call = proc(__env_raw: __vidar.Env, x: File) { fmt.println("each", x.name) }})
+}
+
+moves :: proc() {
+	a := Handle{"a", 0}; defer handle_destroy(&a)
+	b := __vidar.take(&a); defer handle_destroy(&b) // a's last use: moved
+	fmt.println("b", b.n)
+	c := Handle{"c", 0}; defer handle_destroy(&c)
+	d := handle_clone(c); defer handle_destroy(&d) // cloned: c is read below
+	fmt.println("c", c.n, "d", d.n)
+	e := Handle{"e", 0}; defer handle_destroy(&e)
+	for _ in 0..<2 {
+		f := handle_clone(e); defer handle_destroy(&f) // cloned: the loop reads e again
+		fmt.println("f", f.n)
+	}
+	g := Handle{"g", 0}; defer handle_destroy(&g)
+	defer fmt.println("deferred", g.name)
+	h := handle_clone(g); defer handle_destroy(&h) // cloned: the defer reads g later
+	k := Handle{"k", 0}; defer handle_destroy(&k)
+	keep(__vidar.take(&k)) // moved into the #owned parameter
+	q := Handle{"q", 0}; defer handle_destroy(&q)
+	p := pass(q); defer __vidar.destroy(&p) // generic code clones the borrowed q once
+	for i in 0..<2 {
+		x := Handle{"x", i}; defer handle_destroy(&x)
+		y := __vidar.take(&x); defer handle_destroy(&y) // declared in the loop body: each iteration's x moves
+		fmt.println("y", y.n)
+	}
+	r := Handle{"r", 0}; defer handle_destroy(&r)
+	rp := &r
+	s := handle_clone(r); defer handle_destroy(&s) // r is addressed: a clone
+	t := Handle{"t", 0}; defer handle_destroy(&t)
+	show := __closure_2(&t)
+	u := handle_clone(t); defer handle_destroy(&u) // t is captured by reference: a clone
+	show.call(show.env)
+	m: map[string]Handle; defer __vidar.destroy(&m)
+	{ __vidar_new: type_of(m["m"]) = Handle{"m", 0}; __vidar_old := m["m"]; m["m"] = __vidar_new; handle_destroy(&__vidar_old) }
+	l := lookup(&m, "m"); defer __vidar.destroy(&l)
+	get := getter(42); defer __vidar.destroy(&get)
+	fmt.println("end", h.n, p.n, rp.n, s.n, u.n, l.n, get.call(get.env))
+}
+
+main :: proc() {
+	borrows()
+	fmt.println("---")
+	moves()
+}
+
+// ---- generated by vidar ----
+
+__closure_1 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env)) {
+	__Caps :: struct {
+		f: T0,
+	}
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at input.vidar:46: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
+	return __vidar.Closure(proc(__vidar.Env)){
+		call = proc(__env_raw: __vidar.Env) { __env := transmute(__Env)__env_raw; fmt.println("captured", __env.f.name) },
+		env = transmute(__vidar.Env)__Env{__caps = {__c0}},
+	}
+}
+
+__closure_2 :: proc(__c0: $T0) -> __vidar.Closure(proc(__vidar.Env)) {
+	__Caps :: struct {
+		t: T0,
+	}
+	#assert(size_of(__Caps) <= __vidar.CLOSURE_ENV, "closure at input.vidar:85: its captures don't fit in VIDAR_CLOSURE_ENV bytes; capture a pointer, or build with -define:VIDAR_CLOSURE_ENV=<bytes>")
+	__Env :: struct { using __caps: __Caps, __pad: [__vidar.CLOSURE_ENV - size_of(__Caps)]byte }
+	return __vidar.Closure(proc(__vidar.Env)){
+		call = proc(__env_raw: __vidar.Env) { __env := transmute(__Env)__env_raw; fmt.println("t", __env.t^.n) },
+		env = transmute(__vidar.Env)__Env{__caps = {__c0}},
+	}
+}
+
+// impl Destroy for generic code and run-time checks
+@(init, private="file")
+__vidar_destroy_init :: proc "contextless" () {
+	__vidar.register_destroy(File, file_destroy)
+	__vidar.register_clone(Handle, handle_destroy, handle_clone)
+}

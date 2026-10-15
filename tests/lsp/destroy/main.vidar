@@ -1,0 +1,43 @@
+package main
+
+import "core:fmt"
+import "vidar:rc"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+
+Handle :: struct { id: int }
+handle_destroy :: proc(h: ^Handle) {}
+handle_clone :: proc(h: Handle) -> Handle { return h }
+impl Destroy for Handle { destroy = handle_destroy }
+impl Clone for Handle { clone = handle_clone }
+
+Log :: struct {
+	out: File,
+	err: File,
+}
+
+open :: proc(name: string) -> File { return File{name} }
+
+show :: proc(f: File) { fmt.println(f.name) }
+
+keep :: proc(#owned f: File) -> File { return f }
+
+main :: proc() {
+	a := open("a")
+	b := open("b")
+	show(a)
+	a = open("c")
+	h := Handle{1}
+	g := h
+	k := h
+	fmt.println(g.id, k.id)
+	files: [dynamic]File
+	append(&files, open("d"))
+	clear(&files)
+	for f in files do show(f)
+	shared := rc.new(open("e"))
+	w := rc.downgrade(shared)
+	fmt.println(rc.alive(w))
+}

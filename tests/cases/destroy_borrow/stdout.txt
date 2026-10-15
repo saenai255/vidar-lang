@@ -1,0 +1,49 @@
+captured log
+loop a
+loop b
+key k
+value k v
+each a
+each b
+close v
+close b
+close a
+close log
+---
+b 0
+clone c
+c 0 d 1
+clone e
+f 1
+drop e 1
+clone e
+f 1
+drop e 1
+clone g
+keep k 0
+drop k 0
+clone q
+y 0
+drop x 0
+y 1
+drop x 1
+clone r
+clone t
+t 0
+clone m
+end 1 1 0 1 1 1 42
+drop m 1
+drop m 0
+drop t 1
+drop t 0
+drop r 1
+drop r 0
+drop q 1
+drop q 0
+drop g 1
+deferred g
+drop g 0
+drop e 0
+drop c 1
+drop c 0
+drop a 0

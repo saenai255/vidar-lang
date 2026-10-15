@@ -13,6 +13,7 @@ import { JsonWriters, registersMarshalers } from "./jsonopt";
 import { JsonReaders } from "./jsonread";
 import type { ValueCall, ValueIface } from "./valueiface";
 import type { Reorder } from "./reorder";
+import { DestroyDecl, DestroyMove, How, cloneName, destructorName } from "./destroy";
 import type { CaptureSym, GlobalSym, LocalSym, PackageInfo, PkgSym, Sym, Ty, Unit } from "./scope";
 
 type ProcLit = Extract<Expr, { k: "ProcLit" }>;
@@ -501,6 +502,7 @@ export class Emitter {
     for (const t of f.toks) if (t.pre.includes("\n") && !this.indents.has(t.pos.line)) this.indents.set(t.pos.line, t.pre.slice(t.pre.lastIndexOf("\n") + 1));
     const root = { k: "Block", toks: f.toks, start: 0, end: f.toks.length, stmts: f.stmts } as Block;
     let out = f.toks[0].pre + this.generic(root, 0, f.toks.length, f.stmts);
+    if (this.an.destructors.size) this.destroyHelpers(f);
     while (this.cloneJobs.length) this.helpers.push(this.cloneJobs.shift()!());
     const printers = this.printers as Printers | null | undefined;
     if (printers?.procs.size) this.helpers.push(`// fmt's %v for the types printed here, written out\n` + [...printers.procs.values()].map((p) => `@(private="file")\n${p}`).join("\n\n"));
@@ -584,16 +586,51 @@ export class Emitter {
     const vi: ValueIface | undefined = A(n)._valueIface;
     if (vi) return `[dynamic]${this.valueUnion(vi)}`;
     const iface: GlobalSym | undefined = A(n)._wrapIface;
-    let text: string = A(n)._emitAs ?? this.emitNode(n);
+    // impl Destroy (destroy.ts): core's proc on a dynamic array or map that drops elements, replaced by one that destroys them
+    const destroyFn: string | undefined = A(n)._destroyFn;
+    let text: string = destroyFn ? `${this.runtimeRef()}.${destroyFn}` : (A(n)._emitAs ?? this.emitNode(n));
+    if (A(n)._destroyAddr) text = `&${text}`;
     if (iface) text = `${this.qualify(iface, fromName(iface))}(${text})`;
     const up: { from: GlobalSym; to: GlobalSym } | undefined = A(n)._upcast;
     if (up) text = `${this.qualify(up.from, upcastName(up.from, up.to), `convert '${up.from.name}' to '${up.to.name}'`)}(${text})`;
     const fix: { prefix: string; suffix: string } | undefined = A(n)._fix;
     if (fix) text = fix.prefix + text + fix.suffix;
+    // impl Clone (destroy.ts): a copy of a value that is destroyed is a clone
+    const destroyClone: How | undefined = A(n)._destroyClone;
+    if (destroyClone) text = `${this.cloneRef(destroyClone)}(${text})`;
+    // a value returned with an error is destroyed when the call fails (`f() or_return`)
+    const destroyFailed: number | undefined = A(n)._destroyFailed;
+    if (destroyFailed) text = `${this.runtimeRef()}.drop_failed${destroyFailed === 3 ? "3" : ""}(${text})`;
+    // ...and the last use of a local moves it
+    if (A(n)._destroyTake) text = `${this.runtimeRef()}.take(&${text})`;
     // -define:VIDAR_RACE=true: a write the race check watches, and the declaration of a captured local (race.ts)
     if (A(n)._race) text = `${this.schedRef()}.__race_w(&${text})^`;
     const raceDecl: string[] | undefined = A(n)._raceDecl;
     if (raceDecl) text += raceDecl.map((name) => `; ${this.schedRef()}.__race_decl(&${name})`).join("");
+    // impl Destroy (destroy.ts): a local is destroyed when its scope ends, the old value when it is assigned,
+    // and a local that is returned is left zero for its defer
+    const destroyDecl: DestroyDecl[] | undefined = A(n)._destroyDecl;
+    if (destroyDecl)
+      text += destroyDecl
+        .map((d) => `${d.clone ? `; ${this.tok(d.name)} = ${this.cloneRef(d.clone)}(${this.tok(d.name)})` : ""}; defer ${this.destroyRef(d.how, this.tok(d.name))}(&${this.tok(d.name)})`)
+        .join("");
+    const destroyAssign: How | undefined = A(n)._destroyAssign;
+    if (destroyAssign && n.k === "Assign") {
+      const lhs = this.emit(n.lhs[0]);
+      const destroy = `${this.destroyRef(destroyAssign, lhs)}(&__vidar_old)`;
+      // the new value first: it may move the old one out (`x = f(move!(x))`), which leaves the target zero
+      if (A(n)._orReturn) text = `{ __vidar_old := ${lhs}; ${text}; ${destroy} }`;
+      else {
+        const rhs = this.emit(n.rhs[0]);
+        const lines = (text.match(/\n/g)?.length ?? 0) - (rhs.match(/\n/g)?.length ?? 0);
+        text = `{ __vidar_new: type_of(${lhs}) = ${rhs}; __vidar_old := ${lhs}; ${lhs} = __vidar_new; ${destroy} }` + "\n".repeat(Math.max(0, lines));
+      }
+    }
+    const destroyMove: DestroyMove[] | undefined = A(n)._destroyMove;
+    if (destroyMove) text = `{ ${destroyMove.map((m) => `defer ${m.zero ? `${this.emit(m.x)} = ${m.zero}` : `${this.runtimeRef()}.forget(&${this.emit(m.x)})`}; `).join("")}${text} }`;
+    // a copy of a value whose type is only known at run time: stopped there, or by Odin for the types this file can name
+    const destroyChecks: (Expr | string)[] | undefined = A(n)._destroyChecks;
+    if (destroyChecks) text = destroyChecks.map((c) => this.copyCheck(c)).join("") + text;
     // -opt: every index in the statement is proven in bounds (Odin takes the directive on a block, not a call)
     if (A(n)._noBounds) text = n.k === "ExprStmt" ? `#no_bounds_check { ${text} }` : `#no_bounds_check ${text}`;
     // -opt: the bounds checks of a loop's indexes, done once before it (a statement of its own, so LLVM still vectorizes the loop)
@@ -652,7 +689,7 @@ export class Emitter {
         if (this.tok(n.toks[n.start]) !== "do") return this.block(n);
         // statements hoisted before the body, or a prologue, must stay under the `do`
         // (Odin also rejects `do #no_bounds_check { call }`)
-        if (n.stmts.some((s) => A(s)._pre?.length || A(s)._boundsGuard || (A(s)._noBounds && s.k === "ExprStmt")) || this.prologue.has(n)) {
+        if (n.stmts.some((s) => A(s)._pre?.length || A(s)._boundsGuard || (A(s)._noBounds && s.k === "ExprStmt") || A(s)._destroyDecl || A(s)._destroyChecks) || this.prologue.has(n)) {
           const lines = this.prologue.get(n) ?? [];
           this.prologue.delete(n);
           return `{ ${[...lines, ...n.stmts.map((s) => this.withPre(s))].join("; ")} }`;
@@ -1087,6 +1124,98 @@ export class Emitter {
     return undefined;
   }
 
+  private runtimeRef(): string {
+    this.fileUsesRuntime = this.usesRuntime = true;
+    return RUNTIME_ALIAS;
+  }
+
+  /** The proc that destroys a value: its type's destructor, or the run-time dispatch. */
+  private destroyRef(how: How, local: string): string {
+    if (how.k === "dispatch") return `${this.runtimeRef()}.destroy`;
+    const { owner, name } = destructorName(how.dtor);
+    return this.qualify(owner, name, `destroy '${local}' with '${name}'`);
+  }
+
+  /** impl Destroy (destroy.ts): an #owned parameter is copied to a local on entry, destroyed unless it moves out. */
+  private ownedParams(p: ProcLit): { lines: string[]; names: Set<string> } {
+    const owned: { name: string; how: How }[] = A(p)._destroyOwned ?? [];
+    return { lines: owned.map((o) => `${o.name} := ${o.name}; defer ${this.destroyRef(o.how, o.name)}(&${o.name})`), names: new Set(owned.map((o) => o.name)) };
+  }
+
+  /** The proc that clones a value: its type's clone, or the run-time dispatch. */
+  private cloneRef(how: How): string {
+    if (how.k === "dispatch") return `${this.runtimeRef()}.clone`;
+    const { owner, name } = cloneName(how.dtor);
+    return this.qualify(owner, name, `copy a '${how.dtor.type.name}' with '${name}'`);
+  }
+
+  /** The move-only types (impl Destroy, no clone) this file can name, spelled as it would. */
+  private destroyTypesHere(): string[] {
+    const out: string[] = [];
+    for (const d of this.an.destructors.values()) {
+      if (d.cloneable || d.generic) continue;
+      if (d.type.pkg.unit === this.unit) out.push(d.type.odinName);
+      else if (!d.type.isPrivate) {
+        const scope = this.pkg.fileScopes.get(this.file);
+        for (const s of scope?.syms.values() ?? []) if (s.kind === "pkg" && s.target?.unit === d.type.pkg.unit) { out.push(`${s.name}.${d.type.odinName}`); break; }
+      }
+    }
+    return out;
+  }
+
+  /** A copy in generic code: refused by Odin for the move-only types this file can name, and checked at run time by `__vidar.clone`, or `check_copy` for a capture or loop variable. */
+  private copyCheck(c: Expr | string): string {
+    let value: string;
+    if (typeof c === "string") value = c;
+    else {
+      const clone = A(c)._destroyClone;
+      A(c)._destroyClone = undefined;
+      value = this.emit(c);
+      A(c)._destroyClone = clone;
+    }
+    const at = typeof c === "string" ? "" : `${posix.basename(posOf(c).file)}:${posOf(c).line}: `;
+    const named = this.destroyTypesHere();
+    const assert = named.length ? `#assert(${named.map((t) => `type_of(${value}) != ${t}`).join(" && ")}, "${at}this copies a value whose type has impl Destroy, and both copies would be destroyed"); ` : "";
+    return typeof c === "string" ? `${assert}${this.runtimeRef()}.check_copy(type_of(${value})); ` : assert;
+  }
+
+  /**
+   * `__T_destroy` for the types declared in this file whose fields need destroying, `__T_clone` for the
+   * ones that can be cloned field by field, and their registration.
+   */
+  private destroyHelpers(f: File): void {
+    const here = [...this.an.destructors.values()].filter((d) => d.type.decl.toks === f.toks);
+    for (const d of here) {
+      // a parametric type's helper takes every instance: proc(x: ^Box($T))
+      const decl = d.type.decl.values[d.type.index];
+      const polys = decl.k === "StructType" && decl.polyParams ? decl.polyParams.flatMap((p) => p.names.map((n) => n.name)) : [];
+      const pattern = polys.length ? `${d.type.odinName}(${polys.map((n) => "$" + n).join(", ")})` : d.type.odinName;
+      if (d.fields.length) {
+        const { name } = destructorName(d);
+        const body = [
+          ...(d.proc ? [`\t${this.qualify(d.proc, d.proc.odinName)}(x)`] : []),
+          ...d.fields.map((fd) => `\t${this.destroyRef(fd.how, fd.name)}(&x.${fd.name})`),
+        ];
+        this.helpers.push(`// destroys a ${d.type.name}: ${d.proc ? "its impl Destroy proc, then " : ""}its fields that need it, last first\n${name} :: proc(x: ^${pattern}) {\n${body.join("\n")}\n}`);
+      }
+      if (d.cloneable && !d.clone) {
+        const body = d.fields.map((fd) => `\tc.${fd.name} = ${fd.how.k === "call" ? this.cloneRef(fd.how) : `${this.runtimeRef()}.clone`}(x.${fd.name})`).reverse();
+        this.helpers.push(`// copies a ${d.type.name}: clones its fields that need it\n${cloneName(d).name} :: proc(x: ${d.type.odinName}) -> ${d.type.odinName} {\n\tc := x\n${body.join("\n")}\n\treturn c\n}`);
+      }
+    }
+    if (this.an.destroyDispatch && here.length) {
+      const local = (r: { owner: GlobalSym; name: string }) => (r.owner.pkg.unit === this.unit ? r.name : this.qualify(r.owner, r.name));
+      const lines = here.map((d) =>
+        d.generic
+          ? `\t${this.runtimeRef()}.register_generic(#location().file_path, "${d.type.odinName}")`
+          : d.cloneable
+            ? `\t${this.runtimeRef()}.register_clone(${d.type.odinName}, ${local(destructorName(d))}, ${local(cloneName(d))})`
+            : `\t${this.runtimeRef()}.register_destroy(${d.type.odinName}, ${local(destructorName(d))})`,
+      );
+      this.helpers.push(`// impl Destroy for generic code and run-time checks\n@(init, private="file")\n__vidar_destroy_init :: proc "contextless" () {\n${lines.join("\n")}\n}`);
+    }
+  }
+
   private qualify(owner: GlobalSym, name: string, what = `use interface '${owner.name}'`): string {
     if (owner.pkg.unit === this.unit) return name;
     const scope = this.pkg.fileScopes.get(this.file);
@@ -1431,10 +1560,16 @@ export class Emitter {
       else if (t === ")" && --depth === 0) break;
     }
     const params = p.sig.params.flatMap((g) =>
-      g.names.flatMap((n) => closures?.params.get(n.name) ?? [`${n.prefix ?? ""}${consts.includes(n.name) ? "$" : ""}${n.name}${g.type ? `: ${this.emit(g.type)}` : " :"}${g.value ? `${g.type ? " " : ""}= ${this.emit(g.value)}` : ""}`]),
+      g.names.flatMap((n) => closures?.params.get(n.name) ?? [`${n.prefix && n.prefix !== "#owned" ? n.prefix : ""}${consts.includes(n.name) ? "$" : ""}${n.name}${g.type ? `: ${this.emit(g.type)}` : " :"}${g.value ? `${g.type ? " " : ""}= ${this.emit(g.value)}` : ""}`]),
     );
     const ps: LocalSym[] = A(p)._params ?? [];
-    const shadowed = [...ps.filter((x) => x.refCaptured).map(addressable), ...ps.filter((x) => callHoisted(x) && !this.inlinedClosures.has(x)).map(hoistCall), ...(closures?.prologue ?? [])];
+    const owned = this.ownedParams(p);
+    const shadowed = [
+      ...owned.lines,
+      ...ps.filter((x) => x.refCaptured && !owned.names.has(x.name)).map(addressable),
+      ...ps.filter((x) => callHoisted(x) && !this.inlinedClosures.has(x)).map(hoistCall),
+      ...(closures?.prologue ?? []),
+    ];
     if (shadowed.length) this.prologue.set(p.body!, shadowed);
     const before = value !== p ? this.generic(value, value.start, p.start) + " " : "";
     const after = this.generic(p, close + 1, p.body!.start);
@@ -1749,7 +1884,12 @@ export class Emitter {
       optimizeProc(p.body, this.an, !!A(p)._closureCopies);
     }
     const params: LocalSym[] = A(p)._params ?? [];
-    const shadowedParams = [...params.filter((s) => s.refCaptured).map(addressable), ...params.filter(callHoisted).map(hoistCall)];
+    const owned = this.ownedParams(p);
+    const shadowedParams = [
+      ...owned.lines,
+      ...params.filter((s) => s.refCaptured && !owned.names.has(s.name)).map(addressable),
+      ...params.filter(callHoisted).map(hoistCall),
+    ];
     if (!p.captures) {
       if (p.body && shadowedParams.length) this.prologue.set(p.body, shadowedParams);
       return this.generic(p);

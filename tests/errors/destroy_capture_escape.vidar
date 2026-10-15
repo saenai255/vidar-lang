@@ -1,0 +1,16 @@
+// error: this closure borrows 'f', a File that has impl Destroy, and is returned
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+logger :: proc() -> closure() {
+	f := open("log")
+	return proc[f]() { fmt.println(f.name) }
+}
+
+main :: proc() { logger()() }

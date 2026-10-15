@@ -1,0 +1,10 @@
+// error: destroyed by 'file_destroy' in package 'files'; import that package in this file
+package main
+
+import "core:fmt"
+import "mid"
+
+main :: proc() {
+	f := mid.get()
+	fmt.println(f.name)
+}

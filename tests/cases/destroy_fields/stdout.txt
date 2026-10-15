@@ -1,0 +1,19 @@
+-- fields
+level 2
+close l err
+close l out
+-- impl and fields
+stop s
+close extra
+close spare1
+close spare0
+close s err
+close s out
+-- array, Maybe, union
+close handle
+close maybe
+close a1
+close a0
+-- a type vidar can't tell is destroyed at run time
+X 3
+-- end

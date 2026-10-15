@@ -91,9 +91,43 @@ Rules:
 - Impl blocks are only allowed at file scope, and impl targets must be named types or parametric ones (`Box($T)`, `Box(int)`).
 - `impl I for T` binds every method of `I`, inherited ones included, and also implements each base of `I` declared in the same package (or import cycle). A base in another package is reached by converting an `I` value; `base_method(&x)` static calls need an impl of that base itself.
 - Extending is transitive and may form diamonds; an interface can't extend itself, list a base twice, or get two different methods with the same name.
-- There is no builtin cleanup interface; declare `Destroy :: interface { destroy }` yourself.
+- `impl Destroy for T` and `impl Clone for T` are built in (see [Destructors](#destructors)) unless the program declares its own `Destroy` (or `Clone`) interface.
 
 Examples: [examples/interfaces](examples/interfaces), [examples/methods](examples/methods).
+
+## Destructors
+
+| Syntax | Meaning |
+|---|---|
+| `impl Destroy for T { destroy = t_destroy }` | `t_destroy :: proc(x: ^T)` runs for each local of type `T` when its scope ends (a named struct or union, in its own package) |
+| `impl Clone for T { clone = t_clone }` | `t_clone :: proc(x: T) -> T` runs for each copy of a `T`, which is otherwise an error; `T` needs `impl Destroy` too |
+| `impl Destroy for Box($T) { destroy = box_destroy }` | one impl (of either) for every instance of a parametric type, with generic procs: `box_destroy :: proc(b: ^Box($T))` |
+| `x := make_t()`, `x: T` | `x` is destroyed at the end of its scope, after later `defer`s; the zero value is destroyed too |
+| `x = make_t()`, `p^ = make_t()` | the old value is destroyed once the new one is stored |
+| `return x` | moves `x` out: the caller destroys it |
+| `f(x)` with `f :: proc(t: T)` | the parameter borrows `x`; `f` can't return or store it |
+| `f :: proc(#owned t: T)` | the parameter takes the value over: `f` destroys it unless it returns or moves it; callers pass a new value, `move!(x)`, or a clone |
+| `Sink :: proc(#owned t: T)` | a proc type says it too; a proc used as a proc value must agree with its type about `#owned` |
+| `x := f() or_return` | a value `f` returns with an error is destroyed when the call fails |
+| `move!(x)` | `x`'s value, leaving `x` zero: moves it to a new owner |
+| `S :: struct { f: T, ... }`, `[4]T`, `Maybe(T)`, `union { T, ... }`, `Pair(T)` | hold a `T`, so they are destroyed too: a struct's own impl first, then its fields last first; they can be copied (cloned) when every `T` in them can, and a struct has no `impl Destroy` of its own |
+| `x: T` in a generic proc, or a local vidar can't type | destroyed through `__vidar.destroy`, found at run time; a copy fails Odin's `#assert` where the file can name the type, else stops the program |
+| `y := x`, `y = x`, `return param`, `new_clone(x)` | a clone with `impl Clone`; otherwise compile errors, since a copy would be destroyed twice: borrow with `&x`, or move with `move!(x)` |
+| `proc[x]`, `for x in xs` | borrow `x`, as a by-value parameter does: never destroyed; a closure that borrows a `T` can't outlive the proc |
+| `y := x` on `x`'s last use | moves `x` instead of cloning it, when nothing reads `x` later (no later reference, defer, closure or `&x`, and no loop around the copy that `x` was declared outside of) |
+| `[dynamic]T`, `map[K]T` | own their elements: destroyed with them, last first, then freed; `clear`, `resize`, `ordered_remove`, `unordered_remove`, `remove_range`, `delete`, and `pop`/`pop_front`/`delete_key` as statements destroy what they drop; `append` moves values in; a map can't be cloned |
+| `[]T` | a view: never destroyed; `make([]T, n)`, `[]T{...}` and `delete` of one are compile errors |
+| `import "vidar:rc"` | `rc.Rc(T)`: a shared `T`, released by its last owner; `rc.new(value)`, `rc.get(r)`, `rc.count(r)`; `rc.Weak(T)` refers without owning: `rc.downgrade(r)`, `rc.upgrade(w)`, `rc.alive(w)` |
+| `make_t()` as a statement, `f(make_t())`, `_ = make_t()` | compile errors: nothing would destroy the value |
+
+Rules:
+- A destroy proc must accept the zero value: declarations without a value, returned locals and the values that come back with an error are all destroyed.
+- For now, `T` can't be held in an `#soa` or fixed-capacity dynamic array, a `distinct` type, a map key, an Odin package's container type (`queue.Queue(T)`) or a package-level variable; each is a compile error. Hold `^T` instead.
+- A generic proc that returns or stores a borrowed parameter copies it: a clone, or a stop for a move-only `T`. Make it `#owned`.
+- A type's own destroy and clone procs copy values as they are.
+- A file holding a `T` must import the package of its destroy proc.
+
+See [Destructors](docs/language/destructors.md).
 
 ## Error handling
 

@@ -1,0 +1,72 @@
+package main
+
+import "core:fmt"
+
+// impl Clone: a copy of a Handle calls handle_clone, and each copy is destroyed
+Handle :: struct { id: int, refs: ^int }
+
+handle_destroy :: proc(h: ^Handle) {
+	if h.refs == nil do return // the zero value
+	h.refs^ -= 1
+	fmt.println("release", h.id, "left", h.refs^)
+}
+
+handle_clone :: proc(h: Handle) -> Handle {
+	if h.refs != nil do h.refs^ += 1
+	return h // a type's own clone proc copies it as it is
+}
+
+impl Destroy for Handle { destroy = handle_destroy }
+impl Clone for Handle { clone = handle_clone }
+
+// cloned field by field, since both fields can be
+Pair :: struct { a: Handle, n: int, b: Handle }
+
+// move-only: impl Destroy without impl Clone
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { if f.name != "" do fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+
+open :: proc(name: string) -> File { return File{name} }
+
+// an #owned parameter takes the value over: it is destroyed here unless it moves out
+keep :: proc(#owned f: File) -> File { return f }
+
+store :: proc(dst: ^File, #owned f: File) {
+	dst^ = move!(f)
+}
+
+consume :: proc(#owned h: Handle) {
+	fmt.println("consumed", h.id)
+}
+
+// a borrowed parameter is cloned when it is returned
+same :: proc(h: Handle) -> Handle { return h }
+
+main :: proc() {
+	refs := 1
+	h := Handle{1, &refs}
+	{
+		g := h
+		p := Pair{h, 7, g}     // g's last use: moved into p, not cloned
+		fmt.println("refs", refs)
+		q := p                 // cloned field by field: p is read below
+		fmt.println("refs", refs, q.n, p.n)
+		q.a = h
+		fmt.println("refs", refs)
+	}
+	fmt.println("refs", refs)
+	consume(h)            // a clone
+	consume(same(h))      // a new value moves in
+	fmt.println("refs", refs)
+	arr := [2]Handle{h, h}
+	arr2 := arr           // cloned element by element at run time (arr is read below)
+	fmt.println("refs", refs, arr[0].id)
+
+	f := open("a")
+	k := keep(move!(f))
+	fmt.println("kept", k.name, "and f is zero:", f.name == "")
+	slot: File
+	store(&slot, open("b"))
+	fmt.println("slot", slot.name)
+}

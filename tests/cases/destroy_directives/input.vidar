@@ -1,0 +1,20 @@
+package main
+
+import "core:fmt"
+
+// a directive in front of a value (#force_inline, #partial) doesn't make it a temporary
+R :: struct { id: int }
+r_destroy :: proc(r: ^R) { if r.id != 0 do fmt.println("drop", r.id) }
+impl Destroy for R { destroy = r_destroy }
+
+Side :: enum { Left, Right }
+
+inner :: proc(i: int) -> R { return R{i} }
+
+main :: proc() {
+	a := #force_inline inner(1)
+	sides := #partial [Side]R{.Right = R{2}}
+	fmt.println(a.id, sides[.Right].id)
+	a = #force_inline inner(3)
+	fmt.println(a.id)
+}

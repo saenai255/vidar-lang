@@ -24,7 +24,7 @@ async function start() {
   const cfg = vscode.workspace.getConfiguration("vidar");
   client = new LanguageClient("vidar", "Vidar", serverOptions(), {
     documentSelector: [{ scheme: "file", language: "vidar" }],
-    initializationOptions: { odinCheckOnSave: cfg.get("odinCheckOnSave"), odinPath: cfg.get("odinPath"), ols: cfg.get("ols"), olsPath: cfg.get("olsPath"), optHints: cfg.get("optHints") },
+    initializationOptions: { odinCheckOnSave: cfg.get("odinCheckOnSave"), odinPath: cfg.get("odinPath"), ols: cfg.get("ols"), olsPath: cfg.get("olsPath"), optHints: cfg.get("optHints"), ownershipHints: cfg.get("ownershipHints"), optCodeLens: cfg.get("optCodeLens") },
     synchronize: { configurationSection: "vidar" },
   });
   try {

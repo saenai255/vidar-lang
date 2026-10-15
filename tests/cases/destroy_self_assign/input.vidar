@@ -1,0 +1,34 @@
+package main
+
+import "core:fmt"
+
+// an assignment whose new value moves the old one out: the new value is made first, so the old one
+// is found zero and nothing is destroyed twice
+R :: struct { id: int }
+r_destroy :: proc(r: ^R) { if r.id != 0 do fmt.println("drop", r.id) }
+impl Destroy for R { destroy = r_destroy }
+
+bump :: proc(#owned r: R) -> R {
+	out := R{r.id + 1}
+	return out
+}
+same :: proc(#owned r: R) -> R { return r }
+peek :: proc(r: ^R) -> R { return R{r.id * 10} }
+
+Holder :: struct { r: R }
+
+main :: proc() {
+	r := R{1}
+	r = same(move!(r))
+	fmt.println("r", r.id)
+	r = bump(move!(r))
+	fmt.println("r", r.id)
+	r = move!(r)
+	fmt.println("r", r.id)
+	r = peek(&r)
+	fmt.println("r", r.id)
+	h := Holder{R{5}}
+	p := &h
+	p.r = same(move!(p.r))
+	fmt.println("h", h.r.id)
+}

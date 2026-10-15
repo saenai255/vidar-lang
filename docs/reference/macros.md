@@ -101,6 +101,17 @@ check!(cond) panics when cond is false, showing the expression; for comparisons 
 shows both operands. check!(cond, "message") adds a message.
 ```
 
+### `move!`
+
+```odin
+move :: proc!(x: Expr) -> Expr
+```
+
+```text
+move!(x) evaluates to x's value and leaves x zero: it moves a value with impl Destroy to a new owner
+(a variable, a field, an #owned parameter) instead of copying it.
+```
+
 ### `todo!`
 
 ```odin
