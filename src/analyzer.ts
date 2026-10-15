@@ -1035,7 +1035,9 @@ export class Analyzer {
       case "Directive": {
         // `#force_inline proc(...)`, `#force_no_inline proc(...)`: the proc's own type
         const lit = unwrapProc(e);
-        return lit ? this.typeOf(lit, scope, depth + 1) : undefined;
+        if (lit) return this.typeOf(lit, scope, depth + 1);
+        // `#force_inline f(x)`, `#partial [E]T{...}`: the value's own type
+        return e.x && /^#(force_inline|force_no_inline|partial)$/.test(e.name) ? this.typeOf(e.x, scope, depth + 1) : undefined;
       }
       case "MacroCall":
         return A(e)._expansion ? this.typeOf(A(e)._expansion, scope, depth + 1) : undefined;

@@ -1056,6 +1056,7 @@ class Checker {
     else if (e.k === "Ternary") this.consume(e.a), this.consume(e.b);
     else if (e.k === "Binary" && e.op === "or_else") this.consume(e.x), this.consume(e.y);
     else if (e.k === "MacroCall" && A(e)._expansion) this.consume(A(e)._expansion);
+    else if (e.k === "Directive" && e.x) this.consume(e.x);
     else if (e.k === "Call" && this.conversion(e) && e.args.length === 1) this.consume(e.args[0]);
   }
 
