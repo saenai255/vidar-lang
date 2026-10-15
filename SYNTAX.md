@@ -107,6 +107,8 @@ Examples: [examples/interfaces](examples/interfaces), [examples/methods](example
 | `return x` | moves `x` out: the caller destroys it |
 | `f(x)` with `f :: proc(t: T)` | the parameter borrows `x`; `f` can't return or store it |
 | `f :: proc(#owned t: T)` | the parameter takes the value over: `f` destroys it unless it returns or moves it; callers pass a new value, `move!(x)`, or a clone |
+| `Sink :: proc(#owned t: T)` | a proc type says it too; a proc used as a proc value must agree with its type about `#owned` |
+| `x := f() or_return` | a value `f` returns with an error is destroyed when the call fails |
 | `move!(x)` | `x`'s value, leaving `x` zero: moves it to a new owner |
 | `S :: struct { f: T, ... }`, `[4]T`, `Maybe(T)`, `union { T, ... }`, `Pair(T)` | hold a `T`, so they are destroyed too: a struct's own impl first, then its fields last first; they can be copied (cloned) when every `T` in them can, and a struct has no `impl Destroy` of its own |
 | `x: T` in a generic proc, or a local vidar can't type | destroyed through `__vidar.destroy`, found at run time; a copy fails Odin's `#assert` where the file can name the type, else stops the program |

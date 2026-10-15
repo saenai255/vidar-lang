@@ -380,7 +380,9 @@ Each of these is a compile error for now, not a silent leak:
 - package-level variables of type `T`;
 - `impl Destroy` or `impl Clone` for one instance of a parametric type (`Box(int)`);
 - declaring a `T` in an `if`, `for` or `switch` initializer;
-- assigning several values at once (`a, b = x, y`) when one is a `T`, or assigning to a target with side effects (`files[next()] = ...`).
+- assigning several values at once (`a, b = x, y`) when one is a `T`, or assigning to a target with side effects (`files[next()] = ...`);
+- a range in an array literal (`[4]T{0..<4 = x}`), which copies one value into each element;
+- `#owned` on a variadic parameter (`#owned xs: ..T`), which is a slice of the caller's values.
 
 Generic code has gaps vidar can't see: a `T` returned by a call and thrown away, or passed straight to another call, is never destroyed, and a `T` declared in an `if`/`for`/`switch` initializer isn't either. Assigning to an element of `T`s at a computed index (`a[i + 1] = v`), or to several targets at once, leaves the old value undestroyed. Generic code that holds an instance of a parametric type as a plain `T` (a `Box(int)` passed as `$T`) can't destroy it, since its procs exist only per instance, and stops the program; `Rc` is the exception, since `vidar:rc` registers procs that take any instance. Heap values (`new(T)`, `free`) are never destroyed automatically, as with a raw pointer in C++.
 
