@@ -751,6 +751,12 @@ function change(text) {
     let items = await dComplete("show(a)", "\tx := #ow");
     const owned = items.find((i) => i.label === "#owned");
     check("completion after # offers directives, #owned with its docs", owned?.insertText === "owned" && owned.filterText === "owned" && owned.documentation?.value.includes("takes over") && items.some((i) => i.label === "#partial"), JSON.stringify(items.slice(0, 5)));
+    items = await dComplete("show(a)", "\tx := 1 // see #ow");
+    check("no directives after # in a comment", !items.some((i) => i.label === "#owned"), JSON.stringify(items.slice(0, 5)));
+    items = await dComplete("show(a)", '\ts := "#ow');
+    check("no directives after # in a string", !items.some((i) => i.label === "#owned"), JSON.stringify(items.slice(0, 5)));
+    items = await dComplete("show(a)", '\ts := "a // b"; x := #ow');
+    check("directives after a string that holds //", items.some((i) => i.label === "#owned"), JSON.stringify(items.slice(0, 5)));
     items = await dComplete("show(a)", "\trc.");
     check("completion on rc. offers Weak, downgrade, upgrade and alive", ["Rc", "Weak", "new", "get", "count", "downgrade", "upgrade", "alive"].every((n) => items.some((i) => i.label === n)), JSON.stringify(items.map((i) => i.label)));
     notify("workspace/didChangeConfiguration", { settings: { vidar: { optHints: "on" } } });

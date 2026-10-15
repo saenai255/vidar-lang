@@ -1272,6 +1272,24 @@ function item(a: Analysis, sym: Sym): Completion {
   return { label: sym.name, kind, detail };
 }
 
+/** Whether the end of `line` is code: not inside a string, a rune or a comment that starts on the line. */
+function endsInCode(line: string): boolean {
+  let quote = "";
+  let block = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (block) {
+      if (c === "*" && line[i + 1] === "/") (block = false), i++;
+    } else if (quote) {
+      if (c === "\\" && quote !== "`") i++;
+      else if (c === quote) quote = "";
+    } else if (c === "/" && line[i + 1] === "/") return false;
+    else if (c === "/" && line[i + 1] === "*") (block = true), i++;
+    else if (c === '"' || c === "'" || c === "`") quote = c;
+  }
+  return !quote && !block;
+}
+
 function visibleFrom(sym: Sym, scope: Scope): boolean {
   return !(sym.kind === "global" && sym.isPrivate && scope.package !== sym.pkg);
 }
@@ -1292,9 +1310,11 @@ export function complete(cur: Analysis, fallback: Analysis | undefined, file: st
     }
   }
 
-  // `#own`: directives; the word being completed starts after the `#`
-  if (/#\w*$/.test(lineText))
+  // `#own`: directives; the word being completed starts after the `#` (nothing in a comment or string)
+  if (/#\w*$/.test(lineText)) {
+    if (!endsInCode(lineText)) return [];
     return Object.entries(DIRECTIVE_DOCS).map(([name, doc]) => ({ label: `#${name}`, kind: "keyword" as const, insertText: name, filterText: name, detail: "directive", documentation: doc }));
+  }
 
   const pkgRef = /\b([A-Za-z_]\w*)\.(\w*)$/.exec(lineText);
   const pkg = pkgRef ? a.analyzer.lookup(pkgRef[1], scope, null) : undefined;
