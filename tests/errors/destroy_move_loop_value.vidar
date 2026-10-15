@@ -1,4 +1,4 @@
-// error: a closure can't hold a copy of it. Capture &f
+// error: is a loop value, which borrows each element
 package main
 
 import "core:fmt"
@@ -9,7 +9,8 @@ impl Destroy for File { destroy = file_destroy }
 open :: proc(name: string) -> File { return File{name} }
 
 main :: proc() {
-	f := open("a")
-	show := proc[f]() { fmt.println(f.name) }
-	show()
+	files: [dynamic]File
+	append(&files, open("a"))
+	kept: [dynamic]File
+	for f in files do append(&kept, move!(f))
 }

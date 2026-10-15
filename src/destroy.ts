@@ -1,5 +1,6 @@
 import { Block, Expr, Node, Stmt, children } from "./ast";
 import { A, Analyzer, isStmt, matchType, nodeText, posOf } from "./analyzer";
+import { closureEscape } from "./escape";
 import { CompileError, Token } from "./lexer";
 import type { CaptureSym, GlobalSym, LocalSym, PackageInfo, Scope, Sym, Ty } from "./scope";
 
@@ -320,6 +321,13 @@ interface Container {
   name: string;
 }
 
+/** How a proc uses one of its locals, for last-use moves. */
+interface Uses {
+  refs: Expr[];
+  /** read later than its position says: in a defer, through a pointer, or by a closure */
+  escapes: boolean;
+}
+
 class Checker {
   /** owned locals of each proc being walked, innermost last */
   private owned: Set<LocalSym>[] = [];
@@ -331,6 +339,9 @@ class Checker {
   private stmts: Stmt[] = [];
   /** inside an impl's destroy or clone proc, where copies are left alone */
   private raw = false;
+  /** the procs being walked, innermost last */
+  private procs: Extract<Expr, { k: "ProcLit" }>[] = [];
+  private uses = new Map<Node, Map<Sym, Uses>>();
 
   constructor(
     private an: Analyzer,
@@ -425,27 +436,10 @@ class Checker {
   }
 
   private rangeFor(s: Extract<Stmt, { k: "RangeFor" }>): void {
-    // a map gives its key first, then its value (keys never need destroying: see mapKey)
-    const c = this.containerOf(this.typeOf(s.x));
-    if (c?.kind === "map") {
-      const v = s.vals[1];
-      const o = v && !v.byRef ? ownedOf(this.an, c.elem) : undefined;
-      if (o) throw new CompileError(`'${v.name}' would be a copy of each ${o.name}, ${o.why}; loop over pointers: for ${s.vals[0].name}, &${v.name} in ...`, s.toks[v.tok].pos);
-      return;
-    }
     // an iterator proc: `for x in next(&it)` gets a new value each time round
     const iter = s.x.k === "Call" ? this.ownedOf(s.x) : undefined;
     if (iter) throw new CompileError(`each ${iter.name} that ${nodeText(s.x.k === "Call" ? s.x.fn : s.x)}() returns to this loop would never be destroyed; loop with for { x, ok := ...; if !ok do break } instead`, posOf(s.x));
-    const syms: LocalSym[] = A(s)._syms ?? [];
-    const v = syms[0];
-    if (!v || s.vals[0]?.byRef) return;
-    const o = ownedOf(this.an, v.ty);
-    if (o) throw new CompileError(`'${v.name}' would be a copy of each ${o.name}, ${o.why}; loop over pointers: for &${v.name} in ...`, v.declTok?.pos ?? posOf(s));
-    // checked at run time, at the top of the body
-    if (this.unsure(v.ty) && v.name !== "_") {
-      A(s)._destroyRangeCheck = v.name;
-      this.an.destroyDispatch = true;
-    }
+    // `for f in files` borrows each element, as a by-value parameter does: Odin won't let it be assigned or addressed
   }
 
   /** A call statement whose results are thrown away: a destructible one would never be destroyed. */
@@ -468,16 +462,23 @@ class Checker {
   private expr(e: Expr): void {
     switch (e.k) {
       case "ProcLit": {
-        if (e.captures) {
-          for (const c of (A(e)._captures as CaptureSym[] | undefined) ?? []) {
-            if (c.byRef) continue;
-            const ty = symTy(c.target);
-            const o = ownedOf(this.an, ty);
-            if (o) throw new CompileError(`'${c.name}' is a ${o.name}, ${o.why}; a closure can't hold a copy of it. Capture &${c.name}`, c.declTok?.pos ?? posOf(e));
-            if (this.unsure(ty) && c.target.kind === "local") this.check(c.name);
-          }
+        // a capture by value borrows, as a by-value parameter does: the closure must not outlive the proc
+        const outer = this.procs[this.procs.length - 1];
+        let escape: string | undefined;
+        for (const c of e.captures ? ((A(e)._captures as CaptureSym[] | undefined) ?? []) : []) {
+          if (c.byRef) continue;
+          const ty = symTy(c.target);
+          const o = ownedOf(this.an, ty);
+          const unsure = !o && this.unsure(ty) && c.target.kind === "local";
+          if (!o && !unsure) continue;
+          escape ??= outer && closureEscape(this.an, outer, e);
+          if (!escape) continue;
+          if (o) throw new CompileError(`this closure borrows '${c.name}', a ${o.name} ${o.why.replace("which ", "that ")}, and ${escape}, but '${c.name}' is destroyed when its scope ends. Share it through an Rc (vidar:rc) instead`, c.declTok?.pos ?? posOf(e));
+          // generic code: checked at run time, as a copy
+          this.check(c.name);
         }
         if (!e.body) return this.kids(e);
+        this.procs.push(e);
         this.owned.push(this.ownedParams(e));
         this.results.push(new Set(((A(e)._results as Sym[] | undefined) ?? []).filter(Boolean)));
         const stmts = this.stmts;
@@ -485,6 +486,7 @@ class Checker {
         try {
           this.kids(e);
         } finally {
+          this.procs.pop();
           this.owned.pop();
           this.results.pop();
           this.stmts = stmts;
@@ -555,6 +557,8 @@ class Checker {
     if (sym?.kind === "local" && sym.declKind === "param" && !this.owned.some((o) => o.has(sym)))
       throw new CompileError(`'${e.k === "Ident" ? e.name : ""}' is a parameter, which is borrowed, so it can't be moved; declare it #owned to take it over`, posOf(e));
     if (sym?.kind === "capture") throw new CompileError(`a closure can't move '${sym.name}' out of the proc that owns it`, posOf(e));
+    if (sym?.kind === "local" && sym.declKind === "range")
+      throw new CompileError(`'${sym.name}' is a loop value, which borrows each element, so it can't be moved; loop over pointers and move the element: for &${sym.name} in ..., then move!(${sym.name}^)`, posOf(e));
     if (!this.place(e)) throw new CompileError(`move! takes a variable, field or element, which it leaves zero: '${nodeText(e)}' is a value already`, posOf(e));
   }
 
@@ -662,12 +666,11 @@ class Checker {
       return;
     }
     const c = this.containerOf(this.typeOf(a0));
-    if (!c) return;
+    // the values move in, whether or not vidar can tell the array's type
     if (ADDING.has(name)) {
-      if (c.kind !== "dynamic") return;
       for (const a of e.args.slice(1)) {
         if (a.k === "Spread") {
-          const o = ownedOf(this.an, c.elem);
+          const o = c && ownedOf(this.an, c.elem);
           if (o && !this.raw)
             throw new CompileError(`${name} would copy each ${o.name} in '${nodeText(a.x)}', ${o.why}, and both copies would be destroyed; ${name} them one at a time, each a new value, a clone or move!(x)`, posOf(a));
           continue;
@@ -678,6 +681,7 @@ class Checker {
       }
       return;
     }
+    if (!c) return;
     const h = this.holds(c);
     if (!h) return;
     const fix = OVERWRITING[name];
@@ -759,6 +763,12 @@ class Checker {
     if (!p) return;
     const ty = this.typeOf(e);
     const o = ownedOf(this.an, ty);
+    // the last use of a local moves it instead: no clone, and the local's destroy finds it zero
+    if ((o?.clone || (!o && this.unsure(ty) && this.owned.length)) && this.lastUse(p)) {
+      A(p)._destroyTake = true;
+      this.an.destroyDispatch = true;
+      return;
+    }
     if (o?.clone) {
       // impl Clone: the copy is a clone, which the new owner destroys
       A(e)._destroyClone = o.how;
@@ -770,6 +780,68 @@ class Checker {
       throw new CompileError(`'${text}' is a ${o.name}, ${o.why}, and ${why}; both copies would be destroyed. ${fix ?? `Borrow it with &${text}`}`, posOf(e));
     }
     if (this.unsure(ty) && this.owned.length && this.check(p)) A(e)._destroyClone = { k: "dispatch" } satisfies How;
+  }
+
+  /**
+   * Whether `p` is a local this proc owns that is never read after it: no later reference, none in a
+   * defer, behind a pointer or in a closure, and no loop around `p` that the local was declared before.
+   */
+  private lastUse(p: Expr): boolean {
+    while (p.k === "Paren") p = p.x;
+    const sym: Sym | undefined = p.k === "Ident" ? A(p)._sym : undefined;
+    const proc = this.procs[this.procs.length - 1];
+    if (sym?.kind !== "local" || !proc?.body || !this.owned[this.owned.length - 1]?.has(sym) || !sym.declTok) return false;
+    const decl = p.toks.indexOf(sym.declTok);
+    const u = this.usesIn(proc).get(sym);
+    if (decl < 0 || !u || u.escapes) return false;
+    if (u.refs.some((r) => r !== p && (r.toks !== p.toks || r.start > p.start))) return false;
+    // the other references in this statement are read after the copy, or written (`h = h`)
+    const s = this.stmts[this.stmts.length - 1];
+    if (!s || u.refs.some((r) => r !== p && r.start >= s.start && r.end <= s.end)) return false;
+    return !this.stmts.some((x) => (x.k === "For" || x.k === "RangeFor") && (x.toks !== p.toks || x.start > decl));
+  }
+
+  private usesIn(proc: Extract<Expr, { k: "ProcLit" }>): Map<Sym, Uses> {
+    let out = this.uses.get(proc);
+    if (out) return out;
+    const uses = (out = new Map<Sym, Uses>());
+    this.uses.set(proc, uses);
+    const get = (sym: Sym): Uses => {
+      let u = uses.get(sym);
+      if (!u) uses.set(sym, (u = { refs: [], escapes: false }));
+      return u;
+    };
+    const root = (e: Expr): Sym | undefined => {
+      while (e.k === "Paren" || e.k === "Index" || (e.k === "Selector" && !A(e)._pkgMember)) e = e.x;
+      return e.k === "Ident" ? A(e)._sym : undefined;
+    };
+    const escape = (e: Expr) => {
+      const sym = root(e);
+      if (sym) get(sym).escapes = true;
+    };
+    const walk = (n: Node, deferred: boolean): void => {
+      if (n.k === "ProcLit" && n !== proc) {
+        for (const c of (A(n)._captures as CaptureSym[] | undefined) ?? []) get(c.target).escapes = true;
+        return;
+      }
+      if (n.k === "Ident") {
+        const sym: Sym | undefined = A(n)._sym;
+        if (sym) {
+          const u = get(sym);
+          u.refs.push(n);
+          if (deferred) u.escapes = true;
+        }
+      }
+      if (n.k === "Unary" && n.op === "&") escape(n.x);
+      if (n.k === "RangeFor" && n.vals.some((v) => v.byRef)) escape(n.x);
+      if (n.k === "Using") n.x.forEach(escape);
+      const d = deferred || n.k === "Defer" || n.k === "ErrDefer";
+      for (const c of children(n)) walk(c, d);
+      const exp: Node | undefined = A(n)._expansion;
+      if (exp) walk(exp, d);
+    };
+    walk(proc.body!, false);
+    return uses;
   }
 
   /** A copy checked when the program runs, and by Odin for the move-only types this file can name. */

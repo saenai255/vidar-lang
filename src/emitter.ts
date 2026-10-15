@@ -580,8 +580,6 @@ export class Emitter {
   }
 
   emit(n: Node): string {
-    const rangeCheck: string | undefined = A(n)._destroyRangeCheck;
-    if (rangeCheck && n.k === "RangeFor") this.prologue.set(n.body, [...(this.prologue.get(n.body) ?? []), `${this.runtimeRef()}.check_copy(type_of(${rangeCheck}))`]);
     // -opt: an element of an array of interface values stored inline, without its new_clone
     const valueOf: Expr | undefined = A(n)._valueOf;
     if (valueOf) return this.emit(valueOf);
@@ -600,6 +598,8 @@ export class Emitter {
     // impl Clone (destroy.ts): a copy of a value that is destroyed is a clone
     const destroyClone: How | undefined = A(n)._destroyClone;
     if (destroyClone) text = `${this.cloneRef(destroyClone)}(${text})`;
+    // ...and the last use of a local moves it
+    if (A(n)._destroyTake) text = `${this.runtimeRef()}.take(&${text})`;
     // -define:VIDAR_RACE=true: a write the race check watches, and the declaration of a captured local (race.ts)
     if (A(n)._race) text = `${this.schedRef()}.__race_w(&${text})^`;
     const raceDecl: string[] | undefined = A(n)._raceDecl;

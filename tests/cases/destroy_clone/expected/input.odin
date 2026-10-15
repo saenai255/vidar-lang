@@ -49,10 +49,10 @@ main :: proc() {
 	h := Handle{1, &refs}; defer handle_destroy(&h)
 	{
 		g := handle_clone(h); defer handle_destroy(&g)
-		p := Pair{handle_clone(h), 7, handle_clone(g)}; defer __Pair_destroy(&p)
+		p := Pair{handle_clone(h), 7, __vidar.take(&g)}; defer __Pair_destroy(&p)     // g's last use: moved into p, not cloned
 		fmt.println("refs", refs)
-		q := __Pair_clone(p); defer __Pair_destroy(&q)
-		fmt.println("refs", refs, q.n)
+		q := __Pair_clone(p); defer __Pair_destroy(&q)                 // cloned field by field: p is read below
+		fmt.println("refs", refs, q.n, p.n)
 		{ __vidar_old := q.a; q.a = handle_clone(h); handle_destroy(&__vidar_old) }
 		fmt.println("refs", refs)
 	}
@@ -61,8 +61,8 @@ main :: proc() {
 	consume(same(h))      // a new value moves in
 	fmt.println("refs", refs)
 	arr := [2]Handle{handle_clone(h), handle_clone(h)}; defer __vidar.destroy(&arr)
-	arr2 := __vidar.clone(arr); defer __vidar.destroy(&arr2)           // cloned element by element at run time
-	fmt.println("refs", refs)
+	arr2 := __vidar.clone(arr); defer __vidar.destroy(&arr2)           // cloned element by element at run time (arr is read below)
+	fmt.println("refs", refs, arr[0].id)
 
 	f := open("a"); defer file_destroy(&f)
 	// move!(f) — input.vidar:67

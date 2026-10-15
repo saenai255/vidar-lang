@@ -1,4 +1,4 @@
-// error: loop over pointers: for k, &v in
+// error: this closure borrows 'f', a File that has impl Destroy, and is returned
 package main
 
 import "core:fmt"
@@ -8,7 +8,9 @@ file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
 impl Destroy for File { destroy = file_destroy }
 open :: proc(name: string) -> File { return File{name} }
 
-main :: proc() {
-	m: map[string]File
-	for k, v in m do fmt.println(k, v.name)
+logger :: proc() -> closure() {
+	f := open("log")
+	return proc[f]() { fmt.println(f.name) }
 }
+
+main :: proc() { logger()() }

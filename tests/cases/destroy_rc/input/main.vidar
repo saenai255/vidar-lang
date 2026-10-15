@@ -21,6 +21,31 @@ impl Destroy for Box($T) { destroy = box_destroy }
 
 Holder :: struct { file: rc.Rc(File), tag: int }
 
+// a tree whose children point back with a Weak: the cycle is still destroyed
+Node :: struct {
+	file:     File,
+	parent:   rc.Weak(Node),
+	children: [dynamic]rc.Rc(Node),
+}
+
+weak_refs :: proc() {
+	w: rc.Weak(File)
+	{
+		r := rc.new(open("watched"))
+		w = rc.downgrade(r)
+		u := rc.upgrade(w)
+		fmt.println("alive", rc.alive(w), "owners", rc.count(r), rc.get(u).name)
+	}
+	gone := rc.upgrade(w)
+	fmt.println("alive", rc.alive(w), "upgraded", rc.get(gone) != nil)
+	root := rc.new(Node{file = open("root")})
+	child := rc.new(Node{file = open("child"), parent = rc.downgrade(root)})
+	append(&rc.get(root).children, move!(child))
+	kid := rc.get(root).children[0]
+	up := rc.upgrade(rc.get(kid).parent)
+	fmt.println("parent of", rc.get(kid).file.name, "is", rc.get(up).file.name)
+}
+
 main :: proc() {
 	r := rc.new(open("shared"))
 	{
@@ -44,4 +69,6 @@ main :: proc() {
 	fmt.println("nested", rc.get(inner)^, rc.count(inner))
 	empty: rc.Rc(File)
 	fmt.println("empty", rc.count(empty))
+	weak_refs()
+	fmt.println("end of main")
 }

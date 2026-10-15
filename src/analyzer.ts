@@ -524,10 +524,17 @@ export class Analyzer {
           this.stmt(s.body, inner);
           return;
         }
+        // a map gives its key, then its value; anything else its element, then the index
+        const map = this.normalize(iterTy);
+        const kv = map?.t === "node" && map.node.k === "TypeExpr" && map.node.what === "map" && map.node.parts[0] && map.node.parts[1] ? map.node.parts : undefined;
         A(s)._syms = s.vals.map((v, i) =>
           this.declareLocal(v.name, inner, {
             declKind: "range",
-            ty: i === 0 ? (rangeTy ?? (iterTy && this.elemOf(iterTy))) : { t: "node", node: synthIdent("int", posOf(s)), scope: this.global },
+            ty: kv
+              ? { t: "node", node: kv[i === 0 ? 0 : 1]!, scope: (map as { scope: Scope }).scope }
+              : i === 0
+                ? (rangeTy ?? (iterTy && this.elemOf(iterTy)))
+                : { t: "node", node: synthIdent("int", posOf(s)), scope: this.global },
             declTok: s.toks[v.tok],
           }),
         );

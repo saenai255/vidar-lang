@@ -6,6 +6,13 @@ moved true
 taken
 nested 5 2
 empty 0
+alive true owners 2 watched
+close watched
+alive false upgraded false
+parent of child is root
+close child
+close root
+end of main
 free box of 42
 close box log
 close taken

@@ -131,6 +131,16 @@ export function ifaceEscape(an: Analyzer, p: ProcLit, ctx: Ctx, value: Expr): st
   return found;
 }
 
+/**
+ * How the closure literal `lit`, written in proc `p`, would outlive `p`, by the same rules as one
+ * that captures `&x`; undefined when it doesn't (or `p` wasn't checked). Follows calls once
+ * `checkCallEscapes` has run.
+ */
+export function closureEscape(an: Analyzer, p: ProcLit, lit: ProcLit): string | undefined {
+  const ctx = stateOf(an).procs.get(p);
+  return ctx && ifaceEscape(an, p, ctx, lit);
+}
+
 function summarize(an: Analyzer, st: State): Summaries {
   const sums: Summaries = new Map();
   st.mains = new Set();
