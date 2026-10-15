@@ -85,7 +85,7 @@ store(&slot, move!(f))       // so does a moved one
 store(&slot, f)              // error for a File, a clone for a type with impl Clone
 ```
 
-`#owned` is a vidar directive; it is removed from the Odin output. A proc type can say it too (`Sink :: proc(#owned f: File)`), and a proc used as a proc value must agree with its type about each destructible parameter: passing `consume` where a `proc(File)` is expected is an error, since the callers would destroy the value as well. Calls into `core:` always borrow.
+`#owned` is a vidar directive; it is removed from the Odin output. A variadic parameter (`..File`) can't be `#owned`, since it is a slice of values its caller keeps. A proc type can say it too (`Sink :: proc(#owned f: File)`), and a proc used as a proc value must agree with its type about each destructible parameter: passing `consume` where a `proc(File)` is expected is an error, since the callers would destroy the value as well. Calls into `core:` always borrow.
 
 **The last use of a local moves it.** A copy that would be a clone moves the value instead when the local can't be read again. That means there is no later reference to it in the proc, none in a `defer` or a closure, its address isn't taken, and the copy isn't in a loop that the local was declared outside of. The clone proc isn't called, and the local's own destroy finds it zero:
 

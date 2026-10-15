@@ -631,6 +631,11 @@ class Checker {
 
   /** `#owned` parameters: a local copy of each is destroyed when the proc returns, unless it moves out. */
   private ownedParams(e: Extract<Expr, { k: "ProcLit" }>): Set<LocalSym> {
+    for (const p of e.sig.params) {
+      const n = p.names.find((n) => n.prefix === "#owned");
+      if (n && p.type?.k === "Spread")
+        throw new CompileError(`'${n.name}' can't be #owned: a variadic parameter is a slice, a view of values its caller keeps. Take a dynamic array #owned instead`, e.toks[n.tok].pos);
+    }
     const names = new Set(e.sig.params.flatMap((p) => p.names.filter((n) => n.prefix === "#owned").map((n) => n.name)));
     const out = new Set<LocalSym>();
     if (!names.size) return out;

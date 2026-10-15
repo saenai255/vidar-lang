@@ -13,7 +13,7 @@ Every program here is a test in `tests/errors/` and `tests/errors_pkg/` that mus
 - [Interfaces](#interfaces): 42 errors
 - [Optimization attributes](#optimization-attributes): 17 errors
 - [Packages and imports](#packages-and-imports): 7 errors
-- [Other](#other): 45 errors
+- [Other](#other): 46 errors
 
 ## `do!` blocks
 
@@ -3933,6 +3933,34 @@ apply :: proc(use: proc(File), f: File) { use(f) }
 main :: proc() {
 	f := File{"a"}
 	apply(consume, f)
+}
+```
+
+### destroy owned variadic
+
+The message contains:
+
+```text
+'fs' can't be #owned: a variadic parameter is a slice
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+
+close_all :: proc(#owned fs: ..File) {
+	fmt.println(len(fs))
+}
+
+main :: proc() {
+	close_all(File{"a"})
 }
 ```
 
