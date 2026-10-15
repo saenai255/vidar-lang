@@ -1,0 +1,16 @@
+// error: 'consume' takes a File #owned in parameter 'f', but the proc type it is used as borrows it
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+
+consume :: proc(#owned f: File) { fmt.println("consumed", f.name) }
+apply :: proc(use: proc(File), f: File) { use(f) }
+
+main :: proc() {
+	f := File{"a"}
+	apply(consume, f)
+}

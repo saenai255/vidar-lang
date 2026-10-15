@@ -1,0 +1,15 @@
+// error: 'show' borrows a File in parameter 'f', but the proc type takes it #owned
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+
+show :: proc(f: File) { fmt.println(f.name) }
+
+main :: proc() {
+	sink: proc(#owned f: File) = show
+	sink(File{"a"})
+}

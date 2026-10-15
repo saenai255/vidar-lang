@@ -390,6 +390,11 @@ class Checker {
     }
   }
 
+  private nodeTy(t: Expr | null | undefined, near?: Node): Ty | undefined {
+    const scope: Scope | undefined = t ? (A(t)._scope ?? (near && A(near)._scope)) : undefined;
+    return t && scope ? { t: "node", node: t, scope } : undefined;
+  }
+
   private ownedOf(e: Expr): Owned | undefined {
     return ownedOf(this.an, this.typeOf(e));
   }
@@ -451,20 +456,26 @@ class Checker {
     switch (s.k) {
       // the values first, so errors inside them come before the statement's own
       case "ValueDecl":
+        if (s.type) for (const v of s.values) this.procFits(v, this.nodeTy(s.type));
         s.values.forEach((v) => this.consume(v));
         this.kids(s);
         if (!s.isConst) this.owned.length ? this.localDecl(s) : this.globalDecl(s);
         return;
       case "Assign":
+        if (s.op === "=" && s.lhs.length === s.rhs.length) s.rhs.forEach((r, i) => this.procFits(r, this.typeOf(s.lhs[i])));
         if (s.op === "=") s.rhs.forEach((r) => this.consume(r));
         this.kids(s);
         this.assign(s);
         return;
-      case "Return":
+      case "Return": {
+        const proc = this.procs[this.procs.length - 1];
+        const types = proc ? proc.sig.results.flatMap((r) => Array<Expr | null | undefined>(Math.max(1, r.names.length)).fill(r.type)) : [];
+        if (types.length === s.results.length) s.results.forEach((r, i) => this.procFits(r, this.nodeTy(types[i], r)));
         s.results.forEach((r) => this.consume(r));
         this.kids(s);
         this.ret(s);
         return;
+      }
       case "RangeFor":
         this.rangeFor(s);
         break;
@@ -830,7 +841,13 @@ class Checker {
       return;
     }
     if (ft?.t !== "sig") return;
-    const params = ft.sig.params.flatMap((p) => (p.names.length ? p.names.map((n) => ({ name: n.name, owned: n.prefix === "#owned" })) : [{ name: "", owned: false }]));
+    const params = ft.sig.params.flatMap((p) =>
+      (p.names.length ? p.names.map((n) => n.prefix === "#owned") : [false]).map((owned, j) => ({ name: p.names[j]?.name ?? "", owned, type: p.type && ({ t: "node", node: p.type, scope: A(p.type)._scope ?? ft.scope } as Ty) })),
+    );
+    e.args.forEach((a, i) => {
+      const param = a.k === "FieldValue" ? params.find((p) => p.name === a.name) : params[i];
+      if (param?.type) this.procFits(a.k === "FieldValue" ? a.value : a, param.type);
+    });
     if (!params.some((p) => p.owned)) return;
     e.args.forEach((a, i) => {
       const param = a.k === "FieldValue" ? params.find((p) => p.name === a.name) : params[i];
@@ -838,6 +855,33 @@ class Checker {
       const v = a.k === "FieldValue" ? a.value : a;
       this.copied(v, `passing it to #owned parameter '${param.name}' would copy it`, `Move it there with move!(${nodeText(v)}), or pass a new value`);
       this.consume(v);
+    });
+  }
+
+  /**
+   * A proc stored as a value of another proc type: where one takes a destructible parameter `#owned`
+   * and the other borrows it, the caller and the callee would disagree on who destroys it.
+   */
+  private procFits(v: Expr, target: Ty | undefined): void {
+    if (this.raw || !target) return;
+    const from = this.an.normalize(this.typeOf(v));
+    const to = this.an.normalize(target);
+    if (from?.t !== "sig" || to?.t !== "sig") return;
+    const params = (t: Extract<Ty, { t: "sig" }>) => t.sig.params.flatMap((p) => (p.names.length ? p.names : [undefined]).map((n) => ({ owned: n?.prefix === "#owned", name: n?.name ?? "", type: p.type })));
+    const a = params(from), b = params(to);
+    if (a.length !== b.length) return;
+    a.forEach((p, i) => {
+      if (p.owned === b[i].owned || !p.type) return;
+      const ty: Ty = { t: "node", node: p.type, scope: A(p.type)._scope ?? from.scope };
+      const o = ownedOf(this.an, ty);
+      if (!o && !mentionsPoly(this.an, ty)) return;
+      const what = o ? `a ${o.name}` : "a value";
+      throw new CompileError(
+        p.owned
+          ? `'${nodeText(v)}' takes ${what} #owned in parameter '${p.name}', but the proc type it is used as borrows it, so its callers would destroy it too. Declare that parameter #owned in the proc type as well`
+          : `'${nodeText(v)}' borrows ${what} in parameter '${p.name}', but the proc type takes it #owned: nothing would destroy it. Declare the parameter #owned in '${nodeText(v)}' too, or borrow it in the proc type`,
+        posOf(v),
+      );
     });
   }
 

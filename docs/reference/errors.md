@@ -13,7 +13,7 @@ Every program here is a test in `tests/errors/` and `tests/errors_pkg/` that mus
 - [Interfaces](#interfaces): 42 errors
 - [Optimization attributes](#optimization-attributes): 17 errors
 - [Packages and imports](#packages-and-imports): 7 errors
-- [Other](#other): 43 errors
+- [Other](#other): 45 errors
 
 ## `do!` blocks
 
@@ -3053,6 +3053,33 @@ main :: proc() {
 }
 ```
 
+### destroy borrow proc value
+
+The message contains:
+
+```text
+'show' borrows a File in parameter 'f', but the proc type takes it #owned
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+
+show :: proc(f: File) { fmt.println(f.name) }
+
+main :: proc() {
+	sink: proc(#owned f: File) = show
+	sink(File{"a"})
+}
+```
+
 ### destroy capture escape
 
 The message contains:
@@ -3878,6 +3905,34 @@ consume :: proc(#owned x: File) {}
 main :: proc() {
 	f := File{"a"}
 	consume(f)
+}
+```
+
+### destroy owned proc value
+
+The message contains:
+
+```text
+'consume' takes a File #owned in parameter 'f', but the proc type it is used as borrows it
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+
+consume :: proc(#owned f: File) { fmt.println("consumed", f.name) }
+apply :: proc(use: proc(File), f: File) { use(f) }
+
+main :: proc() {
+	f := File{"a"}
+	apply(consume, f)
 }
 ```
 

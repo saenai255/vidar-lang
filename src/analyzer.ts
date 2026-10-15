@@ -646,7 +646,8 @@ export class Analyzer {
         return;
       case "ProcType":
       case "ClosureType":
-        this.sig(e.sig, new Scope(scope), false);
+        // the tokens, so `#owned` (destroy.ts) is removed from proc types too
+        this.sig(e.sig, new Scope(scope), false, e.toks);
         return;
       case "StructType":
       case "UnionType": {
