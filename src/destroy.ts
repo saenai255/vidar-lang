@@ -1272,8 +1272,10 @@ Generic_Destroy :: struct {
 @(private="file") generic_destroys: [dynamic]Generic_Destroy
 @(private="file") destroy_lock: sync.Mutex
 @(private="file") nothing_to_destroy: Destroy_Plan
-// a plan being made: a type that holds itself (through a dynamic array or map) contributes nothing to its own
-@(private="file") plan_in_progress: Destroy_Plan
+// what scan found out about a type, for each question: whether it holds something to destroy, and
+// whether it holds something that can't be cloned
+@(private="file") scan_known: [2]map[typeid]bool
+@(private="file") scan_visiting: map[typeid]bool
 
 // a type with impl Destroy and no impl Clone: copies stop the program
 register_destroy :: proc "contextless" ($T: typeid, $destroy: proc(^T)) {
@@ -1308,78 +1310,98 @@ register_generic :: proc "contextless" (file, name: string, destroy: proc(rawptr
 	append(&generic_destroys, Generic_Destroy{file, name, destroy, clone})
 }
 
+// Whether a value of the type holds something to destroy (or, with move_only, something that can't be
+// cloned). A type reached again through itself (a tree holding a dynamic array of trees) adds nothing
+// the rest of it doesn't, so it counts as no; an answer that leaned on that is kept only when it is yes.
+@(private="file")
+scan :: proc(ti: ^runtime.Type_Info, move_only: bool) -> (yes, cyclic: bool) {
+	if p, ok := destroy_plans[ti.id]; ok do return p != &nothing_to_destroy && (!move_only || p.move_only), false
+	if known, ok := scan_known[int(move_only)][ti.id]; ok do return known, false
+	if ti.id in scan_visiting do return false, true
+	scan_visiting[ti.id] = true
+	defer delete_key(&scan_visiting, ti.id)
+	part :: proc(ti: ^runtime.Type_Info, move_only: bool, yes, cyclic: ^bool) {
+		y, c := scan(ti, move_only)
+		yes^ ||= y
+		cyclic^ ||= c
+	}
+	#partial switch v in ti.variant {
+	case runtime.Type_Info_Named:
+		if g, ok := generic_of(ti, v); ok {
+			yes = !move_only || g.clone == nil
+		} else do part(v.base, move_only, &yes, &cyclic)
+	case runtime.Type_Info_Struct:
+		for i in 0..<v.field_count do part(v.types[i], move_only, &yes, &cyclic)
+	case runtime.Type_Info_Array:
+		part(v.elem, move_only, &yes, &cyclic)
+	case runtime.Type_Info_Enumerated_Array:
+		part(v.elem, move_only, &yes, &cyclic)
+	case runtime.Type_Info_Union:
+		for x in v.variants do part(x, move_only, &yes, &cyclic)
+	case runtime.Type_Info_Dynamic_Array:
+		part(v.elem, move_only, &yes, &cyclic)
+	case runtime.Type_Info_Map:
+		// a map is never cloned: one that holds something to destroy is move-only
+		part(v.key, false, &yes, &cyclic)
+		part(v.value, false, &yes, &cyclic)
+	}
+	if yes || !cyclic do scan_known[int(move_only)][ti.id] = yes
+	return yes, cyclic && !yes
+}
+
+// impl Destroy for the parametric type this is an instance of (Box($T=int)), if it has one
+@(private="file")
+generic_of :: proc(ti: ^runtime.Type_Info, v: runtime.Type_Info_Named) -> (Generic_Destroy, bool) {
+	if v.loc == nil do return {}, false
+	for g in generic_destroys {
+		if g.file != v.loc.file_path || len(v.name) <= len(g.name) || v.name[:len(g.name)] != g.name || v.name[len(g.name)] != '(' do continue
+		return g, true
+	}
+	return {}, false
+}
+
 // nil when a value of the type holds nothing to destroy
 @(private="file")
 plan_for :: proc(ti: ^runtime.Type_Info) -> ^Destroy_Plan {
-	if p, ok := destroy_plans[ti.id]; ok do return nil if p == &nothing_to_destroy || p == &plan_in_progress else p
-	destroy_plans[ti.id] = &plan_in_progress
-	plan := new(Destroy_Plan)
-	parts: [dynamic]Destroy_Part
-	#partial switch v in ti.variant {
-	case runtime.Type_Info_Named:
-		// an instance, Box($T=int), of a parametric type with impl Destroy
-		if v.loc != nil {
-			for g in generic_destroys {
-				if g.file != v.loc.file_path || len(v.name) <= len(g.name) || v.name[:len(g.name)] != g.name || v.name[len(g.name)] != '(' do continue
-				if g.destroy == nil do generic_unknown(ti)
-				plan^ = {destroy = g.destroy, clone = g.clone, move_only = g.clone == nil}
-				destroy_plans[ti.id] = plan
-				return plan
-			}
-		}
-		free(plan)
-		inner := plan_for(v.base)
-		destroy_plans[ti.id] = inner if inner != nil else &nothing_to_destroy
-		return inner
-	case runtime.Type_Info_Struct:
-		for i := v.field_count - 1; i >= 0; i -= 1 {
-			if p := plan_for(v.types[i]); p != nil {
-				append(&parts, Destroy_Part{p, v.offsets[i], 1, 0})
-				plan.move_only ||= p.move_only
-			}
-		}
-	case runtime.Type_Info_Array:
-		if p := plan_for(v.elem); p != nil {
-			append(&parts, Destroy_Part{p, 0, v.count, uintptr(v.elem_size)})
-			plan.move_only = p.move_only
-		}
-	case runtime.Type_Info_Enumerated_Array:
-		if p := plan_for(v.elem); p != nil {
-			append(&parts, Destroy_Part{p, 0, v.count, uintptr(v.elem_size)})
-			plan.move_only = p.move_only
-		}
-	case runtime.Type_Info_Union:
-		variants := make([]^Destroy_Plan, len(v.variants))
-		some := false
-		for x, i in v.variants {
-			variants[i] = plan_for(x)
-			if variants[i] != nil {
-				some = true
-				plan.move_only ||= variants[i].move_only
-			}
-		}
-		if some {
-			plan.variants, plan.tag_size, plan.tag_off, plan.no_nil = variants, v.tag_type.size, v.tag_offset, v.no_nil
-		} else do delete(variants)
-	case runtime.Type_Info_Dynamic_Array:
-		if p := plan_for(v.elem); p != nil {
-			plan.container, plan.elem, plan.elem_size, plan.elem_align, plan.move_only = .Dynamic, p, uintptr(v.elem_size), v.elem.align, p.move_only
-		}
-	case runtime.Type_Info_Map:
-		k, val := plan_for(v.key), plan_for(v.value)
-		if k != nil || val != nil {
-			// a map is never cloned
-			plan.container, plan.key, plan.elem, plan.map_info, plan.move_only = .Map, k, val, v.map_info, true
-		}
-	}
-	if len(parts) == 0 && plan.variants == nil && plan.container == .None {
-		delete(parts)
-		free(plan)
+	if p, ok := destroy_plans[ti.id]; ok do return nil if p == &nothing_to_destroy else p
+	if yes, _ := scan(ti, false); !yes {
 		destroy_plans[ti.id] = &nothing_to_destroy
 		return nil
 	}
-	plan.parts = parts[:]
+	plan := new(Destroy_Plan)
+	plan.move_only, _ = scan(ti, true)
+	// stored before its parts are planned: a type that holds itself finds this plan, filled in below
 	destroy_plans[ti.id] = plan
+	parts: [dynamic]Destroy_Part
+	#partial switch v in ti.variant {
+	case runtime.Type_Info_Named:
+		if g, ok := generic_of(ti, v); ok {
+			if g.destroy == nil do generic_unknown(ti)
+			plan.destroy, plan.clone = g.destroy, g.clone
+			return plan
+		}
+		move_only := plan.move_only
+		plan^ = plan_for(v.base)^
+		plan.move_only = move_only
+		return plan
+	case runtime.Type_Info_Struct:
+		for i := v.field_count - 1; i >= 0; i -= 1 {
+			if p := plan_for(v.types[i]); p != nil do append(&parts, Destroy_Part{p, v.offsets[i], 1, 0})
+		}
+	case runtime.Type_Info_Array:
+		if p := plan_for(v.elem); p != nil do append(&parts, Destroy_Part{p, 0, v.count, uintptr(v.elem_size)})
+	case runtime.Type_Info_Enumerated_Array:
+		if p := plan_for(v.elem); p != nil do append(&parts, Destroy_Part{p, 0, v.count, uintptr(v.elem_size)})
+	case runtime.Type_Info_Union:
+		variants := make([]^Destroy_Plan, len(v.variants))
+		for x, i in v.variants do variants[i] = plan_for(x)
+		plan.variants, plan.tag_size, plan.tag_off, plan.no_nil = variants, v.tag_type.size, v.tag_offset, v.no_nil
+	case runtime.Type_Info_Dynamic_Array:
+		plan.container, plan.elem, plan.elem_size, plan.elem_align = .Dynamic, plan_for(v.elem), uintptr(v.elem_size), v.elem.align
+	case runtime.Type_Info_Map:
+		plan.container, plan.key, plan.elem, plan.map_info = .Map, plan_for(v.key), plan_for(v.value), v.map_info
+	}
+	plan.parts = parts[:]
 	return plan
 }
 
@@ -1427,7 +1449,7 @@ run_plan :: proc(plan: ^Destroy_Plan, p: rawptr) {
 	case .None:
 	case .Dynamic:
 		a := (^runtime.Raw_Dynamic_Array)(p)
-		for i := a.len - 1; i >= 0; i -= 1 do run_plan(plan.elem, rawptr(uintptr(a.data) + uintptr(i) * plan.elem_size))
+		if plan.elem != nil do for i := a.len - 1; i >= 0; i -= 1 do run_plan(plan.elem, rawptr(uintptr(a.data) + uintptr(i) * plan.elem_size))
 		_ = runtime.mem_free_with_size(a.data, a.cap * int(plan.elem_size), a.allocator)
 		a.data, a.len, a.cap = nil, 0, 0
 	case .Map:
@@ -1479,7 +1501,7 @@ clone_plan :: proc(plan: ^Destroy_Plan, dst, src: rawptr) {
 		for i in 0..<uintptr(s.len) {
 			at, from := rawptr(uintptr(d.data) + i * plan.elem_size), rawptr(uintptr(s.data) + i * plan.elem_size)
 			intrinsics.mem_copy_non_overlapping(at, from, plan.elem_size)
-			clone_plan(plan.elem, at, from)
+			if plan.elem != nil do clone_plan(plan.elem, at, from)
 		}
 	}
 }
