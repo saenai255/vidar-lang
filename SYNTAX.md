@@ -111,10 +111,11 @@ Examples: [examples/interfaces](examples/interfaces), [examples/methods](example
 | `S :: struct { f: T, ... }`, `[4]T`, `Maybe(T)`, `union { T, ... }`, `Pair(T)` | hold a `T`, so they are destroyed too: a struct's own impl first, then its fields last first; they can be copied (cloned) when every `T` in them can, and a struct has no `impl Destroy` of its own |
 | `x: T` in a generic proc, or a local vidar can't type | destroyed through `__vidar.destroy`, found at run time; a copy fails Odin's `#assert` where the file can name the type, else stops the program |
 | `y := x`, `y = x`, `return param`, `new_clone(x)` | a clone with `impl Clone`; otherwise compile errors, since a copy would be destroyed twice: borrow with `&x`, or move with `move!(x)` |
-| `proc[x]`, `for x in xs` | compile errors, even with `impl Clone`: nothing would destroy the copy |
+| `proc[x]`, `for x in xs` | borrow `x`, as a by-value parameter does: never destroyed; a closure that borrows a `T` can't outlive the proc |
+| `y := x` on `x`'s last use | moves `x` instead of cloning it, when nothing reads `x` later (no later reference, defer, closure or `&x`, and no loop around the copy that `x` was declared outside of) |
 | `[dynamic]T`, `map[K]T` | own their elements: destroyed with them, last first, then freed; `clear`, `resize`, `ordered_remove`, `unordered_remove`, `remove_range`, `delete`, and `pop`/`pop_front`/`delete_key` as statements destroy what they drop; `append` moves values in; a map can't be cloned |
 | `[]T` | a view: never destroyed; `make([]T, n)`, `[]T{...}` and `delete` of one are compile errors |
-| `import "vidar:rc"` | `rc.Rc(T)`: a shared `T`, released by its last owner; `rc.new(value)`, `rc.get(r)`, `rc.count(r)` |
+| `import "vidar:rc"` | `rc.Rc(T)`: a shared `T`, released by its last owner; `rc.new(value)`, `rc.get(r)`, `rc.count(r)`; `rc.Weak(T)` refers without owning: `rc.downgrade(r)`, `rc.upgrade(w)`, `rc.alive(w)` |
 | `make_t()` as a statement, `f(make_t())`, `_ = make_t()` | compile errors: nothing would destroy the value |
 
 Rules:

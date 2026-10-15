@@ -25,8 +25,9 @@ What the compiler doesn't do yet, grouped by feature.
 - **Dynamic arrays and maps own their elements; slices don't.** Making a slice that would own destructible values (`make([]T, n)`, `[]T{...}`) is a compile error, and so are `#soa` and fixed-capacity dynamic arrays of them, `distinct` types, map keys, Odin packages' container types (`queue.Queue(T)`) and package-level variables. Maps can't be cloned. A container whose type vidar can't tell at all is left to Odin's `clear`, `delete` and the like, and procs such as `slice.clone` that copy elements aren't checked. Heap values (`new`, `free`) are never destroyed.
 - **Parametric impls cover every instance.** `impl Destroy for Box($T)` works, `impl Destroy for Box(int)` doesn't. Generic code that holds a `Box(int)` as a plain `T` stops the program when it destroys or copies it, since the impl's procs exist only per instance; `vidar:rc`'s `Rc` is the exception.
 - **Generic code is checked at run time.** A copy of a move-only `T` in generic code fails Odin's `#assert` only where the file can name the type, and stops the program otherwise. Parameters are borrowed unless `#owned`, so a generic proc that returns or stores a borrowed parameter clones it, and stops for a move-only type. Temporaries of type `T` in generic code are never destroyed.
-- **No closures.** A closure can't capture a destructible value by value, even one with `impl Clone`.
-- **`Rc` cycles leak.** There is no weak reference yet.
+- **Closures borrow.** A closure that captures a destructible value by value borrows it, so it can't outlive the proc (as with `&x`); like `&x` captures, outliving the value's block within the proc isn't caught.
+- **`Rc` cycles leak** unless one direction is an `rc.Weak`.
+- **Last-use moves are conservative.** A copy moves only when the local is plainly never read again; a local read in a `defer` or a closure, addressed with `&`, or copied in a loop it was declared outside of, is cloned.
 - **Destroy procs see zero values.** Declarations without a value, returned locals and the results that come with an error are destroyed too.
 
 See [Destructors](language/destructors.md).

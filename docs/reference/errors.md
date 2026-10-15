@@ -13,7 +13,7 @@ Every program here is a test in `tests/errors/` and `tests/errors_pkg/` that mus
 - [Interfaces](#interfaces): 42 errors
 - [Optimization attributes](#optimization-attributes): 17 errors
 - [Packages and imports](#packages-and-imports): 7 errors
-- [Other](#other): 38 errors
+- [Other](#other): 37 errors
 
 ## `do!` blocks
 
@@ -3053,12 +3053,12 @@ main :: proc() {
 }
 ```
 
-### destroy capture by value
+### destroy capture escape
 
 The message contains:
 
 ```text
-a closure can't hold a copy of it. Capture &f
+this closure borrows 'f', a File that has impl Destroy, and is returned
 ```
 
 This program fails to compile:
@@ -3073,36 +3073,12 @@ file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
 impl Destroy for File { destroy = file_destroy }
 open :: proc(name: string) -> File { return File{name} }
 
-main :: proc() {
-	f := open("a")
-	show := proc[f]() { fmt.println(f.name) }
-	show()
+logger :: proc() -> closure() {
+	f := open("log")
+	return proc[f]() { fmt.println(f.name) }
 }
-```
 
-### destroy capture clone
-
-The message contains:
-
-```text
-'h' is a Handle, which has impl Destroy; a closure can't hold a copy of it. Capture &h
-```
-
-This program fails to compile:
-
-```odin
-package main
-
-Handle :: struct { id: int }
-handle_destroy :: proc(h: ^Handle) {}
-handle_clone :: proc(h: Handle) -> Handle { return h }
-impl Destroy for Handle { destroy = handle_destroy }
-impl Clone for Handle { clone = handle_clone }
-
-main :: proc() {
-	h := Handle{1}
-	f := proc[h]() -> int { return h.id }
-}
+main :: proc() { logger()() }
 ```
 
 ### destroy clone alone
@@ -3639,12 +3615,12 @@ main :: proc() {
 }
 ```
 
-### destroy map range
+### destroy move loop value
 
 The message contains:
 
 ```text
-loop over pointers: for k, &v in
+is a loop value, which borrows each element
 ```
 
 This program fails to compile:
@@ -3660,8 +3636,10 @@ impl Destroy for File { destroy = file_destroy }
 open :: proc(name: string) -> File { return File{name} }
 
 main :: proc() {
-	m: map[string]File
-	for k, v in m do fmt.println(k, v.name)
+	files: [dynamic]File
+	append(&files, open("a"))
+	kept: [dynamic]File
+	for f in files do append(&kept, move!(f))
 }
 ```
 

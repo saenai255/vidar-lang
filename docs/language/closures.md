@@ -125,6 +125,7 @@ The error suggests `new_clone(x)`. For calls it names the call and the line in t
 
 - A proc that returns a parameter hands the closure back, so `id(f)()` is fine and `return id(f)` is not.
 - `main`'s locals live until the program exits, so a goroutine started from `main` may hold `&x` of them.
+- A by-value capture of a value with [`impl Destroy`](destructors.md) borrows it, so the same rules apply to it as to `&x`.
 - The check trusts what it can't see. See [Limits](../limits.md).
 
 ## How it lowers

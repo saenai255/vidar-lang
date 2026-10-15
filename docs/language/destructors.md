@@ -33,6 +33,7 @@ A type without `impl Destroy` is unaffected, and a program without any `impl Des
 - **Assigning** to a local, a field, an element (`files[i]`, with a name or constant index) or through a pointer (`p^ = ...`) destroys the old value after the new one is stored.
 - **Returning** a local moves it out: the caller owns the value and destroys it, and this proc doesn't.
 - **Parameters are borrowed.** A proc that takes a `File` by value can read it but doesn't destroy it, and can't return or store it. An [`#owned` parameter](#moving-values) takes the value over instead.
+- **Closures and loops borrow too.** A closure that captures `f` by value, and `for f in files`, hold a copy that is never destroyed: they read the value its owner keeps. Both are read-only, as in Odin. A closure that borrows a destructible value can't outlive the proc, by the same rules as one that captures `&f` (see [Closures](closures.md)).
 
 ```odin
 Log :: struct {
@@ -59,7 +60,7 @@ p := &f                     // fine: a pointer borrows it
 use(f)                      // fine: by-value parameters borrow too
 ```
 
-These count as copies: `:=` and `=` from a variable, field, element or `p^` (and `v, ok := m[k]` or `u.(File)`); returning a parameter; `new_clone(f)`; a variable inside a struct or array literal; appending a variable to a dynamic array; capturing `f` by value in a closure (capture `&f`); and `for f in ...` over values. They apply to every type that holds a `File` as well (`Log`, `[2]File`, `Maybe(File)`). A value nothing owns is an error too: a call whose `File` result is thrown away, a `File` passed straight to another call (`use(open("a"))`), and `_ = open("a")`.
+These count as copies: `:=` and `=` from a variable, field, element or `p^` (and `v, ok := m[k]` or `u.(File)`); returning a parameter; `new_clone(f)`; a variable inside a struct or array literal; and appending a variable to a dynamic array. They apply to every type that holds a `File` as well (`Log`, `[2]File`, `Maybe(File)`). A value nothing owns is an error too: a call whose `File` result is thrown away, a `File` passed straight to another call (`use(open("a"))`), and `_ = open("a")`.
 
 ## Moving values
 
@@ -86,6 +87,18 @@ store(&slot, f)              // error for a File, a clone for a type with impl C
 
 `#owned` is a vidar directive; it is removed from the Odin output. Calls through proc values and into `core:` always borrow.
 
+**The last use of a local moves it.** A copy that would be a clone moves the value instead when the local can't be read again. That means there is no later reference to it in the proc, none in a `defer` or a closure, its address isn't taken, and the copy isn't in a loop that the local was declared outside of. The clone proc isn't called, and the local's own destroy finds it zero:
+
+```odin
+a := handle()
+b := a                       // a isn't read again: moved, no clone
+c := handle()
+d := c                       // a clone: c is read below
+use(c)
+```
+
+A move-only value still needs `move!`: vidar doesn't decide for you whether a copy was meant.
+
 ## Clone
 
 `impl Clone for T` makes copies of `T` legal: each one calls the clone proc, which returns a new value with its own owner, the way a C++ copy constructor does. `T` must also have `impl Destroy`.
@@ -106,7 +119,7 @@ p := Pair{h, g}              // each field is a clone
 same :: proc(h: Handle) -> Handle { return h }      // a borrowed parameter is cloned when returned
 ```
 
-- Every place a copy was an error before is a clone instead: `:=` and `=` from a variable, field or element, returning a parameter, a variable in a literal, `new_clone`, and passing to an `#owned` parameter. Capturing by value and `for x in ...` over values are still errors, since nothing would destroy those copies.
+- Every place a copy was an error before is a clone instead: `:=` and `=` from a variable, field or element, returning a parameter, a variable in a literal, `new_clone`, and passing to an `#owned` parameter. The [last use of a local](#moving-values) moves it instead.
 - **Structs are cloned field by field** when every field that needs destroying can be cloned and the struct has no `impl Destroy` of its own: vidar writes `__Pair_clone`. A struct with its own `impl Destroy` is move-only unless it has `impl Clone` too, and then that proc clones the whole value.
 - Arrays, unions, `Maybe` and instances of parametric types are cloned at run time, element by element or by the variant they hold.
 
@@ -129,7 +142,17 @@ t := rc.new(move!(f))
 
 - `rc.new(value, allocator := context.allocator)`, `rc.get(r) -> ^T` and `rc.count(r) -> int`. The zero `Rc` owns nothing.
 - Counts are plain integers, and atomic only when built with `-define:VIDAR_THREADS=N` for N > 1.
-- Cycles leak: two `Rc`s that hold each other are never released.
+- `rc.Weak(T)` refers to an `Rc`'s value without keeping it alive: `rc.downgrade(r)` makes one, `rc.upgrade(w)` gives another `Rc` (the zero `Rc` once the value is gone), and `rc.alive(w)` says whether it still is. The memory is freed once the last `Rc` and the last `Weak` are both gone.
+- Cycles of `Rc`s leak: two `Rc`s that hold each other are never released. Make one direction a `Weak`, such as a child's pointer to its parent:
+
+```odin
+Node :: struct {
+	parent:   rc.Weak(Node),
+	children: [dynamic]rc.Rc(Node),
+}
+child := rc.new(Node{parent = rc.downgrade(root)})
+append(&rc.get(root).children, move!(child))
+```
 
 ## Containers
 
@@ -142,7 +165,7 @@ append(&files, move!(f))               // so does a moved one; append(&files, f)
 files[0] = open("b")                   // destroys the old element
 pop(&files)                            // destroys what it removes
 last := pop(&files)                    // last owns it now
-for &f in files do use(&f)             // loop over pointers: for f in files would copy
+for f in files do use(f)               // borrows each File; for &f in files gives pointers
 
 m: map[string]File
 m["log"] = open("log")                 // destroys the old value (or the zero value)
@@ -202,7 +225,7 @@ f := open("a"); defer file_destroy(&f)                                   // f :=
 { __vidar_old := f; f = open("b"); file_destroy(&__vidar_old) }          // f = open("b")
 { defer f = {}; return f }                                               // return f
 h2 := handle_clone(h); defer handle_destroy(&h2)                         // h2 := h, with impl Clone
-g := __vidar.take(&f); defer file_destroy(&g)                            // g := move!(f)
+g := __vidar.take(&f); defer file_destroy(&g)                            // g := move!(f), or g := h on h's last use
 f := f; defer file_destroy(&f)                                           // #owned f: File, on entry
 l := make_log(); defer __Log_destroy(&l)                                 // l := make_log()
 arr := [2]File{open("x"), open("y")}; defer __vidar.destroy(&arr)        // arrays, unions, Maybe, generic code
@@ -222,7 +245,6 @@ Each of these is a compile error for now, not a silent leak:
 - a slice that would own `T`s: `make([]T, n)`, `[]T{...}`, `delete` of a `[]T`. Use a dynamic array;
 - package-level variables of type `T`;
 - `impl Destroy` or `impl Clone` for one instance of a parametric type (`Box(int)`);
-- capturing a `T` by value in a closure, even with `impl Clone`;
 - declaring a `T` in an `if`, `for` or `switch` initializer;
 - assigning several values at once (`a, b = x, y`) when one is a `T`, or assigning to a target with side effects (`files[next()] = ...`).
 

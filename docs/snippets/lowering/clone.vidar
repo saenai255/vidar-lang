@@ -32,4 +32,4 @@ main :: proc() {
 }
 
 // title: `impl Clone`, `#owned` and `move!`
-// about: Each copy of a `Handle` becomes a call to its clone proc, and a struct of them gets `__Pair_clone`. An `#owned` parameter is copied into a local on entry and destroyed there, and `move!(g)` takes `g`'s value and leaves it zero.
+// about: Each copy of a `Handle` becomes a call to its clone proc, except a local's last use, which moves it (`h` into `p`), and a struct of them gets `__Pair_clone`. An `#owned` parameter is copied into a local on entry and destroyed there, and `move!(g)` takes `g`'s value and leaves it zero.

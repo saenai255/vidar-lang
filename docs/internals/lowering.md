@@ -204,7 +204,7 @@ __Log_destroy :: proc(x: ^Log) {
 
 ## `impl Clone`, `#owned` and `move!`
 
-Each copy of a `Handle` becomes a call to its clone proc, and a struct of them gets `__Pair_clone`. An `#owned` parameter is copied into a local on entry and destroyed there, and `move!(g)` takes `g`'s value and leaves it zero.
+Each copy of a `Handle` becomes a call to its clone proc, except a local's last use, which moves it (`h` into `p`), and a struct of them gets `__Pair_clone`. An `#owned` parameter is copied into a local on entry and destroyed there, and `move!(g)` takes `g`'s value and leaves it zero.
 
 You write:
 
@@ -264,7 +264,7 @@ main :: proc() {
 	refs := 1
 	h := Handle{1, &refs}; defer handle_destroy(&h)
 	g := handle_clone(h); defer handle_destroy(&g)
-	p := Pair{handle_clone(h), handle_clone(g)}; defer __Pair_destroy(&p)
+	p := Pair{__vidar.take(&h), handle_clone(g)}; defer __Pair_destroy(&p)
 	// move!(g) — clone.vidar:30
 	consume(__vidar.take(&g))
 	fmt.println(refs, p.a.id)
