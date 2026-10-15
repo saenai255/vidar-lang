@@ -13,7 +13,7 @@ Every program here is a test in `tests/errors/` and `tests/errors_pkg/` that mus
 - [Interfaces](#interfaces): 42 errors
 - [Optimization attributes](#optimization-attributes): 17 errors
 - [Packages and imports](#packages-and-imports): 7 errors
-- [Other](#other): 26 errors
+- [Other](#other): 38 errors
 
 ## `do!` blocks
 
@@ -2949,6 +2949,85 @@ main :: proc() { _ = lib.secret() }
 
 ## Other
 
+### destroy append copy
+
+The message contains:
+
+```text
+append would copy it
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	files: [dynamic]File
+	f := open("a")
+	append(&files, f)
+}
+```
+
+### destroy append spread
+
+The message contains:
+
+```text
+append would copy each File
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	a, b: [dynamic]File
+	append(&a, ..b[:])
+}
+```
+
+### destroy assign at
+
+The message contains:
+
+```text
+assign_at would overwrite
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	files: [dynamic]File
+	assign_at(&files, 0, open("a"))
+}
+```
+
 ### destroy blank
 
 The message contains:
@@ -3068,6 +3147,33 @@ impl Clone for Handle { clone = handle_clone }
 main :: proc() {}
 ```
 
+### destroy comma ok
+
+The message contains:
+
+```text
+take a pointer: f, ok := &m["a"]
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	m: map[string]File
+	f, ok := m["a"]
+	fmt.println(f.name, ok)
+}
+```
+
 ### destroy copy
 
 The message contains:
@@ -3185,6 +3291,87 @@ main :: proc() {
 }
 ```
 
+### destroy core container
+
+The message contains:
+
+```text
+copy and drop values without destroying them
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+import "core:container/queue"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	q: queue.Queue(File)
+	fmt.println(queue.len(q))
+}
+```
+
+### destroy delete param
+
+The message contains:
+
+```text
+which is borrowed, so 'files' can't be deleted here
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+close_all :: proc(files: [dynamic]File) {
+	delete(files)
+}
+
+main :: proc() {}
+```
+
+### destroy delete slice
+
+The message contains:
+
+```text
+delete would free File values without destroying them
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+close_all :: proc(files: []File) {
+	delete(files)
+}
+
+main :: proc() {}
+```
+
 ### destroy dropped
 
 The message contains:
@@ -3207,32 +3394,6 @@ open :: proc(name: string) -> File { return File{name} }
 
 main :: proc() {
 	open("a")
-}
-```
-
-### destroy dynamic array
-
-The message contains:
-
-```text
-a dynamic array can't hold a File yet
-```
-
-This program fails to compile:
-
-```odin
-package main
-
-import "core:fmt"
-
-File :: struct { name: string }
-file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
-impl Destroy for File { destroy = file_destroy }
-open :: proc(name: string) -> File { return File{name} }
-
-main :: proc() {
-	files: [dynamic]File
-	fmt.println(len(files))
 }
 ```
 
@@ -3399,6 +3560,111 @@ main :: proc() {
 }
 ```
 
+### destroy make slice
+
+The message contains:
+
+```text
+a slice is a view
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	files := make([]File, 3)
+	fmt.println(len(files))
+}
+```
+
+### destroy map copy
+
+The message contains:
+
+```text
+'n := m' would copy it
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	m: map[string]File
+	n := m
+	fmt.println(len(n))
+}
+```
+
+### destroy map key
+
+The message contains:
+
+```text
+a map key can't be a File
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	m: map[File]int
+	fmt.println(len(m))
+}
+```
+
+### destroy map range
+
+The message contains:
+
+```text
+loop over pointers: for k, &v in
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	m: map[string]File
+	for k, v in m do fmt.println(k, v.name)
+}
+```
+
 ### destroy move param
 
 The message contains:
@@ -3499,6 +3765,32 @@ main :: proc() {
 }
 ```
 
+### destroy pop safe
+
+The message contains:
+
+```text
+that pop_safe() returns is thrown away
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	files: [dynamic]File
+	pop_safe(&files)
+}
+```
+
 ### destroy return param
 
 The message contains:
@@ -3526,12 +3818,12 @@ same :: proc(f: File) -> File {
 main :: proc() {}
 ```
 
-### destroy slice
+### destroy slice literal
 
 The message contains:
 
 ```text
-a slice can't hold a File yet
+in this slice literal
 ```
 
 This program fails to compile:
@@ -3544,12 +3836,38 @@ import "core:fmt"
 File :: struct { name: string }
 file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
 impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
 
-Batch :: struct {
-	files: []File,
+main :: proc() {
+	files := []File{open("a"), open("b")}
+	fmt.println(len(files))
 }
+```
 
-main :: proc() {}
+### destroy soa
+
+The message contains:
+
+```text
+an #soa array can't hold a File
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	files: #soa[dynamic]File
+	fmt.println(len(files))
+}
 ```
 
 ### destroy temporary

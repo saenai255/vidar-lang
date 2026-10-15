@@ -355,7 +355,7 @@ Removes an element by swapping the last one in.
 - `complex128`: Complex number of two `f64`.
 - `complex64`: Complex number of two `f32`.
 - `cstring`: Null-terminated C string.
-- `Destroy`: Vidar: `impl Destroy for T { destroy = t_destroy }`, with `t_destroy :: proc(x: ^T)`, destroys each local of type `T` when its scope ends, the old value on assignment, and never a local that is returned (it moves out). Structs, arrays, unions and `Maybe`s holding a `T` are destroyed too, and so are generic code's values (found at run time). `impl Destroy for Box($T)` covers every instance. Copies are compile errors unless `T` has `impl Clone`; borrow with `&x`, or move with `move!(x)`. Built in unless the program declares its own `Destroy`.
+- `Destroy`: Vidar: `impl Destroy for T { destroy = t_destroy }`, with `t_destroy :: proc(x: ^T)`, destroys each local of type `T` when its scope ends, the old value on assignment, and never a local that is returned (it moves out). Structs, arrays, unions and `Maybe`s holding a `T` are destroyed too, and so are generic code's values (found at run time). Dynamic arrays and maps own their elements: destroyed with them, and by `clear`, `pop`, `delete_key` and the like; slices are views. `impl Destroy for Box($T)` covers every instance. Copies are compile errors unless `T` has `impl Clone`; borrow with `&x`, or move with `move!(x)`. Built in unless the program declares its own `Destroy`.
 - `f16`: 16-bit float.
 - `f32`: 32-bit float.
 - `f64`: 64-bit float.

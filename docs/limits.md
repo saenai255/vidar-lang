@@ -22,7 +22,7 @@ What the compiler doesn't do yet, grouped by feature.
 
 ## Destructors
 
-- **No containers yet.** A type with `impl Destroy` can't be held in a slice, dynamic array, map or `distinct` type, or in a package-level variable; each is a compile error. Heap values (`new`, `free`) are never destroyed.
+- **Dynamic arrays and maps own their elements; slices don't.** Making a slice that would own destructible values (`make([]T, n)`, `[]T{...}`) is a compile error, and so are `#soa` and fixed-capacity dynamic arrays of them, `distinct` types, map keys, Odin packages' container types (`queue.Queue(T)`) and package-level variables. Maps can't be cloned. A container whose type vidar can't tell at all is left to Odin's `clear`, `delete` and the like, and procs such as `slice.clone` that copy elements aren't checked. Heap values (`new`, `free`) are never destroyed.
 - **Parametric impls cover every instance.** `impl Destroy for Box($T)` works, `impl Destroy for Box(int)` doesn't. Generic code that holds a `Box(int)` as a plain `T` stops the program when it destroys or copies it, since the impl's procs exist only per instance; `vidar:rc`'s `Rc` is the exception.
 - **Generic code is checked at run time.** A copy of a move-only `T` in generic code fails Odin's `#assert` only where the file can name the type, and stops the program otherwise. Parameters are borrowed unless `#owned`, so a generic proc that returns or stores a borrowed parameter clones it, and stops for a move-only type. Temporaries of type `T` in generic code are never destroyed.
 - **No closures.** A closure can't capture a destructible value by value, even one with `impl Clone`.

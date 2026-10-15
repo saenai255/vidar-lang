@@ -23,7 +23,7 @@ checksum :: proc(n: int) -> (sum: int, err: Error) {
 }
 ```
 
-A type without `impl Destroy` is unaffected, and a program without any `impl Destroy` is transpiled exactly as before. A type with `impl Destroy` can't be copied, unless it also has [`impl Clone`](#clone), which turns each copy into a call to its clone proc. [`vidar:rc`](#shared-values-vidarrc) uses both for `Rc(T)`, a value shared by several owners.
+A type without `impl Destroy` is unaffected, and a program without any `impl Destroy` is transpiled exactly as before. A type with `impl Destroy` can't be copied, unless it also has [`impl Clone`](#clone), which turns each copy into a call to its clone proc. [`vidar:rc`](#shared-values-vidarrc) uses both for `Rc(T)`, a value shared by several owners. Dynamic arrays and maps [own their elements](#containers).
 
 ## What gets destroyed, and when
 
@@ -59,7 +59,7 @@ p := &f                     // fine: a pointer borrows it
 use(f)                      // fine: by-value parameters borrow too
 ```
 
-These count as copies: `:=` and `=` from a variable, field, element or `p^`; returning a parameter; `new_clone(f)`; a variable inside a struct or array literal; capturing `f` by value in a closure (capture `&f`); and `for f in ...` over values. They apply to every type that holds a `File` as well (`Log`, `[2]File`, `Maybe(File)`). A value nothing owns is an error too: a call whose `File` result is thrown away, a `File` passed straight to another call (`use(open("a"))`), and `_ = open("a")`.
+These count as copies: `:=` and `=` from a variable, field, element or `p^` (and `v, ok := m[k]` or `u.(File)`); returning a parameter; `new_clone(f)`; a variable inside a struct or array literal; appending a variable to a dynamic array; capturing `f` by value in a closure (capture `&f`); and `for f in ...` over values. They apply to every type that holds a `File` as well (`Log`, `[2]File`, `Maybe(File)`). A value nothing owns is an error too: a call whose `File` result is thrown away, a `File` passed straight to another call (`use(open("a"))`), and `_ = open("a")`.
 
 ## Moving values
 
@@ -131,6 +131,33 @@ t := rc.new(move!(f))
 - Counts are plain integers, and atomic only when built with `-define:VIDAR_THREADS=N` for N > 1.
 - Cycles leak: two `Rc`s that hold each other are never released.
 
+## Containers
+
+A dynamic array or a map owns what it holds. `[dynamic]File` and `map[string]File` are destroyed like any other type that holds a `File`: each element (a map's value) is destroyed, last first, and then the memory is freed. A struct with such a field destroys it along with its other fields.
+
+```odin
+files: [dynamic]File                   // destroyed when the scope ends: each File, then the array
+append(&files, open("a"))              // a new value moves in
+append(&files, move!(f))               // so does a moved one; append(&files, f) is a copy
+files[0] = open("b")                   // destroys the old element
+pop(&files)                            // destroys what it removes
+last := pop(&files)                    // last owns it now
+for &f in files do use(&f)             // loop over pointers: for f in files would copy
+
+m: map[string]File
+m["log"] = open("log")                 // destroys the old value (or the zero value)
+delete_key(&m, "log")                  // destroys the File it removes
+if p, ok := &m["log"]; ok do use(p^)   // v, ok := m["log"] would copy
+```
+
+- **Core's procs that drop elements destroy them first:** `clear`, `resize`, `ordered_remove`, `unordered_remove`, `remove_range`, and `pop`, `pop_front` and `delete_key` when their result is thrown away. vidar calls `__vidar.destroy_<name>` in their place.
+- **`delete(files)`** destroys the elements, frees the memory and leaves `files` empty, so its own destroy does nothing and an existing `defer delete(files)` stays correct. It takes the variable or field holding the array, not a by-value parameter, which is borrowed.
+- **Procs that overwrite or copy elements** without destroying the old ones are errors, and the message says what to write instead: `assign_at`, `map_insert`, `map_upsert`, `map_entry`, `non_zero_resize`, `copy`, and `append(&a, ..xs)`.
+- **Copies.** A dynamic array of a cloneable type is cloned element by element, into new memory from the same allocator. A map can't be cloned, so copying one is an error: move it with `move!`. A map's keys can't be destructible.
+- **Slices are views.** A `[]File` doesn't own its elements: it is never destroyed, and `files[:]` borrows them. Making a slice that would own them is an error: `make([]File, n)`, a slice literal `[]File{...}`, and `delete` of a `[]File`. Use a dynamic array instead.
+- **Generic code** gets the same: `clear(&s.items)` with `items: [dynamic]T` destroys the elements when `T` needs it.
+- **Odin packages' container types**, such as `queue.Queue(File)` or `small_array.Small_Array(4, File)`, can't hold a destructible value: their procs copy and drop values without destroying them. Hold pointers, or use a dynamic array.
+
 ## Generic code
 
 Generic code works with destructible types without naming them. Its locals of type `T` (or `Pair(T)`, `[4]T`, ...) are destroyed through `__vidar.destroy`, which finds out at run time what a type needs. Each package registers its types with `impl Destroy` when the program starts, and any other type is read from its type info the first time. After that first lookup, each instantiation keeps the answer, so a destroy costs a load and a branch. With `T = int` the call is empty, and compiles to nothing above `-o:none`.
@@ -179,6 +206,10 @@ g := __vidar.take(&f); defer file_destroy(&g)                            // g :=
 f := f; defer file_destroy(&f)                                           // #owned f: File, on entry
 l := make_log(); defer __Log_destroy(&l)                                 // l := make_log()
 arr := [2]File{open("x"), open("y")}; defer __vidar.destroy(&arr)        // arrays, unions, Maybe, generic code
+files: [dynamic]File; defer __vidar.destroy(&files)                      // dynamic arrays and maps too
+__vidar.destroy_ordered_remove(&files, 0)                                // ordered_remove(&files, 0)
+__vidar.destroy_delete(&files)                                           // delete(files)
+v, ok := m["k"]; v = handle_clone(v); defer handle_destroy(&v)           // v, ok := m["k"], with impl Clone
 ```
 
 `__Log_destroy` (and `__Pair_clone`) is written at the end of the file that declares the type. When anything is destroyed, cloned or checked at run time, the program also gets `vidar_runtime/destroy.odin`, and each file declaring a destructible type registers it in an `@(init)` proc.
@@ -187,7 +218,8 @@ arr := [2]File{open("x"), open("y")}; defer __vidar.destroy(&arr)        // arra
 
 Each of these is a compile error for now, not a silent leak:
 
-- a `T` in a slice, dynamic array, map or `distinct T`. Hold a `^T` instead;
+- a `T` in an `#soa` array, a fixed-capacity dynamic array (`[dynamic; N]T`) or a `distinct T`, as a map key, or in an Odin package's container type (`queue.Queue(T)`). Hold a `^T` instead;
+- a slice that would own `T`s: `make([]T, n)`, `[]T{...}`, `delete` of a `[]T`. Use a dynamic array;
 - package-level variables of type `T`;
 - `impl Destroy` or `impl Clone` for one instance of a parametric type (`Box(int)`);
 - capturing a `T` by value in a closure, even with `impl Clone`;
@@ -195,6 +227,8 @@ Each of these is a compile error for now, not a silent leak:
 - assigning several values at once (`a, b = x, y`) when one is a `T`, or assigning to a target with side effects (`files[next()] = ...`).
 
 Generic code has gaps vidar can't see: a `T` returned by a call and thrown away, or passed straight to another call, is never destroyed, and a `T` declared in an `if`/`for`/`switch` initializer isn't either. Generic code that holds an instance of a parametric type as a plain `T` (a `Box(int)` passed as `$T`) can't destroy it, since its procs exist only per instance, and stops the program; `Rc` is the exception, since `vidar:rc` registers procs that take any instance. Heap values (`new(T)`, `free`) are never destroyed automatically, as with a raw pointer in C++.
+
+Containers have gaps too. A dynamic array or map whose type vidar can't tell at all (the result of a proc it doesn't read) is left to Odin's own `clear`, `delete` and so on, which drop its elements. Procs from `core:slice` and other packages that copy elements (`slice.clone`) aren't checked. In generic code, `make([]T, n)` is allowed, and so is `append(&a, ..xs)`; the copies aren't checked there.
 
 ## Related
 

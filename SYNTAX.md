@@ -112,12 +112,14 @@ Examples: [examples/interfaces](examples/interfaces), [examples/methods](example
 | `x: T` in a generic proc, or a local vidar can't type | destroyed through `__vidar.destroy`, found at run time; a copy fails Odin's `#assert` where the file can name the type, else stops the program |
 | `y := x`, `y = x`, `return param`, `new_clone(x)` | a clone with `impl Clone`; otherwise compile errors, since a copy would be destroyed twice: borrow with `&x`, or move with `move!(x)` |
 | `proc[x]`, `for x in xs` | compile errors, even with `impl Clone`: nothing would destroy the copy |
+| `[dynamic]T`, `map[K]T` | own their elements: destroyed with them, last first, then freed; `clear`, `resize`, `ordered_remove`, `unordered_remove`, `remove_range`, `delete`, and `pop`/`pop_front`/`delete_key` as statements destroy what they drop; `append` moves values in; a map can't be cloned |
+| `[]T` | a view: never destroyed; `make([]T, n)`, `[]T{...}` and `delete` of one are compile errors |
 | `import "vidar:rc"` | `rc.Rc(T)`: a shared `T`, released by its last owner; `rc.new(value)`, `rc.get(r)`, `rc.count(r)` |
 | `make_t()` as a statement, `f(make_t())`, `_ = make_t()` | compile errors: nothing would destroy the value |
 
 Rules:
 - A destroy proc must accept the zero value: declarations without a value, returned locals and the values that come back with an error are all destroyed.
-- For now, `T` can't be held in a slice, dynamic array, map, `distinct` type or package-level variable; each is a compile error. Hold `^T` instead.
+- For now, `T` can't be held in an `#soa` or fixed-capacity dynamic array, a `distinct` type, a map key, an Odin package's container type (`queue.Queue(T)`) or a package-level variable; each is a compile error. Hold `^T` instead.
 - A generic proc that returns or stores a borrowed parameter copies it: a clone, or a stop for a move-only `T`. Make it `#owned`.
 - A type's own destroy and clone procs copy values as they are.
 - A file holding a `T` must import the package of its destroy proc.
