@@ -60,7 +60,7 @@ p := &f                     // fine: a pointer borrows it
 use(f)                      // fine: by-value parameters borrow too
 ```
 
-These count as copies: `:=` and `=` from a variable, field, element or `p^` (and `v, ok := m[k]` or `u.(File)`); returning a parameter; `new_clone(f)`; a variable inside a struct or array literal; and appending a variable to a dynamic array. They apply to every type that holds a `File` as well (`Log`, `[2]File`, `Maybe(File)`). A value nothing owns is an error too: a call whose `File` result is thrown away, a `File` passed straight to another call (`use(open("a"))`), and `_ = open("a")`.
+These count as copies: `:=` and `=` from a variable, field, element or `p^` (and `v, ok := m[k]` or `u.(File)`); returning a parameter; `new_clone(f)`; a variable inside a struct or array literal, by position or index (`[2]File{1 = f}`); and appending a variable to a dynamic array. They apply to every type that holds a `File` as well (`Log`, `[2]File`, `Maybe(File)`). A range in an array literal (`[4]File{0..<4 = open("a")}`) is an error, since it copies one value into each element. A value nothing owns is an error too: a call whose `File` result is thrown away, a `File` passed straight to another call (`use(open("a"))`), and `_ = open("a")`.
 
 ## Moving values
 

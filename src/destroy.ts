@@ -561,7 +561,13 @@ class Checker {
         if (e.elems.length) this.sliceLit(e);
         // the elements move into the literal: a fresh value is fine, a copy of a variable is not
         for (const el of e.elems) {
-          const v = el.k === "FieldValue" ? el.value : el;
+          // `{0 = x}` and `{.A = x}` name an element; `{0..<n = x}` fills each one with a copy of x
+          const keyed = el.k === "Binary" && el.op === "=";
+          if (keyed && el.x.k === "Binary" && (el.x.op === "..<" || el.x.op === "..=")) {
+            const o = this.ownedOf(el.y);
+            if (o && !this.raw) throw new CompileError(`'${nodeText(el)}' would copy one ${o.name} into each element, ${o.why}, and every copy would be destroyed; give each element a value of its own`, posOf(el));
+          }
+          const v = el.k === "FieldValue" ? el.value : keyed ? el.y : el;
           this.copied(v, `'${nodeText(e)}' would copy it`);
           this.consume(v);
         }

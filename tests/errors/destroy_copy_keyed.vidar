@@ -1,0 +1,15 @@
+// error: '[2]File{1 = f}' would copy it
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	f := open("a")
+	files := [2]File{1 = f}
+	fmt.println(f.name, len(files))
+}

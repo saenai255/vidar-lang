@@ -1,0 +1,31 @@
+package main
+
+import "core:fmt"
+
+// elements of an array literal given by index or enum value move in, or are cloned, like any other
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { if f.name != "" do fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+
+Handle :: struct { id: int }
+handle_destroy :: proc(h: ^Handle) { if h.id != 0 do fmt.println("release", h.id) }
+handle_clone :: proc(h: Handle) -> Handle { fmt.println("clone", h.id); return Handle{h.id + 10} }
+impl Destroy for Handle { destroy = handle_destroy }
+impl Clone for Handle { clone = handle_clone }
+
+Side :: enum { Left, Right }
+
+main :: proc() {
+	a := File{"a"}
+	files := [2]File{1 = move!(a), 0 = File{"b"}}
+	fmt.println(files[0].name, files[1].name, a.name == "")
+	h := Handle{1}
+	hs := [2]Handle{0 = h}         // cloned: h is read below
+	fmt.println(h.id, hs[0].id, hs[1].id)
+	sides := [Side]Handle{.Left = Handle{}, .Right = h} // h's last use: moved
+	fmt.println(sides[.Right].id)
+	more: [2]Handle
+	g := Handle{2}
+	more = {1 = g}
+	fmt.println(more[1].id)
+}

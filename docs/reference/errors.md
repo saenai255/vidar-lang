@@ -13,7 +13,7 @@ Every program here is a test in `tests/errors/` and `tests/errors_pkg/` that mus
 - [Interfaces](#interfaces): 42 errors
 - [Optimization attributes](#optimization-attributes): 17 errors
 - [Packages and imports](#packages-and-imports): 7 errors
-- [Other](#other): 41 errors
+- [Other](#other): 43 errors
 
 ## `do!` blocks
 
@@ -3299,6 +3299,33 @@ main :: proc() {
 }
 ```
 
+### destroy copy keyed
+
+The message contains:
+
+```text
+'[2]File{1 = f}' would copy it
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	f := open("a")
+	files := [2]File{1 = f}
+	fmt.println(f.name, len(files))
+}
+```
+
 ### destroy core container
 
 The message contains:
@@ -3877,6 +3904,32 @@ open :: proc(name: string) -> File { return File{name} }
 main :: proc() {
 	files: [dynamic]File
 	pop_safe(&files)
+}
+```
+
+### destroy range literal
+
+The message contains:
+
+```text
+would copy one File into each element
+```
+
+This program fails to compile:
+
+```odin
+package main
+
+import "core:fmt"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	files := [2]File{0..<2 = open("a")}
+	fmt.println(len(files))
 }
 ```
 
