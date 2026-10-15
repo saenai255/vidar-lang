@@ -1,0 +1,13 @@
+owners 2
+owners 3
+owners 6
+owners 1 shared
+moved true
+taken
+nested 5 2
+empty 0
+free box of 42
+close box log
+close taken
+close moved
+close shared

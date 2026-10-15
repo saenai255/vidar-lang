@@ -1,0 +1,12 @@
+// error: 'f' is a parameter, which is borrowed, so it can't be moved; declare it #owned
+package main
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) {}
+impl Destroy for File { destroy = file_destroy }
+
+keep :: proc(f: File) -> File {
+	return move!(f)
+}
+
+main :: proc() {}

@@ -90,7 +90,7 @@ __Log_destroy :: proc(x: ^Log) {
 // impl Destroy for generic code and run-time checks
 @(init, private="file")
 __vidar_destroy_init :: proc "contextless" () {
-	__vidar.register_destroy(File, file_destroy, true)
-	__vidar.register_destroy(Server, __Server_destroy, true)
-	__vidar.register_destroy(Log, __Log_destroy, true)
+	__vidar.register_destroy(File, file_destroy)
+	__vidar.register_destroy(Server, __Server_destroy)
+	__vidar.register_destroy(Log, __Log_destroy)
 }

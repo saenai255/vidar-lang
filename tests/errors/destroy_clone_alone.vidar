@@ -1,0 +1,8 @@
+// error: impl Clone for 'Point' needs impl Destroy for it too
+package main
+
+Point :: struct { x, y: int }
+point_clone :: proc(p: Point) -> Point { return p }
+impl Clone for Point { clone = point_clone }
+
+main :: proc() {}

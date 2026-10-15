@@ -12,6 +12,7 @@ import type { File, Node } from "./ast";
 import { PackageInfo, Scope, Unit } from "./scope";
 import { PRELUDE_PATH, PRELUDE_SOURCE } from "./prelude";
 import { MANIFEST, findManifest, resolveCollection } from "./manifest";
+import { RC_IMPORT, RC_SOURCE } from "./rc";
 import { GOROUTINES_DISABLED, SCHED_ASM, SCHED_IMPORT, SCHED_SOURCE, goroutinesEnabled } from "./sched";
 import { markRaces } from "./race";
 
@@ -72,6 +73,11 @@ function bundledSourcePath(name: string, source: string): string {
 /** The bundled "vidar:sched" package. */
 export function schedSourcePath(): string {
   return bundledSourcePath("sched", SCHED_SOURCE);
+}
+
+/** The bundled "vidar:rc" package. */
+export function rcSourcePath(): string {
+  return bundledSourcePath("rc", RC_SOURCE);
 }
 
 /** A real file holding the prelude, for editors (the compiler itself reads it as PRELUDE_PATH). */
@@ -172,6 +178,11 @@ export function loadProgram(entry: string | Source[], opts: LoadOptions = {}): P
           pkg.deps.add(packageAt(dirname(path)) ?? loadPackage(dirname(path), [{ path, text: SCHED_SOURCE }]));
           continue;
         }
+        if (s.k === "Import" && s.path === RC_IMPORT) {
+          const path = rcSourcePath();
+          pkg.deps.add(packageAt(dirname(path)) ?? loadPackage(dirname(path), [{ path, text: RC_SOURCE }]));
+          continue;
+        }
         if (s.k !== "Import") continue;
         const bad = isRelativeImport(s.path) ? undefined : manifestFor(dir);
         if (bad?.error && !bad.reported) {
@@ -211,6 +222,7 @@ export function loadProgram(entry: string | Source[], opts: LoadOptions = {}): P
   const units = groupCycles(root, packages);
   analyzer.resolveImport = (fromDir, path) => {
     if (path === SCHED_IMPORT) return packageAt(dirname(schedSourcePath())) ?? null;
+    if (path === RC_IMPORT) return packageAt(dirname(rcSourcePath())) ?? null;
     const dir = importDir(fromDir, path);
     return (dir && packageAt(dir)) || null;
   };
@@ -272,7 +284,7 @@ function groupCycles(root: PackageInfo, packages: PackageInfo[]): Unit[] {
     const name = hasRoot ? root.name : comp.map((p) => p.name).join("_");
     let outDir = "";
     if (!hasRoot) {
-      outDir = comp.some((p) => p.dir === dirname(schedSourcePath())) ? "vidar_sched" : name;
+      outDir = comp.some((p) => p.dir === dirname(schedSourcePath())) ? "vidar_sched" : comp.some((p) => p.dir === dirname(rcSourcePath())) ? "vidar_rc" : name;
       for (let i = 2; usedDirs.has(outDir); i++) outDir = `${name}${i}`;
       usedDirs.add(outDir);
     }
@@ -335,7 +347,8 @@ export function emitProgram(p: Program, expansions?: Map<Node, string[]>, opts: 
     closures ||= em.usesRuntime;
   }
   if (closures) files.set(`${RUNTIME_DIR}/runtime.odin`, CLOSURE_RUNTIME);
-  if (closures && p.analyzer.destroyDispatch) files.set(`${RUNTIME_DIR}/destroy.odin`, DESTROY_RUNTIME);
+  // move!(x) needs `take` even in a program where nothing is destroyed
+  if (closures && (p.analyzer.destroyDispatch || [...files.values()].some((t) => t.includes("__vidar.take(")))) files.set(`${RUNTIME_DIR}/destroy.odin`, DESTROY_RUNTIME);
   return { files, sourceOf, lineMap, ...(columns ? { columns } : {}) };
 }
 

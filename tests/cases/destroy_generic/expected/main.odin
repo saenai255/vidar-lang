@@ -30,5 +30,5 @@ main :: proc() {
 // impl Destroy for generic code and run-time checks
 @(init, private="file")
 __vidar_destroy_init :: proc "contextless" () {
-	__vidar.register_destroy(File, file_destroy, true)
+	__vidar.register_destroy(File, file_destroy)
 }

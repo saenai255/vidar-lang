@@ -1,0 +1,12 @@
+// error: move! takes a variable, field or element, which it leaves zero
+package main
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) {}
+impl Destroy for File { destroy = file_destroy }
+
+open :: proc(name: string) -> File { return File{name} }
+
+main :: proc() {
+	f := move!(open("a"))
+}

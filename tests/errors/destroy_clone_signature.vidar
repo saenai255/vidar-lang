@@ -1,0 +1,10 @@
+// error: must take one parameter of type Handle and return the copy to implement clone
+package main
+
+Handle :: struct { id: int }
+handle_destroy :: proc(h: ^Handle) {}
+handle_clone :: proc(h: ^Handle) -> Handle { return h^ }
+impl Destroy for Handle { destroy = handle_destroy }
+impl Clone for Handle { clone = handle_clone }
+
+main :: proc() {}

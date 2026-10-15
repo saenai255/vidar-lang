@@ -9,6 +9,8 @@ import "core:sync"
 
 Destroy_Plan :: struct {
 	destroy:   proc(rawptr),
+	// impl Clone: writes a clone of the value at src to dst
+	clone:     proc(dst, src: rawptr),
 	move_only: bool,
 	parts:     []Destroy_Part,
 	// a union: the plan of each variant, and where its tag is
@@ -25,18 +27,50 @@ Destroy_Part :: struct {
 	stride: uintptr,
 }
 
+// impl Destroy for a parametric type, found by the file that declares it and its name
+@(private="file")
+Generic_Destroy :: struct {
+	file, name: string,
+	destroy:    proc(rawptr),
+	clone:      proc(dst, src: rawptr),
+}
+
 @(private="file") destroy_plans: map[typeid]^Destroy_Plan
+@(private="file") generic_destroys: [dynamic]Generic_Destroy
 @(private="file") destroy_lock: sync.Mutex
 @(private="file") nothing_to_destroy: Destroy_Plan
 
-register_destroy :: proc "contextless" ($T: typeid, destroy: proc(^T), move_only: bool) {
+// a type with impl Destroy and no impl Clone: copies stop the program
+register_destroy :: proc "contextless" ($T: typeid, $destroy: proc(^T)) {
+	add_plan(T, Destroy_Plan{destroy = transmute(proc(rawptr))destroy, move_only = true})
+}
+
+// a type with impl Destroy and impl Clone (or one derived from its fields)
+register_clone :: proc "contextless" ($T: typeid, $destroy: proc(^T), $clone: proc(T) -> T) {
+	add_plan(T, Destroy_Plan{destroy = transmute(proc(rawptr))destroy, clone = proc(dst, src: rawptr) { (^T)(dst)^ = clone((^T)(src)^) }})
+}
+
+@(private="file")
+add_plan :: proc "contextless" ($T: typeid, plan: Destroy_Plan) {
 	context = runtime.default_context()
 	context.allocator = runtime.heap_allocator()
 	sync.guard(&destroy_lock)
-	plan := new(Destroy_Plan)
-	plan.destroy = transmute(proc(rawptr))destroy
-	plan.move_only = move_only
-	destroy_plans[T] = plan
+	destroy_plans[T] = new_clone(plan)
+}
+
+// impl Destroy for a parametric type, whose procs exist only per instance: generic code stops on its
+// instances, unless the type's package also gives procs that take any instance (vidar:rc does)
+register_generic :: proc "contextless" (file, name: string, destroy: proc(rawptr) = nil, clone: proc(dst, src: rawptr) = nil) {
+	context = runtime.default_context()
+	context.allocator = runtime.heap_allocator()
+	sync.guard(&destroy_lock)
+	for &g in generic_destroys {
+		if g.file == file && g.name == name {
+			if destroy != nil do g.destroy, g.clone = destroy, clone
+			return
+		}
+	}
+	append(&generic_destroys, Generic_Destroy{file, name, destroy, clone})
 }
 
 // nil when a value of the type holds nothing to destroy
@@ -47,6 +81,16 @@ plan_for :: proc(ti: ^runtime.Type_Info) -> ^Destroy_Plan {
 	parts: [dynamic]Destroy_Part
 	#partial switch v in ti.variant {
 	case runtime.Type_Info_Named:
+		// an instance, Box($T=int), of a parametric type with impl Destroy
+		if v.loc != nil {
+			for g in generic_destroys {
+				if g.file != v.loc.file_path || len(v.name) <= len(g.name) || v.name[:len(g.name)] != g.name || v.name[len(g.name)] != '(' do continue
+				if g.destroy == nil do generic_unknown(ti)
+				plan^ = {destroy = g.destroy, clone = g.clone, move_only = g.clone == nil}
+				destroy_plans[ti.id] = plan
+				return plan
+			}
+		}
 		free(plan)
 		inner := plan_for(v.base)
 		destroy_plans[ti.id] = inner if inner != nil else &nothing_to_destroy
@@ -135,6 +179,40 @@ run_plan :: proc(plan: ^Destroy_Plan, p: rawptr) {
 	}
 }
 
+@(private="file")
+clone_plan :: proc(plan: ^Destroy_Plan, dst, src: rawptr) {
+	if plan.destroy != nil {
+		plan.clone(dst, src)
+		return
+	}
+	for part in plan.parts {
+		for i in 0..<part.count {
+			at := part.offset + uintptr(i) * part.stride
+			clone_plan(part.plan, rawptr(uintptr(dst) + at), rawptr(uintptr(src) + at))
+		}
+	}
+	if plan.variants != nil {
+		at := rawptr(uintptr(src) + plan.tag_off)
+		tag: int
+		switch plan.tag_size {
+		case 1: tag = int((^u8)(at)^)
+		case 2: tag = int((^u16)(at)^)
+		case 4: tag = int((^u32)(at)^)
+		case 8: tag = int((^u64)(at)^)
+		}
+		i := tag if plan.no_nil else tag - 1
+		if i >= 0 && i < len(plan.variants) && plan.variants[i] != nil do clone_plan(plan.variants[i], dst, src)
+	}
+}
+
+@(private="file", cold)
+generic_unknown :: proc "contextless" (ti: ^runtime.Type_Info) -> ! {
+	runtime.print_string("vidar: generic code destroyed or copied a ")
+	runtime.print_type(ti)
+	runtime.print_string(", but it only knows it as a type parameter, and impl Destroy for a parametric type works only where the code names the type\n")
+	runtime.trap()
+}
+
 // destroys a value whose type the code can't name
 destroy :: #force_inline proc(p: ^$T) {
 	when intrinsics.type_is_struct(T) || intrinsics.type_is_union(T) || intrinsics.type_is_array(T) || intrinsics.type_is_enumerated_array(T) {
@@ -156,6 +234,26 @@ copied :: proc "contextless" (ti: ^runtime.Type_Info, loc: runtime.Source_Code_L
 	runtime.print_type(ti)
 	runtime.print_string(" was copied, but its type has impl Destroy, so both copies would be destroyed\n")
 	runtime.trap()
+}
+
+// a copy of a value whose type the code can't name: a clone, or a stop when the type can't be copied
+clone :: #force_inline proc(x: $T, loc := #caller_location) -> T {
+	when intrinsics.type_is_struct(T) || intrinsics.type_is_union(T) || intrinsics.type_is_array(T) || intrinsics.type_is_enumerated_array(T) {
+		if plan := plan_of(T); plan != nil {
+			if plan.move_only do copied(type_info_of(T), loc)
+			src, dst := x, x
+			clone_plan(plan, &dst, &src)
+			return dst
+		}
+	}
+	return x
+}
+
+// move!(x): x's value, leaving x zero
+take :: #force_inline proc "contextless" (p: ^$T) -> T {
+	v := p^
+	intrinsics.mem_zero(p, size_of(T))
+	return v
 }
 
 // a local moved out by return: left zero, so its defer destroys nothing

@@ -1,0 +1,13 @@
+// error: 'f' is a File, which has impl Destroy, and passing it to #owned parameter 'x' would copy it; both copies would be destroyed. Move it there with move!(f)
+package main
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) {}
+impl Destroy for File { destroy = file_destroy }
+
+consume :: proc(#owned x: File) {}
+
+main :: proc() {
+	f := File{"a"}
+	consume(f)
+}

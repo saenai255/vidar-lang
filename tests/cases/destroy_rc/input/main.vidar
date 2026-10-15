@@ -1,0 +1,47 @@
+package main
+
+import "core:fmt"
+import "vidar:rc"
+import "lib"
+
+File :: struct { name: string }
+file_destroy :: proc(f: ^File) { if f.name != "" do fmt.println("close", f.name) }
+impl Destroy for File { destroy = file_destroy }
+
+open :: proc(name: string) -> File { return File{name} }
+
+// impl Destroy for every instance of a parametric type, run before its fields are destroyed
+Box :: struct($T: typeid) { v: ^T, log: File }
+box_destroy :: proc(b: ^Box($T)) {
+	if b.v == nil do return
+	fmt.println("free box of", b.v^)
+	free(b.v)
+}
+impl Destroy for Box($T) { destroy = box_destroy }
+
+Holder :: struct { file: rc.Rc(File), tag: int }
+
+main :: proc() {
+	r := rc.new(open("shared"))
+	{
+		s := r
+		fmt.println("owners", rc.count(r))
+		h := Holder{r, 1}
+		fmt.println("owners", rc.count(r))
+		p := lib.dup(r)
+		k := lib.keep(r)
+		fmt.println("owners", rc.count(r))
+	}
+	fmt.println("owners", rc.count(r), rc.get(r).name)
+	f := open("moved")
+	t := rc.new(move!(f))
+	fmt.println(rc.get(t).name, f.name == "")
+	o := lib.take_over(open("taken"))
+	fmt.println(o.name)
+	b := Box(int){new_clone(42), open("box log")}
+	nested := rc.new(rc.new(5))
+	inner := rc.get(nested)^
+	fmt.println("nested", rc.get(inner)^, rc.count(inner))
+	empty: rc.Rc(File)
+	fmt.println("empty", rc.count(empty))
+}

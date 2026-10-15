@@ -24,6 +24,6 @@ name_of :: proc(x: $T) -> string {
 
 // a generic copy of a type without a destructor is an ordinary copy
 first :: proc(xs: []$T) -> T {
-	__vidar.check_copy(type_of(xs[0])); x := xs[0]; defer __vidar.destroy(&x)
+	x := __vidar.clone(xs[0]); defer __vidar.destroy(&x)
 	{ defer __vidar.forget(&x); return x }
 }

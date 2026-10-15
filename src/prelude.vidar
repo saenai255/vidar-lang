@@ -134,6 +134,12 @@ check :: proc!(cond: Expr, message: Expr = "") -> Stmt {
 	}
 }
 
+// move!(x) evaluates to x's value and leaves x zero: it moves a value with impl Destroy to a new owner
+// (a variable, a field, an #owned parameter) instead of copying it.
+move :: proc!(x: Expr) -> Expr {
+	return quote(__vidar.take(&$x))
+}
+
 // todo!() / todo!("message"): panic in code that isn't written yet.
 todo :: proc!(message: Expr = "") -> Expr {
 	return quote(__vidar.not_done("not yet implemented", $message))

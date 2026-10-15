@@ -1,0 +1,13 @@
+// error: 'h' is a Handle, which has impl Destroy; a closure can't hold a copy of it. Capture &h
+package main
+
+Handle :: struct { id: int }
+handle_destroy :: proc(h: ^Handle) {}
+handle_clone :: proc(h: Handle) -> Handle { return h }
+impl Destroy for Handle { destroy = handle_destroy }
+impl Clone for Handle { clone = handle_clone }
+
+main :: proc() {
+	h := Handle{1}
+	f := proc[h]() -> int { return h.id }
+}
