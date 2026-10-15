@@ -394,6 +394,13 @@ class Checker {
     return ownedOf(this.an, this.typeOf(e));
   }
 
+  /** A value whose type mentions a type parameter (not one vidar can't tell). */
+  private generic(e: Expr): boolean {
+    if (e.k === "Ident" && e.name === "_") return false;
+    const ty = this.typeOf(e);
+    return !!ty && mentionsPoly(this.an, ty);
+  }
+
   /** A value whose type is only known at run time: generic code, or a type vidar can't tell. */
   private unsure(ty: Ty | undefined): boolean {
     return !ty || mentionsPoly(this.an, ty);
@@ -1064,7 +1071,10 @@ class Checker {
       }
       if (l && (lhs[i] || s.lhs.length === s.rhs.length)) this.copied(r, `'${nodeText(l)} = ${nodeText(r)}' would copy it`);
     });
-    const o = lhs.find(Boolean);
+    let o = lhs.find(Boolean);
+    // generic code: the old value is destroyed through __vidar.destroy, which does nothing for most types
+    const generic = !o && this.owned.length > 0 && s.lhs.length === 1 && s.rhs.length === 1 && this.generic(s.lhs[0]);
+    if (generic) o = { how: { k: "dispatch" }, clone: false, name: "", why: "" };
     if (!o) return;
     if (s.lhs.length !== 1 || s.rhs.length !== 1) throw new CompileError(`assigning several values at once to a ${o.name}, ${o.why}, is not supported yet; assign them one by one`, posOf(s));
     const l = s.lhs[0];
@@ -1073,10 +1083,12 @@ class Checker {
       e.k === "Ident" ||
       ((e.k === "Paren" || e.k === "Deref" || e.k === "Selector") && simple(e.x)) ||
       (e.k === "Index" && !e.slice && simple(e.x) && e.indices.every((i) => !!i && (i.k === "Ident" || i.k === "Lit" || i.k === "ImplicitSelector")));
+    if (!simple(l) && generic) return;
     if (!simple(l)) throw new CompileError(`'${nodeText(l)}' is a ${o.name}, ${o.why}; assigning to it is supported for variables, fields, p^ and elements indexed by a name or constant: assign through a variable first`, posOf(l));
     if (o.how.k === "dispatch") this.an.destroyDispatch = true;
     A(s)._destroyAssign = o.how;
-    this.note("drops-old", l.toks[l.end - 1], "after", "drops old", `the old value of '${nodeText(l)}' is destroyed by ${this.named(o.how, "destroy")} once the new one is stored`);
+    // not shown in generic code, where most instances destroy nothing
+    if (!generic) this.note("drops-old", l.toks[l.end - 1], "after", "drops old", `the old value of '${nodeText(l)}' is destroyed by ${this.named(o.how, "destroy")} once the new one is stored`);
   }
 
   private ret(s: Extract<Stmt, { k: "Return" }>): void {

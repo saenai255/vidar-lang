@@ -183,7 +183,7 @@ if p, ok := &m["log"]; ok do use(p^)   // v, ok := m["log"] would copy
 
 ## Generic code
 
-Generic code works with destructible types without naming them. Its locals of type `T` (or `Pair(T)`, `[4]T`, ...) are destroyed through `__vidar.destroy`, which finds out at run time what a type needs. Each package registers its types with `impl Destroy` when the program starts, and any other type is read from its type info the first time. After that first lookup, each instantiation keeps the answer, so a destroy costs a load and a branch. With `T = int` the call is empty, and compiles to nothing above `-o:none`.
+Generic code works with destructible types without naming them. Its locals of type `T` (or `Pair(T)`, `[4]T`, ...) are destroyed through `__vidar.destroy`, which finds out at run time what a type needs. Each package registers its types with `impl Destroy` when the program starts, and any other type is read from its type info the first time. After that first lookup, each instantiation keeps the answer, so a destroy costs a load and a branch. With `T = int` the call is empty, and compiles to nothing above `-o:none`. Assigning to a `T` (`x = f(2)`, `s.top = move!(v)`, `p^ = move!(v)`) destroys the old value the same way; an element at a computed index (`a[i + 1] = v`) is the exception, and its old value is left to you.
 
 ```odin
 // package lib: knows nothing about File
@@ -381,7 +381,7 @@ Each of these is a compile error for now, not a silent leak:
 - declaring a `T` in an `if`, `for` or `switch` initializer;
 - assigning several values at once (`a, b = x, y`) when one is a `T`, or assigning to a target with side effects (`files[next()] = ...`).
 
-Generic code has gaps vidar can't see: a `T` returned by a call and thrown away, or passed straight to another call, is never destroyed, and a `T` declared in an `if`/`for`/`switch` initializer isn't either. Generic code that holds an instance of a parametric type as a plain `T` (a `Box(int)` passed as `$T`) can't destroy it, since its procs exist only per instance, and stops the program; `Rc` is the exception, since `vidar:rc` registers procs that take any instance. Heap values (`new(T)`, `free`) are never destroyed automatically, as with a raw pointer in C++.
+Generic code has gaps vidar can't see: a `T` returned by a call and thrown away, or passed straight to another call, is never destroyed, and a `T` declared in an `if`/`for`/`switch` initializer isn't either. Assigning to an element of `T`s at a computed index (`a[i + 1] = v`), or to several targets at once, leaves the old value undestroyed. Generic code that holds an instance of a parametric type as a plain `T` (a `Box(int)` passed as `$T`) can't destroy it, since its procs exist only per instance, and stops the program; `Rc` is the exception, since `vidar:rc` registers procs that take any instance. Heap values (`new(T)`, `free`) are never destroyed automatically, as with a raw pointer in C++.
 
 Containers have gaps too. A dynamic array or map whose type vidar can't tell at all (the result of a proc it doesn't read) is left to Odin's own `clear`, `delete` and so on, which drop its elements. Procs from `core:slice` and other packages that copy elements (`slice.clone`) aren't checked. In generic code, `make([]T, n)` is allowed, and so is `append(&a, ..xs)`; the copies aren't checked there.
 

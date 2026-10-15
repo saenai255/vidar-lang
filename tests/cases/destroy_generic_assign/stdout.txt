@@ -1,0 +1,12 @@
+drop 1
+twice end
+drop 2
+twice end
+drop 10
+drop 11
+put 12 13
+drop 20
+end 21 2
+drop 21
+drop 13
+drop 12
