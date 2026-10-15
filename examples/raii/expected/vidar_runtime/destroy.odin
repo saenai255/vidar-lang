@@ -378,6 +378,26 @@ destroy_delete_key :: proc(m: ^$M/map[$K]$V, key: K) {
 	destroy(&k)
 }
 
+// x := f() or_return (or_else, or_break, or_continue): the value returned with an error is destroyed
+drop_failed :: #force_inline proc(v: $T, e: $E) -> (T, E) {
+	if failed(e) {
+		v := v
+		destroy(&v)
+		return {}, e
+	}
+	return v, e
+}
+
+drop_failed3 :: #force_inline proc(a: $A, b: $B, e: $E) -> (A, B, E) {
+	if failed(e) {
+		a, b := a, b
+		destroy(&b)
+		destroy(&a)
+		return {}, {}, e
+	}
+	return a, b, e
+}
+
 // move!(x): x's value, leaving x zero
 take :: #force_inline proc "contextless" (p: ^$T) -> T {
 	v := p^

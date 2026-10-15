@@ -598,6 +598,9 @@ export class Emitter {
     // impl Clone (destroy.ts): a copy of a value that is destroyed is a clone
     const destroyClone: How | undefined = A(n)._destroyClone;
     if (destroyClone) text = `${this.cloneRef(destroyClone)}(${text})`;
+    // a value returned with an error is destroyed when the call fails (`f() or_return`)
+    const destroyFailed: number | undefined = A(n)._destroyFailed;
+    if (destroyFailed) text = `${this.runtimeRef()}.drop_failed${destroyFailed === 3 ? "3" : ""}(${text})`;
     // ...and the last use of a local moves it
     if (A(n)._destroyTake) text = `${this.runtimeRef()}.take(&${text})`;
     // -define:VIDAR_RACE=true: a write the race check watches, and the declaration of a captured local (race.ts)

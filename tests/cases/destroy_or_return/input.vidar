@@ -1,0 +1,70 @@
+package main
+
+import "core:fmt"
+
+// a value returned along with an error is destroyed when or_return, or_else, or_break or
+// or_continue drops it, and kept when the call succeeds
+R :: struct { id: int }
+r_destroy :: proc(r: ^R) { if r.id != 0 do fmt.println("drop", r.id) }
+impl Destroy for R { destroy = r_destroy }
+
+Err :: enum { None, Bad }
+
+partial :: proc(i: int, fail: bool) -> (R, Err) { return R{i}, .Bad if fail else .None }
+lookup :: proc(i: int, ok: bool) -> (R, bool) { return R{i}, ok }
+both :: proc(i: int, fail: bool) -> (R, R, Err) { return R{i}, R{i + 1}, .Bad if fail else .None }
+make_t :: proc(f: proc(int) -> $T, fail: bool) -> (T, Err) { return f(7), .Bad if fail else .None }
+mk :: proc(i: int) -> R { return R{i} }
+
+plain :: proc(fail: bool) -> Err {
+	x := partial(1, fail) or_return
+	fmt.println("plain kept", x.id)
+	return nil
+}
+
+named :: proc(fail: bool) -> (r: R, e: Err) {
+	r = partial(2, fail) or_return
+	return
+}
+
+valued :: proc(fail: bool) -> Err {
+	x := partial(3, fail) or_return .Bad
+	fmt.println("valued kept", x.id)
+	return nil
+}
+
+ok_bool :: proc(ok: bool) -> bool {
+	x := lookup(4, ok) or_return
+	fmt.println("ok kept", x.id)
+	return true
+}
+
+three :: proc(fail: bool) -> Err {
+	a, b := both(5, fail) or_return
+	fmt.println("three kept", a.id, b.id)
+	return nil
+}
+
+generic :: proc(fail: bool) -> Err {
+	x := make_t(mk, fail) or_return
+	fmt.println("generic kept", x.id)
+	return nil
+}
+
+main :: proc() {
+	plain(true)
+	plain(false)
+	{ r, e := named(true) }
+	valued(true)
+	ok_bool(false)
+	ok_bool(true)
+	three(true)
+	generic(true)
+	y := partial(8, true) or_else R{9}
+	fmt.println("or_else", y.id)
+	for i in 0..<2 {
+		z := partial(10 + i, i == 1) or_break
+		fmt.println("loop", z.id)
+	}
+	fmt.println("end")
+}

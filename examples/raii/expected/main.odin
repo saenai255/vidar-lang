@@ -30,8 +30,8 @@ connect :: proc(peer: string) -> (Conn, Error) {
 
 // every early return closes what is open so far
 handshake :: proc(a, b: string) -> Error {
-	first := connect(a) or_return; defer conn_destroy(&first)
-	second := connect(b) or_return; defer conn_destroy(&second) // on failure, first is closed here
+	first := __vidar.drop_failed(connect(a)) or_return; defer conn_destroy(&first)
+	second := __vidar.drop_failed(connect(b)) or_return; defer conn_destroy(&second) // on failure, first is closed here
 	fmt.printfln("  handshake %s <-> %s", first.peer, second.peer)
 	return nil
 }
@@ -104,7 +104,7 @@ Node :: struct {
 }
 
 add_child :: proc(parent: rc.Rc(Node), name: string) -> rc.Rc(Node) {
-	c := connect(name) or_else Conn{}; defer conn_destroy(&c)
+	c := __vidar.drop_failed(connect(name)) or_else Conn{}; defer conn_destroy(&c)
 	// move!(c) — main.vidar:107
 	child := rc.new(Node{name = name, conn = __vidar.take(&c), parent = rc.downgrade(parent)}); defer rc.release(&child)
 	append(&rc.get(parent).children, rc.share(child)) // a second owner: the Rc is cloned
@@ -142,15 +142,15 @@ main :: proc() {
 	fmt.println("server:")
 	{
 		s := Server{name = "main"}; defer __Server_destroy(&s)
-		{ __vidar_new: type_of(s.listener) = connect("0.0.0.0") or_else Conn{}; __vidar_old := s.listener; s.listener = __vidar_new; conn_destroy(&__vidar_old) }
+		{ __vidar_new: type_of(s.listener) = __vidar.drop_failed(connect("0.0.0.0")) or_else Conn{}; __vidar_old := s.listener; s.listener = __vidar_new; conn_destroy(&__vidar_old) }
 		for peer in ([]string{"alice", "bob", "carol"}) {
-			c := connect(peer) or_else Conn{}; defer conn_destroy(&c)
+			c := __vidar.drop_failed(connect(peer)) or_else Conn{}; defer conn_destroy(&c)
 			// move!(c) — main.vidar:145
 			accept(&s, __vidar.take(&c))
 		}
 		__vidar.destroy_ordered_remove(&s.clients, 1) // bob's connection is closed here
-		{ __vidar_new: type_of(s.by_peer["dave"]) = connect("dave") or_else Conn{}; __vidar_old := s.by_peer["dave"]; s.by_peer["dave"] = __vidar_new; conn_destroy(&__vidar_old) }
-		{ __vidar_new: type_of(s.by_peer["dave"]) = connect("dave again") or_else Conn{}; __vidar_old := s.by_peer["dave"]; s.by_peer["dave"] = __vidar_new; conn_destroy(&__vidar_old) } // the old one is closed
+		{ __vidar_new: type_of(s.by_peer["dave"]) = __vidar.drop_failed(connect("dave")) or_else Conn{}; __vidar_old := s.by_peer["dave"]; s.by_peer["dave"] = __vidar_new; conn_destroy(&__vidar_old) }
+		{ __vidar_new: type_of(s.by_peer["dave"]) = __vidar.drop_failed(connect("dave again")) or_else Conn{}; __vidar_old := s.by_peer["dave"]; s.by_peer["dave"] = __vidar_new; conn_destroy(&__vidar_old) } // the old one is closed
 		// a closure that borrows the server: it can't outlive this proc
 		each := __closure_0(&s)
 		each.call(each.env, __vidar.Closure(proc(__vidar.Env, ^Conn)){call = proc(__env_raw: __vidar.Env, c: ^Conn) { fmt.printfln("  client %s", c.peer) }})
@@ -168,7 +168,7 @@ main :: proc() {
 
 	fmt.println("tree:")
 	{
-		c := connect("root") or_else Conn{}; defer conn_destroy(&c)
+		c := __vidar.drop_failed(connect("root")) or_else Conn{}; defer conn_destroy(&c)
 		// move!(c) — main.vidar:168
 		root := rc.new(Node{name = "root", conn = __vidar.take(&c)}); defer rc.release(&root)
 		usr := add_child(root, "usr"); defer rc.release(&usr)
@@ -180,7 +180,7 @@ main :: proc() {
 	{
 		s: Stack(Conn); defer __vidar.destroy(&s)
 		for peer in ([]string{"x", "y", "z"}) {
-			c := connect(peer) or_else Conn{}; defer conn_destroy(&c)
+			c := __vidar.drop_failed(connect(peer)) or_else Conn{}; defer conn_destroy(&c)
 			// move!(c) — main.vidar:179
 			push(&s, __vidar.take(&c))
 		}

@@ -29,7 +29,7 @@ A type without `impl Destroy` is unaffected, and a program without any `impl Des
 
 - **A local** of a type with `impl Destroy` is destroyed when its scope ends: at the closing `}`, on `return`, `break` or `continue`, and on every `or_return`. A loop body destroys its locals on each iteration. Locals are destroyed in reverse order of declaration, after any `defer` written later in the same scope.
 - **Types that hold one are destroyed too.** A struct with a `File` field gets a destructor of its own, `__Log_destroy`, which destroys its fields last first. If the struct also has `impl Destroy`, its proc runs first, while the fields are still there. Fixed arrays (`[4]File`, `[Color]File`) destroy their elements last first, a union or `Maybe(File)` destroys the variant it holds, and so does an instance of a parametric type (`Pair(File)`).
-- **The zero value is destroyed too.** `f: File` declares a zero `File`, and it is destroyed like any other. A local that was returned is left zero. A proc that fails returns a zero value along with its error, and that value is destroyed as well. So **a destroy proc must accept the zero value** and do nothing with it.
+- **The zero value is destroyed too.** `f: File` declares a zero `File`, and it is destroyed like any other. A local that was returned is left zero. A proc that fails returns a value along with its error, zero or partly built, and that value is destroyed as well: by the local that keeps it (`s, err := make_server()`), or, when `or_return`, `or_else`, `or_break` or `or_continue` drops it, right there (`__vidar.drop_failed`). So **a destroy proc must accept the zero value** and do nothing with it.
 - **Assigning** to a local, a field, an element (`files[i]`, with a name or constant index) or through a pointer (`p^ = ...`) destroys the old value after the new one is stored. The new value is made first, so `f = reopen(move!(f))` hands the old value over and leaves nothing behind to destroy.
 - **Returning** a local moves it out: the caller owns the value and destroys it, and this proc doesn't.
 - **Parameters are borrowed.** A proc that takes a `File` by value can read it but doesn't destroy it, and can't return or store it. An [`#owned` parameter](#moving-values) takes the value over instead.
@@ -224,6 +224,7 @@ Every rewrite stays on its source line:
 f := open("a"); defer file_destroy(&f)                                   // f := open("a")
 { __vidar_new: type_of(f) = open("b"); __vidar_old := f; f = __vidar_new; file_destroy(&__vidar_old) } // f = open("b")
 { defer f = {}; return f }                                               // return f
+c := __vidar.drop_failed(connect(a)) or_return; defer conn_destroy(&c)  // c := connect(a) or_return
 h2 := handle_clone(h); defer handle_destroy(&h2)                         // h2 := h, with impl Clone
 g := __vidar.take(&f); defer file_destroy(&g)                            // g := move!(f), or g := h on h's last use
 f := f; defer file_destroy(&f)                                           // #owned f: File, on entry
@@ -301,7 +302,7 @@ accept(&s, connect("bob") or_return)   // a new value needs no move!
 
 ```odin
 make_server :: proc() -> (s: Server, err: Error) {
-	s.listener = listen() or_return     // on failure, s goes back with the error, and the caller destroys what it holds
+	s.listener = listen() or_return     // on failure, s goes back with the error: the caller destroys it, even with or_return
 	return
 }
 ```

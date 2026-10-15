@@ -1,0 +1,18 @@
+drop 1
+plain kept 1
+drop 1
+drop 2
+drop 3
+drop 4
+ok kept 4
+drop 4
+drop 6
+drop 5
+drop 7
+drop 8
+or_else 9
+loop 10
+drop 10
+drop 11
+end
+drop 9

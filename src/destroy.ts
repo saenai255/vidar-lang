@@ -564,6 +564,12 @@ class Checker {
       case "Call":
         this.call(e);
         break;
+      case "Postfix":
+        if (e.op !== "?") this.failing(e.x);
+        break;
+      case "Binary":
+        if (e.op === "or_else") this.failing(e.x);
+        break;
       case "CompoundLit":
         if (e.elems.length) this.sliceLit(e);
         // the elements move into the literal: a fresh value is fine, a copy of a variable is not
@@ -582,6 +588,34 @@ class Checker {
     }
     this.fresh(e);
     this.kids(e);
+  }
+
+  /**
+   * `f() or_return` (`or_else`, `or_break`, `or_continue`): a value returned along with an error is
+   * destroyed when the error says the call failed (`__vidar.drop_failed`), since nothing else keeps it.
+   */
+  private failing(x: Expr): void {
+    while (x.k === "Paren") x = x.x;
+    if (x.k !== "Call" || this.raw) return;
+    const scope: Scope | undefined = A(x)._scope;
+    let ft: Ty | undefined;
+    try {
+      ft = scope && this.an.normalize(this.an.typeOf(x.fn, scope));
+    } catch {
+      return;
+    }
+    if (ft?.t !== "sig") return;
+    const results: Ty[] = [];
+    for (let i = 0; ; i++) {
+      const r = this.an.resultTy(ft, i);
+      if (!r) break;
+      results.push(r);
+    }
+    const values = results.slice(0, -1);
+    if (values.length < 1 || values.length > 2) return;
+    if (!values.some((r) => ownedOf(this.an, r) || (r.t === "node" && mentionsPoly(this.an, r)))) return;
+    A(x)._destroyFailed = results.length;
+    this.an.destroyDispatch = true;
   }
 
   /** `#owned` parameters: a local copy of each is destroyed when the proc returns, unless it moves out. */
@@ -1521,6 +1555,26 @@ destroy_delete_key :: proc(m: ^$M/map[$K]$V, key: K) {
 	k, v := delete_key(m, key)
 	destroy(&v)
 	destroy(&k)
+}
+
+// x := f() or_return (or_else, or_break, or_continue): the value returned with an error is destroyed
+drop_failed :: #force_inline proc(v: $T, e: $E) -> (T, E) {
+	if failed(e) {
+		v := v
+		destroy(&v)
+		return {}, e
+	}
+	return v, e
+}
+
+drop_failed3 :: #force_inline proc(a: $A, b: $B, e: $E) -> (A, B, E) {
+	if failed(e) {
+		a, b := a, b
+		destroy(&b)
+		destroy(&a)
+		return {}, {}, e
+	}
+	return a, b, e
 }
 
 // move!(x): x's value, leaving x zero
