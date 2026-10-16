@@ -2,7 +2,7 @@
 
 Notes for coding agents working on Vidar.
 Vidar is a TypeScript transpiler from `.vidar` to plain Odin. A `.vidar` program is Odin plus closures, interfaces, error handling, cyclic imports, comptime macros and goroutines.
-The language is documented in [docs/](docs/README.md) and [SYNTAX.md](SYNTAX.md); [README.md](README.md) is the short entry point. The current batch of performance work is tracked in [PERF_PROGRESS.md](PERF_PROGRESS.md).
+The language is documented in a book in the style of the Rust book, built with mdBook from [docs/src](docs/src/SUMMARY.md); [README.md](README.md) is the short entry point. The current batch of performance work is tracked in [PERF_PROGRESS.md](PERF_PROGRESS.md).
 
 ## Setup
 
@@ -22,7 +22,7 @@ The language is documented in [docs/](docs/README.md) and [SYNTAX.md](SYNTAX.md)
 
 ## Where things are
 
-[docs/internals/source-layout.md](docs/internals/source-layout.md) lists every source file ([architecture.md](docs/internals/architecture.md) shows how they fit). Some things it doesn't make obvious:
+[docs/src/internals-02-source-layout.md](docs/src/internals-02-source-layout.md) lists every source file ([internals-01-architecture.md](docs/src/internals-01-architecture.md) shows how they fit). Some things it doesn't make obvious:
 
 - **The two generated runtime packages live inside TypeScript strings.**
   - The `vidar_runtime` Odin package (closure types, `expect`, error helpers) is a string in `src/emitter.ts`.
@@ -51,6 +51,7 @@ Times are from a 12-core M3 Pro.
 | `npm run bench` | `examples/negative_cost` timed against `HEAD`; see "Benchmarks" | 15 s |
 | `npm run stress -- <case> [-n 500] [-t 10] [-jN]` | builds one case once and runs it `-n` times to catch rare hangs; on a hang it saves the CPU use and a stack of every thread; `-opt`, `-o:` and `-define:` pass through | 1 s for 100 runs of `sched_pending_io` |
 | `node scripts/test-lsp.js` | the language server, end to end over stdio | 6 s |
+| `npm run test:docs [-- --only <page>] [-- --show]` | build, then compile every `vidar` code block of the book (`docs/src`), run the ones followed by an `output` block and check every link; `--show` prints what each program printed | about a minute |
 | `node scripts/test-dap.js` | `vidar dap` against a real `lldb-dap`, end to end; prints `SKIP` without `lldb-dap` | 10 s |
 | `VIDAR_LSP=bin/darwin-arm64/vidar-lsp node scripts/test-lsp.js` | the same suite against a built binary | |
 | `node scripts/passthrough.js <files...>` | plain Odin files must come out unchanged; try `$(find "$(odin root)/core" -name '*.odin')` | |
@@ -216,7 +217,7 @@ git worktree remove --force "$TMPDIR/vidar-base"
 
 "bounds, hoisted", "bounds, lockstep" and "bounds, offsets" are newer than this table; on a 4-core linux/amd64 VM they run 14.7, 14.4 and 20.5 ms. "Append in a loop" is bimodal there (about 55 or 97 ms with identical code), from heap state left by earlier sections.
 
-"Closure, called through" was 8.4 ms until item 1 of PERF_PROGRESS; it should now match "closure, specialized" (re-measure on the M3; measured on linux/amd64 so far). the "What it buys" table in [docs/language/optimization.md](docs/language/optimization.md) compares the plain and Vidar versions.
+"Closure, called through" was 8.4 ms until item 1 of PERF_PROGRESS; it should now match "closure, specialized" (re-measure on the M3; measured on linux/amd64 so far). the tables in [docs/src/ch15-08-what-it-buys.md](docs/src/ch15-08-what-it-buys.md) compare the plain and Vidar versions.
 
 **slime_mud:**
 - `node examples/slime_mud/bench/bench.js` builds the Vidar and Odin versions and checks they behave the same.
@@ -255,8 +256,7 @@ git worktree remove --force "$TMPDIR/vidar-base"
 **Editor:** the VS Code extension doesn't include the language server: it runs `vidar-lsp` from PATH, or `vidar.server.path`. To see an analyzer or LSP change there, point `vidar.server.path` at `dist/lsp/server.js` (then `npm run build` and **Vidar: Restart Language Server** is enough), or rebuild the binary on PATH. `npm run vsix` packages the extension and installs it with the CLI inside `/Applications/Visual Studio Code.app` (`code` is not on PATH; `VSCODE_CLI` overrides it).
 
 **Docs:** when behavior changes, update:
-- docs/: the feature's page under `docs/language/`, plus `contributing.md` (tests), `internals/source-layout.md` and `limits.md` when they're affected. `docs/reference/` and `docs/internals/lowering.md` are generated: run `npm run docs:gen` after changing `src/lsp/docs.ts`, `src/prelude.vidar`, `src/sched.ts` (public procs or `#config` flags), the usage text in `src/cli.ts`, `tests/errors/`, or the emitted code of a construct in `docs/snippets/lowering/`. Keep README.md short and update its index only when a page is added or renamed;
-- SYNTAX.md;
+- the book in `docs/src/`: the feature's chapter (`chNN-*.md`), Appendix B (`appendix-02-syntax.md`, the syntax cheat sheet), `internals-03-contributing.md` (tests), `internals-02-source-layout.md` and `appendix-08-limits.md` when they're affected. The reference pages and appendixes A, C to G and K are generated: run `npm run docs:gen` after changing `src/lsp/docs.ts`, `src/prelude.vidar`, `src/sched.ts` or `src/rc.ts` (public procs or `#config` flags), the usage text in `src/cli.ts`, `tests/errors/`, or the emitted code of a construct in `docs/snippets/lowering/`. A new keyword, built-in, attribute, directive, flag or library proc needs an example in `docs/reference-src/`, and a new compile error an explanation and a fixed program in `docs/reference-src/errors.md`: `gen-docs` fails without them. Run `npm run test:docs` (about a minute) after changing the book or anything a code block in it shows. Keep README.md short and update its index only when a chapter is added or renamed;
 - examples/README.md;
 - for perf work, the status table and log in PERF_PROGRESS.md.
 

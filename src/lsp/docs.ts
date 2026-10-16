@@ -48,11 +48,11 @@ export const KEYWORD_DOCS: Record<string, Doc> = {
   asm: kw("Inline assembly."),
   typeid: kw("The type of a type: a runtime id for any type.", "typeid"),
   context: kw("The implicit context passed to every Odin procedure: allocators, logger, user data. Assign to its fields to change them for the rest of the scope.", "context: runtime.Context"),
-  nil: kw("The zero value of pointers, maps, slices, dynamic arrays, procs, closures, interfaces, unions and `any`."),
+  nil: kw("The zero value of pointers, maps, slices, dynamic arrays, procs, interfaces, unions and `any`. A closure isn't compared with `nil`: its zero value is `{}`, so test `f == {}`."),
   true: kw("Boolean true.", "true: untyped bool"),
   false: kw("Boolean false.", "false: untyped bool"),
   // vidar
-  closure: kw("A closure type: `closure(params) -> results`. Any proc literal with a capture list `proc[a, &b]() { ... }` has one; plain procs convert to it."),
+  closure: kw("A closure type: `closure(params) -> results`. Any proc literal with a capture list `proc[a, &b]() { ... }` has one. A plain proc doesn't convert to it: wrap it, `proc[](x: int) -> int { return f(x) }`."),
   quote: kw("Inside a comptime proc, builds code: `quote(expr)` gives an `Expr`, `quote { stmts }` a `Stmt`. `$name` and `$(expr)` splice compile-time values in."),
   take: kw("Gives the value of a `do! { ... }` or `comptime! { ... }` block: `take x` (or `take a, b`)."),
   interface: kw("An interface: `Name :: interface { method, ... }` lists procs whose first parameter is `Name`. `interface { using Parent, ... }` extends another interface."),

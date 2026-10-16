@@ -4,5 +4,4 @@ out/
 build/
 bin/
 .claude/worktrees/
-docs/.vitepress/dist/
-docs/.vitepress/cache/
+docs/book/

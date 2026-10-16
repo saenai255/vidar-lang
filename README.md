@@ -2,7 +2,7 @@
 
 Odin with **closures**, **interfaces**, **error handling helpers**, **anonymous struct literals**, a **goroutine and channel library**, **cyclic imports**, **typed compile-time macros** and **optimizations Odin can't do on its own** (lookup tables, specialized copies, pools, compiled `fmt` formats). `vidar` transpiles `.vidar` programs to plain Odin.
 
-The full documentation is in [docs/](docs/README.md). [SYNTAX.md](SYNTAX.md) is a compact reference of every construct Vidar adds; [examples/](examples) has one runnable program per feature.
+The documentation is a book, *The Vidar Programming Language*: read it [online](https://saenai255.github.io/vidar-lang/) or in [docs/src](docs/src/SUMMARY.md). [Appendix B](docs/src/appendix-02-syntax.md) is a one-page cheat sheet of every construct Vidar adds; [examples/](examples) has one runnable program per feature.
 
 Everything that is already Odin passes through **byte-for-byte** (unless you ask for `-opt`): comments, formatting and line numbers are kept. Only the new constructs are rewritten. As a check, 1313 of the 1317 `.odin` files in Odin's `core`, `base` and `vendor` libraries come out of the full pipeline unchanged. Macro expansions get lines of their own, and vidar keeps a map from generated lines to source lines, so errors Odin reports in generated code point at the right line of your `.vidar` file.
 
@@ -17,10 +17,10 @@ npm test
 
 ## Documentation
 
-- **Start here:** [Getting started](docs/getting-started.md), [Command line](docs/cli.md), [SYNTAX.md](SYNTAX.md).
-- **Language:** [Closures](docs/language/closures.md), [Interfaces](docs/language/interfaces.md), [Destructors](docs/language/destructors.md), [Error handling](docs/language/error-handling.md), [Anonymous struct literals](docs/language/anonymous-structs.md), [Cyclic imports](docs/language/cyclic-imports.md), [Collections](docs/language/collections.md), [Goroutines and channels](docs/language/goroutines.md), [Built-in macros](docs/language/builtin-macros.md), [Comptime procs](docs/language/comptime.md), [`-opt`](docs/language/optimization.md).
-- **Tools:** [Testing](docs/tools/testing.md), [Debugging](docs/tools/debugging.md), [Language server](docs/tools/language-server.md).
-- **Compiler internals:** [Architecture](docs/internals/architecture.md), [Source layout](docs/internals/source-layout.md), [Contributing](docs/contributing.md).
-- **Reference** (generated from the compiler): [Keywords](docs/reference/keywords.md), [Built-ins](docs/reference/builtins.md), [Comptime built-ins](docs/reference/comptime.md), [Attributes](docs/reference/attributes.md), [CLI usage](docs/reference/cli.md).
-- **Browse as a site:** `npm run docs:dev`.
-- **Known gaps:** [Limits](docs/limits.md).
+[*The Vidar Programming Language*](https://saenai255.github.io/vidar-lang/) ([source](docs/src/SUMMARY.md)) teaches the language chapter by chapter, after the Rust book:
+
+- **Getting started:** [Installation](docs/src/ch01-01-installation.md), [Hello, World!](docs/src/ch01-02-hello-world.md), [Coming from Odin](docs/src/ch02-02-coming-from-odin.md), [a first program](docs/src/ch03-00-first-program.md).
+- **The language:** [Closures](docs/src/ch04-00-closures.md), [Interfaces](docs/src/ch05-00-interfaces.md), [Error handling](docs/src/ch06-00-error-handling.md), [Destructors and ownership](docs/src/ch07-00-destructors.md), [Anonymous structs](docs/src/ch08-00-anonymous-structs.md), [Packages](docs/src/ch09-00-packages.md), [Built-in macros](docs/src/ch10-00-builtin-macros.md), [Compile-time code](docs/src/ch11-00-compile-time.md), [Testing](docs/src/ch12-00-testing.md), [a project](docs/src/ch13-00-project.md).
+- **Going further:** [Goroutines](docs/src/ch14-00-goroutines.md), [`-opt`](docs/src/ch15-00-optimization.md), [Tools](docs/src/ch16-00-tools.md).
+- **Reference:** [every built-in, with examples](docs/src/reference-00.md), [keywords](docs/src/appendix-01-keywords.md), [compile errors and their fixes](docs/src/appendix-06-errors.md), [limits](docs/src/appendix-08-limits.md), [FAQ](docs/src/appendix-09-faq.md), [compiler internals](docs/src/internals-00.md).
+- **Read it locally:** `npm run docs:serve` (needs [mdBook](https://rust-lang.github.io/mdBook/)).

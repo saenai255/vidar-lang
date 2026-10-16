@@ -1,12 +1,12 @@
 name: Docs
 
-# Builds the site on every PR; publishes it to GitHub Pages when main changes.
+# Builds the book (mdBook) on every PR; publishes it to GitHub Pages when main changes.
 on:
   pull_request:
-    paths: ["docs/**", "scripts/gen-docs.js", "src/**", "tests/errors/**", "tests/errors_pkg/**", "editors/vscode/syntaxes/**", "package.json", ".github/workflows/docs.yml"]
+    paths: ["docs/**", "scripts/gen-docs.js", "src/**", "tests/errors/**", "tests/errors_pkg/**", "package.json", ".github/workflows/docs.yml"]
   push:
     branches: [main]
-    paths: ["docs/**", "scripts/gen-docs.js", "src/**", "tests/errors/**", "tests/errors_pkg/**", "editors/vscode/syntaxes/**", "package.json", ".github/workflows/docs.yml"]
+    paths: ["docs/**", "scripts/gen-docs.js", "src/**", "tests/errors/**", "tests/errors_pkg/**", "package.json", ".github/workflows/docs.yml"]
   workflow_dispatch:
 
 permissions:
@@ -17,6 +17,9 @@ permissions:
 concurrency:
   group: pages
   cancel-in-progress: true
+
+env:
+  MDBOOK_VERSION: 0.4.40
 
 jobs:
   build:
@@ -32,10 +35,18 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: node scripts/gen-docs.js --check
-      - run: npx vitepress build docs
+      - name: Install mdBook
+        run: |
+          mkdir -p "$RUNNER_TEMP/mdbook"
+          curl -fsSL --retry 3 "https://github.com/rust-lang/mdBook/releases/download/v$MDBOOK_VERSION/mdbook-v$MDBOOK_VERSION-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar xz -C "$RUNNER_TEMP/mdbook"
+          echo "$RUNNER_TEMP/mdbook" >> "$GITHUB_PATH"
+      # mdBook only logs a failed preprocessor and builds without it, so fail on its log
+      - run: mdbook build docs 2>&1 | tee mdbook.log && ! grep -E "ERROR|Error:" mdbook.log
+      - run: node scripts/test-docs.js --links
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/.vitepress/dist
+          path: docs/book
 
   deploy:
     if: github.event_name != 'pull_request'
