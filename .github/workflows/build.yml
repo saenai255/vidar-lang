@@ -81,6 +81,10 @@ jobs:
       - name: Test
         run: npm test
 
+      # every vidar code block in the book compiles, and the ones with output print it
+      - name: Test the book
+        run: node scripts/test-docs.js
+
       # goroutines are disabled for now (src/sched.ts); drop the two `if: false` to run these again
       - name: Test with goroutines on 4 threads
         if: false
