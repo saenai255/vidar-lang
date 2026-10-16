@@ -1,0 +1,25 @@
+[book]
+title = "The Vidar Programming Language"
+description = "Odin with closures, interfaces, error handling, destructors, cyclic imports, comptime macros and goroutines."
+authors = ["The Vidar contributors"]
+language = "en"
+src = "src"
+
+[preprocessor.vidar]
+# run from the repository root: npm run docs:build / docs:serve
+command = "node scripts/mdbook-vidar.js"
+
+[output.html]
+git-repository-url = "https://github.com/saenai255/vidar-lang"
+edit-url-template = "https://github.com/saenai255/vidar-lang/edit/main/docs/{path}"
+site-url = "/vidar-lang/"
+additional-css = ["theme/vidar.css"]
+additional-js = ["theme/vidar-highlight.js"]
+no-section-label = false
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+limit-results = 30

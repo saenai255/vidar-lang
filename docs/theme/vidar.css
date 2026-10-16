@@ -1,0 +1,55 @@
+/* Listings, captions and the markers on code that doesn't compile or panics, after the Rust book. */
+
+.filename {
+  display: block;
+  font-family: var(--mono-font);
+  font-size: 0.85em;
+  color: var(--fg);
+  opacity: 0.8;
+  margin-bottom: -0.6em;
+}
+
+.caption {
+  display: block;
+  font-size: 0.9em;
+  font-style: italic;
+  text-align: center;
+  margin-top: -0.4em;
+  margin-bottom: 1.2em;
+}
+
+pre:has(> code.compile_fail),
+pre:has(> code.should_panic) {
+  position: relative;
+  border-left: 4px solid #d1495b;
+}
+
+pre:has(> code.compile_fail)::before,
+pre:has(> code.should_panic)::before {
+  position: absolute;
+  top: 0.3em;
+  right: 2.6em;
+  font-family: var(--sans-font, sans-serif);
+  font-size: 0.75em;
+  font-weight: bold;
+  color: #d1495b;
+}
+
+pre:has(> code.compile_fail)::before { content: "does not compile"; }
+pre:has(> code.should_panic)::before { content: "panics"; }
+
+pre:has(> code.output),
+pre:has(> code.error-output) {
+  border-left: 4px solid var(--quote-border);
+}
+
+pre:has(> code.error-output) { border-left-color: #d1495b; }
+
+.note, .warning {
+  border-left: 4px solid var(--quote-border);
+  padding: 0.4em 1em;
+  margin: 1em 0;
+  background: var(--quote-bg);
+}
+
+.warning { border-left-color: #e8a33d; }
